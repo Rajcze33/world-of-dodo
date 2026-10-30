@@ -15,6 +15,7 @@ about ±156, the world ends at ±250. A heading `h` is in radians, `0` faces +z,
 | `st` | `x`, `z`, `h`, `v`, `r`, `s` | About 15× a second while driving. `v`: speed, `r`: roll (a destroyed tank lies on its side), `s`: `1` while immune after a (re)spawn. |
 | `fire` | `sid`, `x`, `y`, `z`, `vx`, `vy`, `vz` | A parcel left the muzzle. `sid`: the player's own running number of the parcel. |
 | `hit` | `by`, `sid`, `kill` | A parcel of player `by` hit **my** tank and the hit took effect (not while destroyed or immune). `kill`: it was the third hit and destroyed the tank. |
+| `ping` | `c` | Every 2 s, for the ping in the performance readout. `c`: any number, the client's clock. |
 
 ## Server → client
 
@@ -27,6 +28,7 @@ about ±156, the world ends at ±250. A heading `h` is in radians, `0` faces +z,
 | `snap` | `p[]` | About 15× a second: every tank in the city as `[id, x, z, h, v, r, s]`. |
 | `fire` | `id`, `sid`, `x`, `y`, `z`, `vx`, `vy`, `vz` | Someone else's parcel: fly it in your world. |
 | `hit` | `by`, `v`, `pts`, `gain`, `kill` | `by` scored `gain` points by hitting `v` and now has `pts`. `kill`: the hit destroyed `v`. |
+| `pong` | `c` | The answer to `ping`, with the same `c`, straight away. |
 
 ## Who decides a hit
 

@@ -10,9 +10,10 @@ all welcome.
    windows (or `npm start` and port 3000).
 3. Run the tests: `npm run check` and `npm run smoke` (against the running server). If you touched
    the game page, `npm run test:browser` is worth it too.
-4. Open a pull request that says what changes for the player and why. CI runs the checks.
+4. Open a pull request that says what changes for the player and why.
 
-A maintainer reviews and merges. What is merged to `main` is what gets deployed.
+A maintainer reviews and merges. There is no CI: what is merged to `main` is built and deployed by
+Zerops right away, so run the checks before you ask for a merge.
 
 ## Things to know
 

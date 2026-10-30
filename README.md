@@ -15,6 +15,10 @@ Christmas 2026, where the delivery van had already turned into a tank.
 - **Three hits destroy a tank.** It blows up, lies on its side for a moment and comes back at a free
   spot somewhere else, blinking and immune for a few seconds.
 - **The bots** are driven by the server: they roam the streets, chase the nearest player and shoot back.
+- **Names only in plain sight.** A tank's name glows above it only while nothing stands between you,
+  and it shows on the minimap only once you have spotted it. The scoreboard lists everybody.
+- **Runs on modest hardware.** The quality drops by itself when the frames do not keep up; F shows
+  FPS, ping and the level, Q changes the level by hand.
 - Czech by default, English with `?lang=en`. Works on phones (touch controls).
 
 ## Play it locally
@@ -71,7 +75,8 @@ npm run smoke          # protocol test against a running server (default http://
 npm run test:browser   # two players in headless Chrome; needs Chrome and: npm i --no-save puppeteer-core@25.14.0
 ```
 
-CI runs the first two on every pull request.
+There is no CI on purpose: it is a game for fun, and a push to `main` goes straight to the server
+(see Deploy). Run the checks yourself before you push.
 
 ## Deploy (Zerops)
 
@@ -80,13 +85,16 @@ player has to reach the same process.
 
 ```sh
 zcli project project-import zerops/import.yaml --org-id <organisation>   # once: the project and the service
-zcli push --project-id <project> --service-id <service "game">             # every deploy, from the repository root
 zcli service enable-subdomain --project-id <project> --service-id <service "game">   # once, after the first deploy
 ```
 
-The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open. On Windows, push from a
-folder outside OneDrive (`git archive HEAD` into a temporary folder): its placeholder files break
-zcli's archive.
+**Every push to `main` deploys**: the service `game` is connected to this repository in the Zerops
+GUI (the service's build/CI settings, GitHub, branch `main`, trigger on push), and Zerops builds with
+`zerops.yaml` from the repository. By hand, from the repository root:
+`zcli push --project-id <project> --service-id <service "game">` (on Windows from a folder outside
+OneDrive, e.g. a `git archive HEAD` copy: OneDrive's placeholder files break zcli's archive).
+
+The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 
 ## Known limits
 

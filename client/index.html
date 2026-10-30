@@ -332,6 +332,9 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 .sw input:focus-visible+span{outline:2px solid var(--dodo-light-teal);outline-offset:5px}
 @media (pointer:coarse){.sw{width:40px;height:40px}}
 .join .err{color:var(--dodo-peach);font-size:var(--fs-body-sm);margin:0}
+/* World of DODO: the performance readout (F, or a tap on the speed card) */
+.stats{display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding:var(--space-2) var(--space-3);color:var(--dodo-light-grey);white-space:nowrap}
+.gauge{pointer-events:auto;cursor:pointer}
 @media (max-width:760px),(pointer:coarse) and (max-width:1024px){
   .board{gap:var(--space-1)}
   .board li{font-size:var(--fs-caption)}
@@ -356,6 +359,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
       <span data-t="camera"></span>
     </button>
+    <div class="card stats meta" id="stats" hidden></div>
   </div>
   <div class="bc">
     <div id="toast" class="off"></div>
@@ -389,6 +393,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <span><kbd>↑ ↓ ← →</kbd><span data-t="kSteer"></span></span>
       <span><kbd data-t="kSpace"></kbd><span data-t="kBrake"></span></span>
       <span><kbd>C</kbd><span data-t="kCam"></span></span>
+      <span><kbd>F</kbd><span data-t="kStats"></span></span>
     </div>
     <p class="keys meta" id="keysTouch" hidden data-t="keysTouch"></p>
     <form class="join" id="joinForm" novalidate>
@@ -456,7 +461,9 @@ Object.assign(T,{
   hintStart:'Zelené tlačítko střílí zásilky. Trefte ostatní tanky',hintStartDesk:'Mezerník střílí zásilky. Trefte ostatní tanky',
   boardLbl:'Skóre',boardCol:'body',ptsUnit:'body',online:n=>n+' online',
   hitBy:n=>'Zásah od '+n+'! Zpomaleno',killedBy:n=>'Zničil vás '+n+'! Za chvíli se objevíte jinde',toppled:'Zničen! Za chvíli se objevíte jinde',respawned:'Zpátky ve hře. Pár vteřin vás nic netrefí',
-  youHit:(n,g)=>'Trefa! '+n+' +'+g,youKill:(n,g)=>'Zničeno! '+n+' +'+g,lost:'Spojení ztraceno, připojuji znovu…',back:'Zpátky ve hře'
+  youHit:(n,g)=>'Trefa! '+n+' +'+g,youKill:(n,g)=>'Zničeno! '+n+' +'+g,lost:'Spojení ztraceno, připojuji znovu…',back:'Zpátky ve hře',
+  kStats:'FPS a ping',pingLbl:'ping',qLbl:'kvalita',qNames:['vysoká','střední','nízká'],qAuto:'auto',qManual:'ručně',
+  qDown:n=>'Hra nestíhala, kvalita snížena na: '+n
 });
 /* ===== DODO web (scripts/dodo-christmas/game-lang.js): the game in English =====
    English replaces the Czech key by key (scripts/dodo-christmas/en.js). T.stops is never replaced: the
@@ -479,7 +486,9 @@ if(LANG==='en')Object.assign(T,{
   hintStart:'The green button fires parcels. Hit the other tanks',hintStartDesk:'Space fires parcels. Hit the other tanks',
   boardLbl:'Score',boardCol:'points',ptsUnit:'points',online:n=>n+' online',
   hitBy:n=>'Hit by '+n+'! Slowed down',killedBy:n=>n+' destroyed you! You’ll be back somewhere else in a moment',toppled:'Destroyed! You’ll be back somewhere else in a moment',respawned:'Back in. Nothing can hit you for a few seconds',
-  youHit:(n,g)=>'Hit! '+n+' +'+g,youKill:(n,g)=>'Destroyed! '+n+' +'+g,lost:'Connection lost, reconnecting…',back:'Back in the game'
+  youHit:(n,g)=>'Hit! '+n+' +'+g,youKill:(n,g)=>'Destroyed! '+n+' +'+g,lost:'Connection lost, reconnecting…',back:'Back in the game',
+  kStats:'FPS and ping',pingLbl:'ping',qLbl:'quality',qNames:['high','medium','low'],qAuto:'auto',qManual:'manual',
+  qDown:n=>'The game was struggling: quality lowered to '+n
 });
 // Decimal separator for kilometres and milliseconds (fmtKm, finish()): the handoff wrote a Czech comma.
 T.dec=LANG==='en'?'.':',';
@@ -747,7 +756,8 @@ function breakProps(x,z,h){const v=car.v;if(Math.abs(v)<1)return;const fx=Math.s
       if(Math.abs(v)>=p.breakV){knockProp(p,fx*sg,fz*sg);car.v*=p.slow;}}}}
 
 // ---------- trees ----------
-function tree(x,z,s,lights){const g=new THREE.Group();g.position.set(x,0,z);
+// one tree as its own group of 7 meshes: only the big tree on the plaza, which carries its lights and star (World of DODO; see tree below)
+function treeGroup(x,z,s,lights){const g=new THREE.Group();g.position.set(x,0,z);
   const tr=new THREE.Mesh(new THREE.CylinderGeometry(0.25*s,0.3*s,1.2*s,6),M.trunk);tr.position.y=0.6*s;tr.castShadow=true;g.add(tr);
   for(let i=0;i<3;i++){const r=(2.2-i*0.55)*s,h=(2.6-i*0.4)*s,y=(1.4+i*1.5)*s;
     const c=new THREE.Mesh(new THREE.ConeGeometry(r,h,8),M.tree);c.position.y=y+h/2;c.castShadow=true;g.add(c);
@@ -756,6 +766,33 @@ function tree(x,z,s,lights){const g=new THREE.Group();g.position.set(x,0,z);
   scene.add(g);
   registerProp({kind:'tree',g,x,z,r:0.4*s+0.3,breakV:2+3*s,minMass:6,slow:0.82,th0:1.5,acc:2.4,w0:0.5,lift:1.7*s,y0:0,q0:g.quaternion.clone(),apply:applyGroup});
   return g;}
+// World of DODO: every other tree is one instance in three instanced meshes (trunks, green cones, snow caps): 3 draw calls for all
+// of them. As groups, the 152 trees were 1064 meshes, over half of the scene, and the main reason the game stuttered. The parts are
+// built at scale 1 with their offsets baked in, so the three parts of a tree share one matrix: base at (x,0,z), scale s, tilt when it
+// is knocked down (the same motion applyGroup gives a group).
+const TREE_MAX=220;let TREE_IM=null;
+// geometries (already placed) into one; uv is kept when every part has it (the tank labels)
+function mergeGeos(list){const pos=[],nor=[],uv=[];let withUv=true;
+  for(const g0 of list){const g=g0.index?g0.toNonIndexed():g0,p=g.attributes.position.array,n=g.attributes.normal.array;
+    for(let i=0;i<p.length;i++){pos.push(p[i]);nor.push(n[i]);}
+    if(g.attributes.uv){const u=g.attributes.uv.array;for(let i=0;i<u.length;i++)uv.push(u[i]);}else withUv=false;}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(nor,3));
+  if(withUv)g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));return g;}
+function treeMeshes(){const cones=[],caps=[];
+  for(let i=0;i<3;i++){const r=2.2-i*0.55,h=2.6-i*0.4,y=1.4+i*1.5;
+    cones.push(new THREE.ConeGeometry(r,h,8).translate(0,y+h/2,0));caps.push(new THREE.ConeGeometry(r*0.55,h*0.4,8).translate(0,y+h*0.8,0));}
+  const mk=(geo,mat,cast)=>{const m=new THREE.InstancedMesh(geo,mat.clone(),TREE_MAX);m.count=0;m.castShadow=cast;m.frustumCulled=false;scene.add(m);return m;};
+  return[mk(new THREE.CylinderGeometry(0.25,0.3,1.2,6).translate(0,0.6,0),M.trunk,true),mk(mergeGeos(cones),M.tree,true),mk(mergeGeos(caps),M.snow,false)];}
+function applyTree(p){
+  if(p.th>0){PAX.set(p.fz,0,-p.fx);PO.quaternion.setFromAxisAngle(PAX,p.th);}else PO.quaternion.identity();
+  PO.position.set(p.x,p.y0+p.lift*Math.sin(p.th),p.z);PO.scale.setScalar(p.s);PO.updateMatrix();
+  for(const m of TREE_IM){m.setMatrixAt(p.idx,PO.matrix);m.instanceMatrix.needsUpdate=true;}}
+function tree(x,z,s,lights){if(!TREE_IM)TREE_IM=treeMeshes();
+  if(TREE_IM[0].count>=TREE_MAX)return;
+  const idx=TREE_IM[0].count;for(const m of TREE_IM)m.count=idx+1;
+  if(lights){const top=6.2*s;for(let i=0;i<lights;i++){const t=i/lights,a=t*Math.PI*10,y=1.6*s+t*(top-1.8*s),rr=(2.3*s)*(1-t*0.82)+0.15;dotPositions.push([x+Math.cos(a)*rr,y,z+Math.sin(a)*rr,0.13*s]);}}
+  const p=registerProp({kind:'tree',idx,s,x,z,r:0.4*s+0.3,breakV:2+3*s,minMass:6,slow:0.82,th0:1.5,acc:2.4,w0:0.5,lift:1.7*s,y0:0,apply:applyTree});
+  applyTree(p);}
 
 // ---------- Karlín-style perimeter blocks ----------
 // facade tile: 8 bays (3 u) × 6 floors (3.5 u); tall windows; lit pattern in a separate emissive map
@@ -1413,7 +1450,7 @@ const rivalSignTex=canvasTex(1024,320,(g,w,h)=>{g.clearRect(0,0,w,h);g.fillStyle
 // plaza with the city tree
 (function(){const bx=blockC(PLAZA_B[0]),bz=blockC(PLAZA_B[1]);
   const disc=new THREE.Mesh(new THREE.CylinderGeometry(12,12,0.2,48),M.snow);disc.position.set(bx,0.4,bz);disc.receiveShadow=true;scene.add(disc);
-  const big=tree(bx,bz,2.7,0);                       // a prop: its lights and star are children, so they fall with it
+  const big=treeGroup(bx,bz,2.7,0);                  // a prop: its lights and star are children, so they fall with it
   {const sc=2.7,n=140,top=6.2*sc,im=new THREE.InstancedMesh(new THREE.SphereGeometry(1,8,6),M.dot,n),o=new THREE.Object3D();
    for(let i=0;i<n;i++){const t=i/n,a=t*Math.PI*10,y=1.6*sc+t*(top-1.8*sc),rr=(2.3*sc)*(1-t*0.82)+0.15;o.position.set(Math.cos(a)*rr,y,Math.sin(a)*rr);o.scale.setScalar(0.13*sc);o.updateMatrix();im.setMatrixAt(i,o.matrix);}
    im.frustumCulled=false;big.add(im);}
@@ -1436,44 +1473,42 @@ function drawLogo(g,x,y,w){if(logoImg.complete&&logoImg.naturalWidth)g.drawImage
 const vanMat=new THREE.MeshPhongMaterial({color:0x00a99a,emissive:0x00332e,shininess:30,specular:0x14302d});
 
 // ---------- DODO TANK: replaces the van as the player's vehicle ----------
-// Same footprint as the original delivery van (about 4.5 long, 2 wide), so collisions, camera and wheel animation work unchanged.
-// userData.wheels are the road wheels, spun by the main loop with the vehicle's speed; userData.body gets the steering roll.
+// Same footprint as the original delivery van (about 4.5 long, 2 wide), so collisions and camera work unchanged.
+// userData.wheels is kept for the callers that spin wheels (empty, see below); userData.body gets the steering roll.
 // hullMat/labelTex: paint and turret label (default: DODO teal + DODO logo). The turret is its own group so it can aim independently of the hull.
 function makeTank(withLights,hullMat,labelTex){
+  // World of DODO: the parts are merged by material, 6 meshes per tank instead of 36 (hull paint, the vertex-coloured rest, lamps;
+  // in the turret: paint, the rest, labels). The road wheels no longer spin (inside the tracks it hardly showed); wheels stays empty.
   const hm=hullMat||vanMat,g=new THREE.Group(),body=new THREE.Group();g.add(body);
-  const wheels=[];
-  // hull + sloped front plate
-  body.add(box(1.5,0.5,4.1,hm,0,0.95,0,true));
-  const glacis=box(1.5,0.1,1.0,hm,0,1.0,2.0,true);glacis.rotation.x=0.5;body.add(glacis);
-  body.add(box(1.3,0.18,0.9,M.charcoal,0,1.25,-1.7,true)); // engine deck
-  // tracks + road wheels (the wheels spin with the vehicle's speed)
-  const wg=new THREE.CylinderGeometry(0.28,0.28,0.44,14);wg.rotateZ(Math.PI/2);
-  const hg=new THREE.CylinderGeometry(0.14,0.14,0.48,10);hg.rotateZ(Math.PI/2);
+  const mtx=(x,y,z,rx=0,ry=0)=>new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rx,ry,0)).setPosition(x,y,z);
+  const at=(geo,x,y,z,rx,ry)=>geo.applyMatrix4(mtx(x,y,z,rx,ry));
+  const mesh=(geo,mat,cast)=>{const m=new THREE.Mesh(geo,mat);m.castShadow=cast;m.receiveShadow=true;return m;};
+  const BLACK=0x1a1d1c,rest=Bucket(),lamps=[];
+  // hull + sloped front plate (paint)
+  body.add(mesh(mergeGeos([at(new THREE.BoxGeometry(1.5,0.5,4.1),0,0.95,0),at(new THREE.BoxGeometry(1.5,0.1,1.0),0,1.0,2.0,0.5)]),hm,true));
+  // engine deck, tracks, fenders, road wheels (tyre + hub), lamps
+  addGeo(rest,new THREE.BoxGeometry(1.3,0.18,0.9),mtx(0,1.25,-1.7),COL.charcoal);
+  const wg=new THREE.CylinderGeometry(0.28,0.28,0.44,14).rotateZ(Math.PI/2),hg=new THREE.CylinderGeometry(0.14,0.14,0.48,10).rotateZ(Math.PI/2);
   for(const sx of[-1,1]){
-    body.add(box(0.34,0.62,4.5,M.black,sx*0.9,0.42,0,true));      // track belt
-    body.add(box(0.5,0.08,4.6,M.charcoal,sx*0.9,0.82,0,true));    // fender
-    for(const z of[-1.8,-0.9,0,0.9,1.8]){
-      const w=new THREE.Group();w.position.set(sx*0.9,0.36,z);
-      const t=new THREE.Mesh(wg,M.charcoal);t.castShadow=true;w.add(t);
-      w.add(new THREE.Mesh(hg,M.hub));g.add(w);wheels.push(w);}}
-  // turret: a group pivoting at the turret ring (z = -0.2); coordinates inside are the old ones shifted by +0.2 in z
+    addGeo(rest,new THREE.BoxGeometry(0.34,0.62,4.5),mtx(sx*0.9,0.42,0),BLACK);       // track belt
+    addGeo(rest,new THREE.BoxGeometry(0.5,0.08,4.6),mtx(sx*0.9,0.82,0),COL.charcoal);  // fender
+    for(const z of[-1.8,-0.9,0,0.9,1.8]){addGeo(rest,wg,mtx(sx*0.9,0.36,z),COL.charcoal);addGeo(rest,hg,mtx(sx*0.9,0.36,z),COL.c20);}
+    lamps.push(at(new THREE.BoxGeometry(0.2,0.12,0.06),sx*0.5,1.05,2.4));}
+  body.add(mesh(geoOf(rest),VC_MAT,true));body.add(mesh(mergeGeos(lamps),M.lampHead,false));
+  // turret: a group pivoting at the turret ring (z = -0.2), so it can aim independently of the hull
   const turret=new THREE.Group();turret.position.set(0,0,-0.2);body.add(turret);
-  const tur=new THREE.Mesh(new THREE.CylinderGeometry(0.72,0.85,0.5,22),hm);
-  tur.position.set(0,1.5,0);tur.castShadow=true;turret.add(tur);
-  turret.add(box(0.9,0.3,0.5,hm,0,1.5,0.75,true));                // gun mantlet
-  const bg=new THREE.CylinderGeometry(0.11,0.11,2.5,10);bg.rotateX(Math.PI/2);
-  const barrel=new THREE.Mesh(bg,M.charcoal);barrel.position.set(0,1.5,1.95);barrel.castShadow=true;turret.add(barrel);
-  turret.add(box(0.26,0.26,0.36,M.black,0,1.5,3.2,false));        // muzzle brake
-  const hatch=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.14,12),M.charcoal);hatch.position.set(-0.25,1.8,-0.1);turret.add(hatch);
+  turret.add(mesh(mergeGeos([at(new THREE.CylinderGeometry(0.72,0.85,0.5,22),0,1.5,0),at(new THREE.BoxGeometry(0.9,0.3,0.5),0,1.5,0.75)]),hm,true));   // turret + gun mantlet
+  const trest=Bucket();
+  addGeo(trest,new THREE.CylinderGeometry(0.11,0.11,2.5,10).rotateX(Math.PI/2),mtx(0,1.5,1.95),COL.charcoal);   // barrel
+  addGeo(trest,new THREE.BoxGeometry(0.26,0.26,0.36),mtx(0,1.5,3.2),BLACK);                                   // muzzle brake
+  addGeo(trest,new THREE.CylinderGeometry(0.22,0.22,0.14,12),mtx(-0.25,1.8,-0.1),COL.charcoal);               // hatch
+  turret.add(mesh(geoOf(trest),VC_MAT,true));
   // label on the turret sides (DODO logo, or REDLINE)
-  for(const sx of[-1,1]){
-    const lv=new THREE.Mesh(new THREE.PlaneGeometry(1.1,0.42),new THREE.MeshBasicMaterial({map:labelTex||logoTex,transparent:true}));
-    lv.position.set(sx*0.8,1.5,0);lv.rotation.y=sx*Math.PI/2;turret.add(lv);}
+  turret.add(mesh(mergeGeos([-1,1].map(sx=>at(new THREE.PlaneGeometry(1.1,0.42),sx*0.8,1.5,0,0,sx*Math.PI/2))),new THREE.MeshBasicMaterial({map:labelTex||logoTex,transparent:true}),false));
   // lights
-  for(const sx of[-1,1])body.add(box(0.2,0.12,0.06,M.lampHead,sx*0.5,1.05,2.4,false));
   if(withLights){const sp=new THREE.SpotLight(0xffffff,1.3,48,0.55,0.6,1);sp.position.set(0,1.1,2.3);const t=new THREE.Object3D();t.position.set(0,0,14);g.add(t);sp.target=t;g.add(sp);
     const pool=new THREE.Mesh(new THREE.PlaneGeometry(9,14),M.pool.clone());pool.material.opacity=0.28;pool.material.color.set(0xffffff);pool.rotation.x=-Math.PI/2;pool.position.set(0,0.08,9);g.add(pool);}
-  g.userData={wheels,body,turret};return g;
+  g.userData={wheels:[],body,turret};return g;
 }
 
 // World of DODO: every player's tank is painted in the colour the server gives them (the delivery tanks keep vanMat)
@@ -1626,9 +1661,12 @@ function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
 // ---------- pedestrians: people walk loops along the pavement around the blocks; a parcel (or the tank) knocks them over, they get back up ----------
 // Drawn as instanced meshes (coat colours, legs, heads, hair: ~8 draw calls for all of them). A hit sends a pedestrian sliding and tipping over
 // away from the impact; after a few seconds on the ground they get up and walk on.
-const PED_N=50,PED_COATS=[0x27a28c,0xf9aa8f,0x3d4543,0xb2dcd6,0xc0524a,0xd6d8d7],PEDS=[];
+// World of DODO: the city dresses up. Loud coats, coloured leggings, tall top hats in a third colour, and a big cartoon bust in the
+// coat's colour (the original's people wore the DODO palette).
+const PED_N=50,PED_COATS=[0xff2fa0,0x9dff00,0x8a2be2,0xffc400,0x00e5d4,0xff6a00,0xd400ff,0x2fa8ff],PEDS=[];
+const PED_LEGS=[0xff2fa0,0x2fa8ff,0xffffff,0x111111,0xffc400,0x9dff00,0xd400ff],PED_HATS=[0xffc400,0x111111,0xff2fa0,0x00e5d4,0xffffff,0x8a2be2,0xff6a00];
 const PED_HW=17.2,PED_RC=3.0,PED_L=2*(PED_HW-PED_RC),PED_A=Math.PI/2*PED_RC,PED_SEG=PED_L+PED_A;   // pavement loop around a block: rounded square
-let PCOAT=[],PLEG=null,PHEAD=null,PHAIR=null;
+let PCOAT=[],PLEG=null,PHEAD=null,PHAIR=null,PBUST=null,PHAT=null,PBRIM=null;
 const PM4=new THREE.Matrix4(),PB4=new THREE.Matrix4(),PQh=new THREE.Quaternion(),PQf=new THREE.Quaternion(),PQx=new THREE.Quaternion(),
       PPos=new THREE.Vector3(),PScl=new THREE.Vector3(),PAXx=new THREE.Vector3(1,0,0),PAXf=new THREE.Vector3();
 // position and walking direction at distance s along the loop around block (bx,bz) (counter-clockwise on screen)
@@ -1652,8 +1690,13 @@ function placePed(p){
   pedPart(PLEG,p.id*2,-0.15,0.86,0,0.25,0.82,0.27,sw,-0.41);        // legs
   pedPart(PLEG,p.id*2+1,0.15,0.86,0,0.25,0.82,0.27,-sw,-0.41);
   pedPart(PHEAD,p.id,0,1.93,0,0.22,0.22,0.22,0,0);
-  pedPart(PHAIR,p.id,0,1.99,-0.02,0.235,0.2,0.235,0,0);}
-function pedDirty(){PCOAT.forEach(m=>{if(m)m.instanceMatrix.needsUpdate=true;});PLEG.instanceMatrix.needsUpdate=PHEAD.instanceMatrix.needsUpdate=PHAIR.instanceMatrix.needsUpdate=true;}
+  pedPart(PHAIR,p.id,0,1.99,-0.02,0.235,0.2,0.235,0,0);
+  pedPart(PBUST,p.id*2,-0.15,1.43,0.2,0.2,0.18,0.17,0,0);           // World of DODO: bust, hat brim and crown
+  pedPart(PBUST,p.id*2+1,0.15,1.43,0.2,0.2,0.18,0.17,0,0);
+  pedPart(PBRIM,p.id,0,2.13,0,0.42,0.04,0.42,0,0);
+  pedPart(PHAT,p.id,0,2.15+p.hat/2,0,0.2,p.hat,0.2,0,0);}
+function pedDirty(){PCOAT.forEach(m=>{if(m)m.instanceMatrix.needsUpdate=true;});
+  for(const m of[PLEG,PHEAD,PHAIR,PBUST,PHAT,PBRIM])m.instanceMatrix.needsUpdate=true;}
 function knockPed(p,vx,vz){if(p.state!=='walk')return;
   const l=Math.hypot(vx,vz)||1,sp=Math.min(8,l*0.5);p.fx=vx/l;p.fz=vz/l;p.vx=p.fx*sp;p.vz=p.fz*sp;p.state='fall';p.t=0;p.th=0.001;p.timer=2.5+Math.random()*2;}
 const pedEase=t=>t<0?0:t>1?1:t*t*(3-2*t);
@@ -1682,10 +1725,17 @@ function hitPeds(){if(Math.abs(car.v)<0.8)return;const fx=Math.sin(car.h),fz=Mat
   const cnt=PED_COATS.map(()=>0);
   for(let k=0;k<PED_N;k++){const i=(k<36?k%6:(Math.random()*6)|0),j=(k<36?(k/6)|0:(Math.random()*6)|0),coat=(Math.random()*PED_COATS.length)|0;
     PEDS.push({id:k,coat,ci:cnt[coat]++,bx:blockC(i),bz:blockC(j),s:0,dsg:Math.random()<0.5?1:-1,speed:1.0+Math.random()*0.8,phase:Math.random()*6,
-      state:'walk',t:0,th:0,fx:0,fz:1,ox:0,oz:0,vx:0,vz:0,h:0,x:0,z:0,timer:3});}
-  const box=new THREE.BoxGeometry(1,1,1),ball=new THREE.SphereGeometry(1,10,8),mk=(g,color,n)=>{const m=new THREE.InstancedMesh(g,new THREE.MeshLambertMaterial({color}),n);m.castShadow=true;m.frustumCulled=false;scene.add(m);return m;};
+      state:'walk',t:0,th:0,fx:0,fz:1,ox:0,oz:0,vx:0,vz:0,h:0,x:0,z:0,timer:3,
+      hat:0.35+Math.random()*0.55,leg:(Math.random()*PED_LEGS.length)|0,hatc:(Math.random()*PED_HATS.length)|0});}   // World of DODO: hat height, legging and hat colour
+  const box=new THREE.BoxGeometry(1,1,1),ball=new THREE.SphereGeometry(1,10,8),cyl=new THREE.CylinderGeometry(1,1,1,14),
+    mk=(g,color,n)=>{const m=new THREE.InstancedMesh(g,new THREE.MeshLambertMaterial({color}),n);m.castShadow=true;m.frustumCulled=false;scene.add(m);return m;};
   PED_COATS.forEach((col,c)=>{if(cnt[c])PCOAT[c]=mk(box,col,cnt[c]*3);});
-  PLEG=mk(box,0x1a1d1c,PED_N*2);PHEAD=mk(ball,0xd9b9a0,PED_N);PHAIR=mk(ball,0x2b2623,PED_N);
+  PLEG=mk(box,0xffffff,PED_N*2);PHEAD=mk(ball,0xd9b9a0,PED_N);PHAIR=mk(ball,0x2b2623,PED_N);
+  PBUST=mk(ball,0xffffff,PED_N*2);PHAT=mk(cyl,0xffffff,PED_N);PBRIM=mk(cyl,0xffffff,PED_N);   // white materials: the colour comes per instance
+  const c=new THREE.Color();
+  for(const p of PEDS){c.setHex(PED_LEGS[p.leg]);PLEG.setColorAt(p.id*2,c);PLEG.setColorAt(p.id*2+1,c);
+    c.setHex(PED_COATS[p.coat]);PBUST.setColorAt(p.id*2,c);PBUST.setColorAt(p.id*2+1,c);
+    c.setHex(PED_HATS[p.hatc]);PHAT.setColorAt(p.id,c);PBRIM.setColorAt(p.id,c);}
   resetPeds();})();
 function makeBee(){const g=new THREE.Group();
   const ab=new THREE.Mesh(new THREE.SphereGeometry(1,18,14),M.charcoal);ab.scale.set(0.9,0.85,1.3);ab.position.z=-0.8;g.add(ab);
@@ -1706,7 +1756,7 @@ let F=null;
 function walkAnim(p,t,amp){const s=Math.sin(t*9)*amp,u=p.userData;u.legL.rotation.x=s;u.legR.rotation.x=-s;}
 
 // ---------- snow ----------
-const SN=COARSE?1200:2600,snowGeo=new THREE.BufferGeometry(),snowPos=new Float32Array(SN*3);
+const SN=COARSE?1200:2600,snowGeo=new THREE.BufferGeometry(),snowPos=new Float32Array(SN*3);let snowN=SN;   // snowN: flakes drawn and moved (World of DODO quality)
 for(let i=0;i<SN;i++){snowPos[i*3]=(R()-0.5)*140;snowPos[i*3+1]=R()*50;snowPos[i*3+2]=(R()-0.5)*140;}
 snowGeo.setAttribute('position',new THREE.BufferAttribute(snowPos,3));
 const snow=new THREE.Points(snowGeo,new THREE.PointsMaterial({color:0xffffff,map:poolTex,size:0.38,transparent:true,opacity:0.9,depthWrite:false}));snow.frustumCulled=false;scene.add(snow);
@@ -1759,7 +1809,10 @@ function drawMap(ctx,S,opt){
   ctx.fillStyle='#e03b3b';ctx.beginPath();ctx.arc(mx(RIVAL_PARK[0]),my(RIVAL_PARK[1]),r*0.7,0,Math.PI*2);ctx.fill();                  // REDLINE depot
   if(opt.police)for(const pc of opt.police){ctx.fillStyle='#3b82f6';ctx.strokeStyle='#ffffff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx(pc.x),my(pc.z),r*0.55,0,Math.PI*2);ctx.fill();ctx.stroke();}   // police chasing you
   if(opt.rivals)for(const rv of opt.rivals){ctx.fillStyle='#e03b3b';ctx.strokeStyle='#ffffff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx(rv.x),my(rv.z),r*0.62,0,Math.PI*2);ctx.fill();ctx.stroke();}   // hunting tanks
-  if(opt.others)for(const o of opt.others){if(!o.on)continue;ctx.fillStyle=hexCss(o.color);ctx.strokeStyle='#ffffff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx(o.x),my(o.z),r*0.62,0,Math.PI*2);ctx.fill();ctx.stroke();}   // the other players
+  if(opt.others){const t=now();for(const o of opt.others){const age=t-(o.seenAt||-1e9);if(!o.on||age>SPOT_MS)continue;   // the other players: only once spotted,
+    ctx.globalAlpha=o.seen?1:Math.max(0.2,1-age/SPOT_MS);                                                               // then their last seen place, fading
+    ctx.fillStyle=hexCss(o.color);ctx.strokeStyle='#ffffff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx(o.seenX),my(o.seenZ),r*0.62,0,Math.PI*2);ctx.fill();ctx.stroke();}
+    ctx.globalAlpha=1;}
   if(opt.car){const c=opt.car;ctx.save();ctx.translate(Math.max(r,Math.min(S-r,mx(c.x))),Math.max(r,Math.min(S-r,my(c.z))));ctx.rotate(-c.h+Math.PI);ctx.fillStyle='#ffffff';ctx.strokeStyle='#3d4543';ctx.lineWidth=1.5;const q=r*0.9;ctx.beginPath();ctx.moveTo(0,-q*1.2);ctx.lineTo(q*0.8,q*0.8);ctx.lineTo(0,q*0.35);ctx.lineTo(-q*0.8,q*0.8);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();}
 }
 const mini=$('mini'),mctx=mini.getContext('2d');
@@ -2080,6 +2133,7 @@ function netMsg(m){
   if(m.t==='snap'){const t=performance.now();
     for(const s of m.p){const o=NET.others.get(s[0]);if(!o)continue;o.buf.push({t,x:s[1],z:s[2],h:s[3],v:s[4],r:s[5],s:s[6]});if(o.buf.length>30)o.buf.shift();}}
   else if(m.t==='fire')netShot(m);
+  else if(m.t==='pong'){const rtt=performance.now()-m.c;PERF.ping=PERF.ping?PERF.ping*0.7+rtt*0.3:rtt;}   // smoothed round trip
   else if(m.t==='hit'){const o=NET.others.get(m.v);
     if(m.kill&&o&&o.on)startImpactFx(o.x,o.z,0.45,Math.hypot(o.x-car.x,o.z-car.z)<40?0.35:0);   // someone else's tank blew up
     if(m.by===NET.id){NET.pts=m.pts;flash((m.kill?T.youKill:T.youHit)(netName(m.v),m.gain));}
@@ -2118,6 +2172,7 @@ function netHit(s,kill){netSend({t:'hit',by:s.by,sid:s.sid,kill});}
 function netUpdate(dt,tnow){
   if(state==='drive'&&NET.live){NET.sendT-=dt;if(NET.sendT<=0){NET.sendT=NET_SEND;
     netSend({t:'st',x:r2(car.x),z:r2(car.z),h:Math.round(car.h*1000)/1000,v:r2(car.v),r:r2(car.roll),s:car.immT>0?1:0});}}
+  if(NET.live&&tnow-(NET.pingAt||0)>2000){NET.pingAt=tnow;netSend({t:'ping',c:Math.round(tnow)});}   // the ping in the performance readout
   const rt=tnow-NET_DELAY;
   for(const o of NET.others.values()){const b=o.buf;if(!b.length)continue;
     while(b.length>2&&b[1].t<=rt)b.shift();
@@ -2125,11 +2180,24 @@ function netUpdate(dt,tnow){
     const k=jump?(rt>=c.t?1:0):c.t>a.t?Math.max(0,Math.min(1,(rt-a.t)/(c.t-a.t))):1;
     o.x=lerp(a.x,c.x,k);o.z=lerp(a.z,c.z,k);o.h=angLerp(a.h,c.h,k);o.v=lerp(a.v,c.v,k);o.r=lerp(a.r,c.r,k);o.hx=Math.sin(o.h);o.hz=Math.cos(o.h);
     o.s=(k<0.5?a:c).s;
-    if(!o.on){o.on=true;o.tag.visible=true;}
+    o.on=true;
     o.g.visible=!(o.s&&Math.floor(tnow/110)%2);                                                           // blinks while immune after a (re)spawn
     const gy=groundH(o.x,o.z);o.g.position.set(o.x,gy+0.9*Math.abs(Math.sin(o.r)),o.z);o.g.rotation.y=o.h;o.g.rotation.z=o.r;
     o.g.userData.wheels.forEach(w=>w.rotation.x+=o.v*dt/0.46);
-    o.tag.position.set(o.x,gy+3.2,o.z);}}
+    // spotted: in plain sight of the camera (no building in between, not lost in the fog); checked ten times a second
+    if(tnow-(o.losAt||0)>100){o.losAt=tnow;o.seen=inSight(o.x,gy+1.3,o.z)||inSight(o.x,gy+2.6,o.z);}
+    if(o.seen){o.seenAt=tnow;o.seenX=o.x;o.seenZ=o.z;}
+    o.tag.visible=o.seen;o.tag.position.set(o.x,gy+3.2,o.z);}}
+// can the camera see the point (x,y,z)? a segment against the buildings (SOLIDS, boxes standing on the ground), within the fog's reach
+const SIGHT_MAX=230,SPOT_MS=3000;                       // farther is fog; a spotted tank stays on the minimap this long after it went out of sight
+function inSight(x,y,z){const ax=camera.position.x,ay=camera.position.y,az=camera.position.z,dx=x-ax,dy=y-ay,dz=z-az;
+  if(dx*dx+dz*dz>SIGHT_MAX*SIGHT_MAX)return false;
+  for(const b of SOLIDS){let t0=0,t1=1,blocked=true;
+    for(const[p,d,lo,hi]of[[ax,dx,b.x0,b.x1],[ay,dy,0,b.h],[az,dz,b.z0,b.z1]]){
+      if(Math.abs(d)<1e-9){if(p<lo||p>hi){blocked=false;break;}continue;}
+      let u=(lo-p)/d,v=(hi-p)/d;if(u>v){const w=u;u=v;v=w;}t0=Math.max(t0,u);t1=Math.min(t1,v);if(t0>t1){blocked=false;break;}}
+    if(blocked)return false;}
+  return true;}
 // the scoreboard: the best five, and you below them if you are not among them; ties share a rank; bots are listed too
 function renderBoard(){
   const all=[{name:NET.name,color:NET.color,pts:NET.pts,me:true}].concat([...NET.others.values()]);
@@ -2143,6 +2211,44 @@ function renderBoard(){
   $('online').textContent=T.online(all.filter(p=>!p.bot).length);$('myPts').textContent=NET.pts;}
 function joinErr(msg){const e=$('joinErr');e.textContent=msg;e.hidden=!msg;}
 
+// ---------- WORLD OF DODO: quality and the performance readout ----------
+// The original always draws at up to 2× pixel ratio with 2048 px soft shadows: too much for a weak (integrated) GPU, where the whole
+// picture stutters. The quality level drops by itself when the game keeps missing frames while driving (below Q_MIN_FPS for two
+// seconds in a row, not in the first seconds after a change), never rises by itself, and is remembered in this browser. Q cycles the
+// level by hand (auto then stops for this visit). F, a tap on the speed card or ?stats shows FPS, the slowest frame, ping and the level.
+const Q_MIN_FPS=45,BASE_PR=Math.min(window.devicePixelRatio||1,COARSE?1.5:2);
+const QUALITY=[
+  {pr:BASE_PR,shadow:COARSE?1024:2048,snow:1},                   // high: the original
+  {pr:Math.min(BASE_PR,1),shadow:1024,snow:1},                    // medium: 1 pixel per CSS pixel, smaller shadow map
+  {pr:Math.min(BASE_PR,1)*0.75,shadow:0,snow:0.5}];               // low: three quarters of the resolution, no shadows, half the snow
+const PERF={frames:0,ms:0,worst:0,fps:0,low:0,bad:0,wait:3,level:0,auto:true,ping:0,show:new URLSearchParams(location.search).has('stats')};
+function setQuality(l){const q=QUALITY[l];PERF.level=l;
+  renderer.setPixelRatio(q.pr);resize();
+  moon.castShadow=q.shadow>0;                                                 // three.js rebuilds the shaders when the shadow count changes
+  if(q.shadow&&moon.shadow.mapSize.x!==q.shadow){moon.shadow.mapSize.set(q.shadow,q.shadow);if(moon.shadow.map){moon.shadow.map.dispose();moon.shadow.map=null;}}
+  snowN=Math.round(SN*q.snow);snowGeo.setDrawRange(0,snowN);
+  try{localStorage.setItem('wod-quality',String(l));}catch(e){}
+  renderStats();}
+function initQuality(){let l=0;try{l=parseInt(localStorage.getItem('wod-quality'),10)||0;}catch(e){}
+  if(l>0)setQuality(Math.min(l,QUALITY.length-1));else renderStats();}
+// once per frame with the real frame time (ms); once a second: FPS, the readout, and maybe a step down
+function perfTick(ms){PERF.frames++;PERF.ms+=ms;PERF.worst=Math.max(PERF.worst,ms);
+  if(PERF.ms<1000)return;
+  PERF.fps=Math.round(PERF.frames*1000/PERF.ms);PERF.low=Math.round(PERF.worst);PERF.frames=PERF.ms=PERF.worst=0;
+  if(state==='drive'&&PERF.auto&&PERF.level<QUALITY.length-1){
+    if(PERF.wait>0)PERF.wait--;
+    else if(PERF.fps<Q_MIN_FPS){if(++PERF.bad>=2){PERF.bad=0;PERF.wait=3;setQuality(PERF.level+1);flash(T.qDown(T.qNames[PERF.level]));}}
+    else PERF.bad=0;}
+  renderStats();}
+function renderStats(){const el=$('stats');el.hidden=!PERF.show;if(!PERF.show)return;el.textContent='';
+  [PERF.fps+' FPS · max '+PERF.low+' ms',T.pingLbl+' '+(NET.live&&PERF.ping?Math.round(PERF.ping)+' ms':'–'),
+   T.qLbl+': '+T.qNames[PERF.level]+' ('+(PERF.auto?T.qAuto:T.qManual)+(COARSE?'':' · Q')+')']
+    .forEach(t=>{const s=document.createElement('span');s.textContent=t;el.appendChild(s);});}
+addEventListener('keydown',e=>{if(e.target instanceof HTMLInputElement||e.repeat)return;
+  if(e.code==='KeyF'){PERF.show=!PERF.show;renderStats();}
+  else if(e.code==='KeyQ'){PERF.auto=false;setQuality((PERF.level+1)%QUALITY.length);}});
+document.querySelector('.gauge').addEventListener('click',()=>{PERF.show=!PERF.show;renderStats();});
+
 // ---------- loop ----------
 let last=performance.now(),orbit=0,paused=false;
 document.addEventListener('visibilitychange',()=>{paused=document.hidden;last=performance.now();});
@@ -2151,7 +2257,7 @@ addEventListener('resize',resize);
 
 function frame(){
   requestAnimationFrame(frame);if(paused)return;
-  const tnow=performance.now(),dt=Math.min(0.05,(tnow-last)/1000);last=tnow;
+  const tnow=performance.now(),raw=tnow-last,dt=Math.min(0.05,raw/1000);last=tnow;
   if(state==='drive')updateDrive(dt);else if(state==='handover')updateHandover(dt);else if(state==='finale'&&F)updateFinale(dt);
   // shift clock: real time at CLOCK×, but never slower than the distance driven at city pace (V_CLOCK) — nobody can beat GAIA by speeding
   if(state==='drive'){realSec+=dt;gameSec+=Math.max(dt*CLOCK,lastMoved/V_CLOCK*CLOCK);lastMoved=0;}
@@ -2189,7 +2295,7 @@ function frame(){
   const tt=tnow/1000;
   stops.forEach(s=>{if(!s.marker.visible)return;s.parcel.rotation.y=tt*1.2;s.parcel.position.y=4.4+Math.sin(tt*2+s.idx)*0.3;s.ring.scale.setScalar(1+Math.sin(tt*3+s.idx)*0.05);});
   const cx=camera.position.x,cz=camera.position.z;
-  for(let i=0;i<SN;i++){let y=snowPos[i*3+1]-dt*(2.2+(i%5)*0.35);if(y<0)y+=50;snowPos[i*3+1]=y;
+  for(let i=0;i<snowN;i++){let y=snowPos[i*3+1]-dt*(2.2+(i%5)*0.35);if(y<0)y+=50;snowPos[i*3+1]=y;
     let x=snowPos[i*3]+Math.sin(tt*0.6+i)*dt*0.4,z=snowPos[i*3+2];
     if(x-cx>70)x-=140;else if(x-cx<-70)x+=140;if(z-cz>70)z-=140;else if(z-cz<-70)z+=140;snowPos[i*3]=x;snowPos[i*3+2]=z;}
   snowGeo.attributes.position.needsUpdate=true;
@@ -2202,6 +2308,7 @@ function frame(){
   updateImpactFx(dt);
   let shx=0,shy=0;if(shakeT>0){shakeT-=dt;const a=Math.max(0,shakeT)*2.5;shx=(Math.random()-0.5)*a;shy=(Math.random()-0.5)*a;}
   camera.position.x+=shx;camera.position.y+=shy;renderer.render(scene,camera);camera.position.x-=shx;camera.position.y-=shy;
+  perfTick(raw);
 }
 
 // World of DODO: the server said welcome, drive out from a free spot on the streets (the original went intro → plan → drive)
@@ -2221,9 +2328,9 @@ $('joinForm').addEventListener('submit',e=>{e.preventDefault();const b=$('startB
   joinErr('');b.disabled=true;$('startLbl').textContent=T.connecting;NET.name=name;NET.want=true;NET.err='';netConnect();});
 
 // automated tests (tools/browser-test.js) open the page with ?test and reach the game through this; nothing else uses it
-if(new URLSearchParams(location.search).has('test'))window.WOD={car,NET,get state(){return state;},K};
+if(new URLSearchParams(location.search).has('test'))window.WOD={car,NET,get state(){return state;},K,PERF,setQuality,renderer,scene};
 
-resize();reset();frame();
+resize();initQuality();reset();frame();
 const ready=()=>{const b=$('startBtn');b.disabled=false;$('startLbl').textContent=T.start;if(!COARSE)nameIn.focus();};
 (document.fonts&&document.fonts.load?Promise.race([Promise.all([document.fonts.load('600 40px Poppins').catch(()=>{}),document.fonts.load('600 40px "IBM Plex Mono"').catch(()=>{})]),new Promise(r=>setTimeout(r,2500))]):Promise.resolve()).then(()=>{
   // redraw canvas textures once fonts are in

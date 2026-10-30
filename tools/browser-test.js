@@ -51,7 +51,8 @@ const seesAt = (page, x, z) => page.waitForFunction((x, z) => [...WOD.NET.others
 // a few rendered frames, so the camera and the HUD catch up
 const frames = (page, n) => page.evaluate(n => new Promise(r => { const f = () => (--n > 0 ? requestAnimationFrame(f) : r()); requestAnimationFrame(f); }), n);
 
-// Rosta fires one parcel at Petr, who stands 26 units in front of him; resolves to Rosta's points after it
+// Rosta fires one parcel at Petr, who stands 26 units in front of him. A hit counts when Petr's own tank registers it and Rosta gains
+// the 10 points for it (a bot driving between them can take the parcel instead: 1 point, not a hit on Petr).
 async function shoot(a, b, petrHits) {
   await place(a, 0, -60, 0);
   await place(b, 0, -34, Math.PI);
@@ -60,8 +61,9 @@ async function shoot(a, b, petrHits) {
   await a.evaluate(() => { WOD.K.fire = true; });
   await a.waitForFunction(s => WOD.NET.sid > s, SLOW, sid);
   await a.evaluate(() => { WOD.K.fire = false; });
-  await a.waitForFunction(p => WOD.NET.pts > p, { timeout: 25000 }, before).catch(() => {});
-  return a.evaluate(() => WOD.NET.pts);
+  const hit = await b.waitForFunction(n => WOD.car.hitLog.length > n || WOD.car.topT > 0, { timeout: 25000 }, petrHits).then(() => true, () => false)
+    && await a.waitForFunction(p => WOD.NET.pts >= p + 10, { timeout: 25000 }, before).then(() => true, () => false);
+  return { hit, gain: (await a.evaluate(() => WOD.NET.pts)) - before };
 }
 
 (async () => {
@@ -94,24 +96,34 @@ async function shoot(a, b, petrHits) {
     await a.screenshot({ path: path.join(OUT, '2-rosta-sees-petr.png') });
     await b.screenshot({ path: path.join(OUT, '3-petr-sees-rosta.png') });
 
+    // names only in plain sight: on the open street Petr is spotted, behind the block east of Rosta he is not
+    const petr = () => [...WOD.NET.others.values()].find(o => o.name === 'Petr');
+    await a.waitForFunction(`(${petr})().tag.visible`, SLOW);
+    check(true, 'Petr\'s name shows while he is in plain sight');
+    await place(b, 52, -100, 0);
+    await seesAt(a, 52, -100);
+    await place(a, 0, -60, 0);
+    await a.waitForFunction(`!(${petr})().tag.visible && !(${petr})().seen`, SLOW);
+    check(true, 'behind a block of houses his name is gone');
+
     // one hit: 10 points
-    let pts = 0;
-    for (let i = 0; i < 8 && !pts; i++) {
-      pts = await shoot(a, b, 0);
-      console.log(`     parcel ${i + 1}: ${pts ? 'hit' : 'missed'}`);
+    let shot = { hit: false };
+    for (let i = 0; i < 8 && !shot.hit; i++) {
+      shot = await shoot(a, b, 0);
+      console.log(`     parcel ${i + 1}: ${shot.hit ? 'hit Petr' : 'missed Petr'}`);
     }
-    check(pts === 10, `a hit on Petr gives Rosta 10 points (${pts})`);
-    await b.waitForFunction(p => [...document.querySelectorAll('#board li')].some(li => li.querySelector('.nm').textContent === 'Rosta' && li.querySelector('b').textContent === String(p)), SLOW, pts);
+    check(shot.hit && shot.gain >= 10, `a hit on Petr gives Rosta 10 points (+${shot.gain})`);
+    const pts = await a.evaluate(() => WOD.NET.pts);
+    await b.waitForFunction(p => [...document.querySelectorAll('#board li')].some(li => li.querySelector('.nm').textContent === 'Rosta' && Number(li.querySelector('b').textContent) >= p), SLOW, pts);
     const ra = await row(a, 'Rosta'), rb = await row(b, 'Rosta');
-    check(ra && rb && ra[1] === '10' && rb[1] === '10', 'both scoreboards show Rosta with 10');
-    check((await a.$eval('#myPts', e => e.textContent)) === '10', 'Rosta\'s own points counter says 10');
+    check(ra && rb && Number(ra[1]) >= pts && Number(rb[1]) >= pts, `both scoreboards show Rosta's points (${ra && ra[1]} | ${rb && rb[1]})`);
+    check((await a.$eval('#myPts', e => e.textContent)) === String(await a.evaluate(() => WOD.NET.pts)), 'Rosta\'s own points counter matches');
 
     // the hit that destroys Petr (he had two recent hits): an explosion, and Petr comes back elsewhere
     let killed = false;
     for (let i = 0; i < 8 && !killed; i++) {
-      const before = pts;
-      pts = await shoot(a, b, 2);
-      killed = pts > before && (await b.evaluate(() => WOD.car.topT > 0 || Math.hypot(WOD.car.x, WOD.car.z + 34) > 20));
+      const s = await shoot(a, b, 2);
+      killed = s.hit && (await b.evaluate(() => WOD.car.topT > 0 || Math.hypot(WOD.car.x, WOD.car.z + 34) > 20));
       console.log(`     parcel ${i + 1}: ${killed ? 'destroyed Petr' : 'no kill yet'}`);
     }
     check(killed, 'the third hit destroys Petr\'s tank');
@@ -146,6 +158,16 @@ async function shoot(a, b, petrHits) {
     await m.waitForFunction(() => [...WOD.NET.others.values()].filter(o => o.on).length >= 2, SLOW);
     await frames(m, 6);
     await m.screenshot({ path: path.join(OUT, '6-phone.png') });
+
+    // software-drawn headless Chrome is the weak computer: the quality drops by itself; F shows the readout
+    await a.waitForFunction(() => WOD.PERF.level === 2, SLOW);
+    check(true, 'the quality drops to low by itself when the frames do not keep up');
+    await a.keyboard.press('KeyF');
+    await a.waitForFunction(() => /ping \d+ ms/.test(document.getElementById('stats').textContent), SLOW);
+    const readout = await a.$eval('#stats', e => (e.hidden ? 'hidden: ' : '') + [...e.children].map(s => s.textContent).join(' | '));
+    check(/^\d+ FPS/.test(readout) && readout.includes('nízká (auto'), `F shows FPS, ping and the level (${readout})`);
+    await frames(a, 3);
+    await a.screenshot({ path: path.join(OUT, '7-low-quality-readout.png') });
 
     for (const [n, p] of [['Rosta', a], ['Mobil', m]]) check(!p.errors.length, `no errors in ${n}'s console${p.errors.length ? ': ' + p.errors.join(' | ') : ''}`);
   } finally {

@@ -101,6 +101,10 @@ async function refused(hello) {
   check(await refused({ name: ' ' + ZWSP + ' ' }) === 'name_invalid', 'an empty name is refused');
   check(await refused({ name: 'bot 7' }) === 'name_reserved', 'a bot\'s name is refused');
 
+  a.send({ t: 'ping', c: 12345 });
+  const pong = await a.next(m => m.t === 'pong');
+  check(pong && pong.c === 12345, 'a ping gets its pong');
+
   // positions
   a.send({ t: 'st', x: 10.5, z: -20.25, h: 1.2, v: 12, r: 0, s: 1 });
   const snap = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id));

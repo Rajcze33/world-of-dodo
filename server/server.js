@@ -293,6 +293,7 @@ wss.on('connection', ws => {
     if (m.t === 'st') state(p, m);
     else if (m.t === 'fire') fire(p, m);
     else if (m.t === 'hit') hit(p, m);
+    else if (m.t === 'ping' && num(m.c, 1e12)) send(ws, { t: 'pong', c: m.c });   // the client's ping readout
   });
   ws.on('close', () => leave(ws));
   ws.on('error', () => {});
