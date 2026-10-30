@@ -4,6 +4,8 @@ A small multiplayer tank game in the browser. One snowy city, everybody in their
 parcels for ammunition. Built on *Poslední míle* (The Last Mile), the 3D delivery game DODO made for
 Christmas 2026, where the delivery van had already turned into a tank.
 
+**Play: https://game-3a26-3000.prg1.zerops.app** (English: add `?lang=en`)
+
 ![Two players and a bot in the city](docs/screenshot.png)
 
 - **Join with a name only.** Pick a name and a tank colour, drive out. No account, no password,

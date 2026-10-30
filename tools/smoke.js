@@ -70,7 +70,8 @@ async function refused(hello) {
   r = await fetch(BASE + '/assets/logo-white.png');
   check(r.status === 200, 'the logo is served');
   r = await fetch(BASE + '/vendor/..%2f..%2fserver%2fserver.js');
-  check(r.status === 404, 'no way out of the client folder');
+  // 404 from this server; behind the Zerops balancer the request is refused with 400 before it gets here
+  check(r.status === 404 || r.status === 400, `no way out of the client folder (${r.status})`);
   r = await fetch(BASE + '/package.json');
   check(r.status === 404, 'nothing outside the three asset folders');
   r = await fetch(BASE + '/health');
