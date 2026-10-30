@@ -43,4 +43,14 @@ function clearLine(x0, z0, x1, z1) {
   return true;
 }
 
-module.exports = { CELL, HALF, roadC, blockC, TRAM_K, SOLIDS, solidAt, clearLine };
+// is (x,z) open ground, at least m from every building and inside the world? (the client's free(), without its trees and lamps)
+const WORLD_LIM = 250;
+function freeAt(x, z, m) {
+  if (Math.abs(x) > WORLD_LIM - m || Math.abs(z) > WORLD_LIM - m) return false;
+  for (const b of SOLIDS) if (x > b.x0 - m && x < b.x1 + m && z > b.z0 - m && z < b.z1 + m) return false;
+  return true;
+}
+
+const DEPOT_PARK = [-107.5, -130];            // where the original van started; no car is placed near it
+
+module.exports = { CELL, HALF, roadC, blockC, TRAM_K, SOLIDS, DEPOT_PARK, solidAt, clearLine, freeAt };

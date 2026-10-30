@@ -23,14 +23,15 @@ function client() {
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.t === 'snap') for (const s of m.p) last.set(s[0], s);
+    if (m.t === 'w') api.world = m;
     const i = waiters.findIndex(w => w.test(m));
     if (i >= 0) waiters.splice(i, 1)[0].resolve(m);
-    else if (m.t !== 'snap') inbox.push(m);
+    else if (m.t !== 'snap' && m.t !== 'w') inbox.push(m);
   };
   const opened = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   const closed = new Promise(res => { ws.onclose = e => res(e); });
-  return {
-    ws, opened, closed, last,
+  const api = {
+    ws, opened, closed, last, world: null,
     send: m => ws.send(JSON.stringify(m)),
     // the next message that passes test (also one that already arrived), or null after ms
     next(test, ms = 2000) {
@@ -43,6 +44,7 @@ function client() {
       });
     },
   };
+  return api;
 }
 
 const key = () => Array.from({ length: 24 }, () => 'abcdefghijklmnopqrstuvwxyz'[Math.random() * 26 | 0]).join('');
@@ -118,6 +120,19 @@ async function refused(hello) {
   const p1 = b.last.get(bot1.id);
   check(p0 && p1 && Math.hypot(p1[1] - p0[1], p1[2] - p0[2]) > 3, 'BOT1 drives around the city');
 
+  // the shared city: snapshots with the cars, the tram and the pedestrians; a knocked pedestrian falls for everyone
+  const w = await b.next(m => m.t === 'w');
+  check(w && w.c.length === 33 * 4 && w.p.length === 50 * 5 && typeof w.m === 'number', 'the shared city arrives: 33 cars, 50 pedestrians, the tram');
+  const near = [...Array(50).keys()].sort((x, y) => Math.hypot(w.p[x * 5] - 10.5, w.p[x * 5 + 1] + 20.25) - Math.hypot(w.p[y * 5] - 10.5, w.p[y * 5 + 1] + 20.25))[0];
+  a.send({ t: 'ped', i: near, vx: 6, vz: 0 });
+  const fell = await b.next(m => m.t === 'w' && m.p[near * 5 + 3] > 0, 3000);
+  check(!!fell, `pedestrian ${near}, hit by A, falls on B's screen too`);
+  a.send({ t: 'prop', i: 7, fx: 1, fz: 0 });
+  const pb = await b.next(m => m.t === 'prop');
+  check(pb && pb.i === 7 && pb.fx === 1 && !pb.up, 'a tree A knocked down falls for B');
+  a.send({ t: 'prop', i: 7, fx: 0, fz: 1 });
+  check(!(await b.next(m => m.t === 'prop', 500)), 'a tree that is down already is not knocked down again');
+
   // a parcel (straight up, off every street, so no bot can run into it), a hit, the points
   a.send({ t: 'fire', sid: 1, x: 10, y: 1.5, z: -17, vx: 0, vy: 4, vz: 0 });
   const fb = await b.next(m => m.t === 'fire' && m.id === wa.id);
@@ -158,6 +173,7 @@ async function refused(hello) {
   a2.send({ t: 'hello', name: 'Tester A', key: ka });
   const wa2 = await a2.next(m => m.t === 'welcome');
   check(wa2 && wa2.pts === ptsA, `A rejoins with the same key and keeps ${ptsA} points`);
+  check(wa2 && wa2.props.some(p => p[0] === 7 && p[1] === 1), 'whoever comes in later finds the tree down');
   const a3 = client();
   await a3.opened;
   a3.send({ t: 'hello', name: 'Tester A', key: ka });

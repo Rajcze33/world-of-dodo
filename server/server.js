@@ -7,7 +7,8 @@
 // hits (on that screen the target tank is exactly where it is), and the server scores it for the shooter.
 //
 // The bots (BOT1, BOT2, ...) are the exception: they live here (server/bots.js), so this server drives them,
-// fires their parcels and decides when a parcel hits one of them.
+// fires their parcels and decides when a parcel hits one of them. So does the life of the city (server/world.js):
+// the cars, the tram and the pedestrians move here and everyone gets the same picture of them.
 //
 // Everything lives in memory: a player is a name, a colour and a score for as long as they are connected.
 // Nothing is written anywhere.
@@ -18,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const { initBot, stepBot, flyParcels, hitBot } = require('./bots');
+const world = require('./world');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS) || 24;     // people; the bots come on top
@@ -150,7 +152,7 @@ const num = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(
 
 function welcome(p) {
   send(p.ws, { t: 'welcome', id: p.id, name: p.name, color: p.color, pts: p.pts,
-    players: [...players.values()].filter(o => o !== p).map(pub) });
+    players: [...players.values()].filter(o => o !== p).map(pub), props: world.propsDown() });
 }
 
 function hello(ws, m) {
@@ -236,6 +238,18 @@ function hit(victim, m) {
   score(players.get(m.by), victim, m.sid, POINTS_PLAYER, m.kill === true);
 }
 
+// A person's tank or parcel hit a pedestrian (index i, pushed along vx, vz): the fall happens in the shared world.
+function ped(p, m) {
+  if (!Number.isInteger(m.i) || !num(m.vx, 120) || !num(m.vz, 120) || !p.st) return;
+  world.hitPed(m.i, m.vx, m.vz, { x: p.st[1], z: p.st[2] });
+}
+
+// A person's tank knocked a tree or a lamp down (index i in the client's list of props, falling towards fx, fz).
+function prop(p, m) {
+  if (!Number.isInteger(m.i) || m.i < 0 || m.i > 5000 || !num(m.fx, 1.01) || !num(m.fz, 1.01)) return;
+  if (world.propDown(m.i, m.fx, m.fz)) broadcast({ t: 'prop', i: m.i, fx: m.fx, fz: m.fz }, p);
+}
+
 // ---------- bots ----------
 function addBots() {
   for (let i = 1; i <= BOTS; i++) {
@@ -293,22 +307,27 @@ wss.on('connection', ws => {
     if (m.t === 'st') state(p, m);
     else if (m.t === 'fire') fire(p, m);
     else if (m.t === 'hit') hit(p, m);
+    else if (m.t === 'ped') ped(p, m);
+    else if (m.t === 'prop') prop(p, m);
     else if (m.t === 'ping' && num(m.c, 1e12)) send(ws, { t: 'pong', c: m.c });   // the client's ping readout
   });
   ws.on('close', () => leave(ws));
   ws.on('error', () => {});
 });
 
-// Each tick: the bots drive and fire, then one snapshot of every tank in the city goes to everyone.
-let lastTick = Date.now();
+// Each tick: the bots drive and fire, the city moves on (in two half steps: its code was written for browser frames),
+// then one snapshot of every tank goes to everyone; every second tick also one of the city.
+let lastTick = Date.now(), tick = 0;
 setInterval(() => {
   const now = Date.now(), dt = Math.min(0.2, (now - lastTick) / 1000);
   lastTick = now;
-  if (!players.size) return;
+  if (!humans().length) return;                         // nobody to watch: the city waits
   stepBots(dt);
-  const p = [];
-  for (const pl of players.values()) if (pl.st) p.push(pl.st);
+  const p = [], tanks = [];
+  for (const pl of players.values()) if (pl.st) { p.push(pl.st); tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] }); }
+  for (let k = 0; k < 2; k++) for (const i of world.step(dt / 2, tanks)) broadcast({ t: 'prop', i, up: 1 });
   if (p.length) broadcast({ t: 'snap', p });
+  if (++tick % 2 === 0) broadcast({ ...world.snapshot(), n: tick });   // n: the server's tick, the same snapshot for everyone
 }, TICK_MS);
 
 // The message budget refills once a second.

@@ -43,16 +43,17 @@ npm start          # http://localhost:3000
 client/index.html   the whole game: three.js city, tank physics, HUD, and the network part
 server/server.js    serves the page, relays the players over a WebSocket, keeps the score
 server/bots.js      the bots: driving, aiming, and what happens when a parcel hits one
-server/city.js      the city's streets and buildings as numbers, for the bots
+server/world.js     the shared city life: cars, tram, pedestrians, knocked-down trees and lamps
+server/city.js      the city's streets and buildings as numbers, for the bots and the city
 docs/PROTOCOL.md    every message between the browser and the server
 ```
 
-The server does not simulate the players. Each browser drives its own tank in its own copy of the
-city (its own traffic, tram and pedestrians) and sends where the tank is, about 15 times a second.
-The server sends everyone's tanks back in one snapshot. A fired parcel is passed on, and every browser
-flies it in its own world. **The player who gets hit decides the hit**, because on that screen their
-tank is exactly where it is; the server then awards the points. The bots live on the server, so the
-server decides what hits them.
+The server does not simulate the players. Each browser drives its own tank and sends where it is,
+about 15 times a second; the server sends everyone's tanks back in one snapshot. A fired parcel is
+passed on, and every browser flies it. **The player who gets hit decides the hit**, because on that
+screen their tank is exactly where it is; the server then awards the points. The bots and the life
+of the city (cars, tram, pedestrians) run on the server, so everyone sees the same city, and the
+server decides what hits a bot.
 
 The game page is one self-contained HTML file on purpose: no build step, no bundler. three.js r128
 and the fonts are served from `client/vendor` and `client/fonts`.
@@ -100,7 +101,8 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 
 - **The clients are trusted.** A modified browser can lie about its own tank or report hits. It is a
   game for fun, not a tournament.
-- Each player has their own traffic and pedestrians, so a parcel can bounce off a car only one of you sees.
+- The city is shared (cars, tram, pedestrians, knocked-down trees and lamps), but the cars cannot be
+  pushed: everyone would see them somewhere else. They stop for tanks, and turn back if one stays in the way.
 - One server is one world. More players than `MAX_PLAYERS` wait outside.
 
 ## Contributing

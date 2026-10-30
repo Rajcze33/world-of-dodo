@@ -731,7 +731,7 @@ for(let a=0;a<=6;a++)for(let b=0;b<=6;b++){const cx=roadC(a),cz=roadC(b);
 // vehicle) topples it: it falls away from the impact and then lies there as scenery. Slower than that, it acts like a wall.
 const PROPS=[],FALLING=[],PGRID=new Map(),PCELL=16;
 const AXIS_Y=new THREE.Vector3(0,1,0),PQ1=new THREE.Quaternion(),PQ2=new THREE.Quaternion(),PAX=new THREE.Vector3(),PO=new THREE.Object3D();
-function registerProp(p){p.state='up';p.th=0;p.w=0;p.bounced=false;p.fx=1;p.fz=0;PROPS.push(p);
+function registerProp(p){p.state='up';p.th=0;p.w=0;p.bounced=false;p.fx=1;p.fz=0;p.i=PROPS.length;PROPS.push(p);   // i: the same on every client (the city is built from one seed)
   const k=Math.floor(p.x/PCELL)*1000+Math.floor(p.z/PCELL);let a=PGRID.get(k);if(!a){a=[];PGRID.set(k,a);}a.push(p);return p;}
 function propsNear(x,z){const ci=Math.floor(x/PCELL),cj=Math.floor(z/PCELL),out=[];
   for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++){const l=PGRID.get((ci+a)*1000+cj+b);if(l)for(const p of l)out.push(p);}
@@ -753,7 +753,7 @@ function breakProps(x,z,h){const v=car.v;if(Math.abs(v)<1)return;const fx=Math.s
   for(const j of[-1.55,1.55]){const px=x+fx*j,pz=z+fz*j;
     for(const p of propsNear(px,pz)){if(p.state!=='up'||Math.hypot(px-p.x,pz-p.z)>=p.r+1.0)continue;
       if(((p.x-x)*fx+(p.z-z)*fz)*sg<-0.5)continue;                       // driving away from it
-      if(Math.abs(v)>=p.breakV){knockProp(p,fx*sg,fz*sg);car.v*=p.slow;}}}}
+      if(Math.abs(v)>=p.breakV){knockProp(p,fx*sg,fz*sg);netProp(p);car.v*=p.slow;}}}}   // World of DODO: the others see it fall too
 
 // ---------- trees ----------
 // one tree as its own group of 7 meshes: only the big tree on the plaza, which carries its lights and star (World of DODO; see tree below)
@@ -1515,11 +1515,7 @@ function makeTank(withLights,hullMat,labelTex){
 function paintMat(mat,hex){mat.color.setHex(hex);mat.emissive.setHex(hex).multiplyScalar(0.18);return mat;}
 const vanOwnMat=vanMat.clone();
 const van=makeTank(true,vanOwnMat);scene.add(van);   // the player's tank (still called van, as in the original)
-// the two tanks of the depot are delivery vehicles with a mission (see "delivery tanks")
-AI_PK.forEach((pk,i)=>{const g=makeTank(false);g.position.set(pk[0],0.3,pk[1]);g.rotation.y=Math.PI/2;scene.add(g);
-  TRAFFIC.push({ai:true,idx:i,g,x:pk[0],z:pk[1],ang:Math.PI/2,hx:1,hz:0,v:0,vx:0,vz:0,w:0,sp:0,dyn:false,phase:'script',mode:'depot',timer:3+i*7,goal:null,drops:0,fired:false,missionT:0,
-    hold:0,ox:0,oz:0,oa:0,stuck:0,ghost:0,yieldT:0,hurry:0,rnd:Math.random,plan:null,waitJ:false,from:[1,0],to:[1,1],
-    m:8,mi:14,hl:2.4,hw:1.15,hh:2.0,cl:1.5,cr:1.15});});
+// World of DODO: the two delivery tanks of the depot are gone (in a shared city they would be one more thing to sync, and players took them for other players)
 // REDLINE: three red tanks in the red depot's yard; they leave while you play and hunt you (see "REDLINE")
 RV_PK.forEach((pk,i)=>{const g=makeTank(false,rivalMat,rivalTex);g.position.set(pk[0],0.3,pk[1]);g.rotation.y=-Math.PI/2;scene.add(g);
   TRAFFIC.push({ai:true,rival:true,role:RV_ROLES[i],circ:i%2?1:-1,idx:i,g,pk,exitWp:RV_EXIT[i],x:pk[0],z:pk[1],ang:-Math.PI/2,hx:-1,hz:0,v:0,vx:0,vz:0,w:0,sp:0,gy:0,dyn:false,phase:'script',mode:'depot',timer:5+i*4,
@@ -1634,7 +1630,7 @@ function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
         if(hit.top!==undefined){s.y=hit.top+0.25;s.vx=s.vy=s.vz=0;s.rest=true;s.g.rotation.x=s.g.rotation.z=0;break;} // lands on a roof
         s.x=px;s.y=py;s.z=pz;                                   // step back out of the obstacle, then bounce
         const nx=hit.n[0],ny=hit.n[1],nz=hit.n[2],vn=s.vx*nx+s.vy*ny+s.vz*nz;
-        if(hit.car&&hit.car.hold!==undefined&&ny===0){ // parcel vs traffic car: the parcel shoves it
+        if(hit.car&&hit.car.hold!==undefined&&ny===0&&!WORLD.on){ // parcel vs traffic car: the parcel shoves it (not in the shared city, where cars only bounce it)
           const c=hit.car;toDyn(c);if(c.rival&&s.owner==='p'&&!(c.stunT>0.5)){c.stunT=2.0;flash(T.rivalStun);}   // your parcel stuns a REDLINE tank
           const A=carBody(c),B={cx:s.x,cz:s.z,vx:s.vx,vz:s.vz,w:0,im:1/PARCEL_M,iI:0};
           impulse(A,B,s.x,s.z,nx,nz,0.35);putBody(c,A);s.vx=B.vx;s.vz=B.vz;}
@@ -1643,7 +1639,8 @@ function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
           else if(!s.scored&&hitPlayer('shot',sg,T.hitBy(netName(s.by)))){s.scored=true;const kill=car.topT>0;   // a hit that took effect scores for the shooter
             if(kill)flash(T.killedBy(netName(s.by)));netHit(s,kill);}
           s.vx*=0.2;s.vz*=0.2;s.vy=Math.abs(s.vy)*0.3+1.5;}
-        else if(hit.ped){knockPed(hit.ped,s.vx,s.vz);s.vx*=0.3;s.vz*=0.3;s.vy=Math.abs(s.vy)*0.3+1.5;}      // parcel hits a person: they go down, the parcel drops (no police in World of DODO)
+        else if(hit.ped){if(!WORLD.on)knockPed(hit.ped,s.vx,s.vz);else if(s.owner==='p')netPed(hit.ped,s.vx,s.vz);   // parcel hits a person: they go down
+          s.vx*=0.3;s.vz*=0.3;s.vy=Math.abs(s.vy)*0.3+1.5;}      // (shared city: your own parcel tells the server; no police in World of DODO)
         else if(vn<0){s.vx-=(1+SHOT_E)*vn*nx;s.vy-=(1+SHOT_E)*vn*ny;s.vz-=(1+SHOT_E)*vn*nz;s.vx*=0.85;s.vz*=0.85;}
         s.wx=-s.wx*0.6+(Math.random()-0.5)*4;s.wy=-s.wy*0.6+(Math.random()-0.5)*4;
       }
@@ -1661,12 +1658,15 @@ function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
 // ---------- pedestrians: people walk loops along the pavement around the blocks; a parcel (or the tank) knocks them over, they get back up ----------
 // Drawn as instanced meshes (coat colours, legs, heads, hair: ~8 draw calls for all of them). A hit sends a pedestrian sliding and tipping over
 // away from the impact; after a few seconds on the ground they get up and walk on.
-// World of DODO: the city dresses up. Loud coats, coloured leggings, tall top hats in a third colour, and a big cartoon bust in the
-// coat's colour (the original's people wore the DODO palette).
+// World of DODO: the city dresses up. About half the pedestrians are women with an hourglass figure: long hair, a loud crop top over a
+// bare waist, a short skirt or shorts, coloured tights, a big cartoon bust and bottom. The men wear a loud top and coloured trousers.
+// (The original's people wore the DODO palette.) The looks come from their own seed (PED_RNG), so every player sees the same people in
+// the same clothes; where they walk comes from the server.
 const PED_N=50,PED_COATS=[0xff2fa0,0x9dff00,0x8a2be2,0xffc400,0x00e5d4,0xff6a00,0xd400ff,0x2fa8ff],PEDS=[];
-const PED_LEGS=[0xff2fa0,0x2fa8ff,0xffffff,0x111111,0xffc400,0x9dff00,0xd400ff],PED_HATS=[0xffc400,0x111111,0xff2fa0,0x00e5d4,0xffffff,0x8a2be2,0xff6a00];
+const PED_LEGS=[0xff2fa0,0x2fa8ff,0xffffff,0x111111,0xffc400,0x9dff00,0xd400ff,0xd9b9a0,0xd9b9a0],PED_HAIR=[0x2b2623,0x6b4423,0xe8c66a,0xb5482a,0x111111,0xf2e7c9,0xff6fb5],
+  PED_BOTTOMS=[0x111111,0x2fa8ff,0xffffff,0xff2fa0,0x8a2be2,0xffc400,0x00e5d4],PED_RNG=rng(7717);
 const PED_HW=17.2,PED_RC=3.0,PED_L=2*(PED_HW-PED_RC),PED_A=Math.PI/2*PED_RC,PED_SEG=PED_L+PED_A;   // pavement loop around a block: rounded square
-let PCOAT=[],PLEG=null,PHEAD=null,PHAIR=null,PBUST=null,PHAT=null,PBRIM=null;
+let PCOAT=[],PLEG=null,PHEAD=null,PHAIR=null,PBUST=null,PHAIRL=null,PSKIRT=null,PSHORT=null,PWAIST=null,PHIP=null,PBUTT=null;
 const PM4=new THREE.Matrix4(),PB4=new THREE.Matrix4(),PQh=new THREE.Quaternion(),PQf=new THREE.Quaternion(),PQx=new THREE.Quaternion(),
       PPos=new THREE.Vector3(),PScl=new THREE.Vector3(),PAXx=new THREE.Vector3(1,0,0),PAXf=new THREE.Vector3();
 // position and walking direction at distance s along the loop around block (bx,bz) (counter-clockwise on screen)
@@ -1684,19 +1684,28 @@ function placePed(p){
   if(p.th>0){PAXf.set(p.fz,0,-p.fx);PQf.setFromAxisAngle(PAXf,p.th);PQf.multiply(PQh);}else PQf.copy(PQh);
   PPos.set(p.x,groundH(p.x,p.z)+0.2*Math.sin(p.th),p.z);PScl.set(1,1,1);PB4.compose(PPos,PQf,PScl);
   const sw=p.state==='walk'?Math.sin(p.phase)*0.6:0,aw=-sw*0.8,co=PCOAT[p.coat],ci=p.ci*3;
-  pedPart(co,ci,0,1.29,0,0.66,0.82,0.36,0,0);                       // torso
+  const w=p.woman?1:0;                                              // World of DODO: what only the women wear is scaled to nothing on the men
+  if(w)pedPart(co,ci,0,1.5,0,0.62,0.42,0.36,0,0);                   // her crop top
+  else pedPart(co,ci,0,1.29,0,0.66,0.82,0.36,0,0);                  // his top down to the hips (the original's torso)
   pedPart(co,ci+1,-0.44,1.66,0,0.17,0.9,0.2,aw,-0.45);              // arms
   pedPart(co,ci+2,0.44,1.66,0,0.17,0.9,0.2,-aw,-0.45);
   pedPart(PLEG,p.id*2,-0.15,0.86,0,0.25,0.82,0.27,sw,-0.41);        // legs
   pedPart(PLEG,p.id*2+1,0.15,0.86,0,0.25,0.82,0.27,-sw,-0.41);
   pedPart(PHEAD,p.id,0,1.93,0,0.22,0.22,0.22,0,0);
   pedPart(PHAIR,p.id,0,1.99,-0.02,0.235,0.2,0.235,0,0);
-  pedPart(PBUST,p.id*2,-0.15,1.43,0.2,0.2,0.18,0.17,0,0);           // World of DODO: bust, hat brim and crown
-  pedPart(PBUST,p.id*2+1,0.15,1.43,0.2,0.2,0.18,0.17,0,0);
-  pedPart(PBRIM,p.id,0,2.13,0,0.42,0.04,0.42,0,0);
-  pedPart(PHAT,p.id,0,2.15+p.hat/2,0,0.2,p.hat,0.2,0,0);}
+  pedPart(PBUST,p.id*2,-0.15,1.45,0.21,0.24*w,0.22*w,0.21*w,0,0);   // her bust, waist, hips, bottom, long hair, skirt or shorts
+  pedPart(PBUST,p.id*2+1,0.15,1.45,0.21,0.24*w,0.22*w,0.21*w,0,0);
+  pedPart(PWAIST,p.id,0,1.13,0,0.44*w,0.36*w,0.27*w,0,0);           // the bare waist, narrower than the shoulders and the hips
+  pedPart(PHIP,p.id,0,0.94,0,0.64*w,0.2*w,0.36*w,0,0);
+  pedPart(PBUTT,p.id*2,-0.14,0.88,-0.17,0.21*w,0.21*w,0.19*w,0,0);
+  pedPart(PBUTT,p.id*2+1,0.14,0.88,-0.17,0.21*w,0.21*w,0.19*w,0,0);
+  pedPart(PHAIRL,p.id,0,1.74,-0.13,0.44*w,0.62*w,0.14*w,0,0);
+  const sk=p.skirt?w:0,sh=w-sk;                                     // the one she does not wear (and he never does) is scaled to nothing
+  pedPart(PSKIRT,p.id,0,0.8,0,0.46*sk,0.34*sk,0.38*sk,0,0);         // a short flared skirt
+  pedPart(PSHORT,p.id*2,-0.15,0.86,0,0.28*sh,0.3*sh,0.3*sh,sw,-0.14);
+  pedPart(PSHORT,p.id*2+1,0.15,0.86,0,0.28*sh,0.3*sh,0.3*sh,-sw,-0.14);}
 function pedDirty(){PCOAT.forEach(m=>{if(m)m.instanceMatrix.needsUpdate=true;});
-  for(const m of[PLEG,PHEAD,PHAIR,PBUST,PHAT,PBRIM])m.instanceMatrix.needsUpdate=true;}
+  for(const m of[PLEG,PHEAD,PHAIR,PBUST,PHAIRL,PSKIRT,PSHORT,PWAIST,PHIP,PBUTT])m.instanceMatrix.needsUpdate=true;}
 function knockPed(p,vx,vz){if(p.state!=='walk')return;
   const l=Math.hypot(vx,vz)||1,sp=Math.min(8,l*0.5);p.fx=vx/l;p.fz=vz/l;p.vx=p.fx*sp;p.vz=p.fz*sp;p.state='fall';p.t=0;p.th=0.001;p.timer=2.5+Math.random()*2;}
 const pedEase=t=>t<0?0:t>1?1:t*t*(3-2*t);
@@ -1720,22 +1729,25 @@ function hitPeds(){if(Math.abs(car.v)<0.8)return;const fx=Math.sin(car.h),fz=Mat
   for(const p of PEDS){if(p.state!=='walk'||Math.abs(p.x-car.x)>5||Math.abs(p.z-car.z)>5)continue;
     for(const j of[-1.55,1.55]){if(Math.hypot(p.x-(car.x+fx*j),p.z-(car.z+fz*j))>=1.4)continue;
       const dx=p.x-car.x,dz=p.z-car.z,l=Math.hypot(dx,dz)||1,sp=Math.abs(car.v);
-      knockPed(p,(fx*sg*0.6+dx/l*0.8)*sp+0.01,(fz*sg*0.6+dz/l*0.8)*sp);car.v*=0.97;break;}}}   // World of DODO: no police (wantedHit), each player would have their own
+      const kx=(fx*sg*0.6+dx/l*0.8)*sp+0.01,kz=(fz*sg*0.6+dz/l*0.8)*sp;if(WORLD.on)netPed(p,kx,kz);else knockPed(p,kx,kz);car.v*=0.97;break;}}}   // World of DODO: the server knocks shared pedestrians; no police (wantedHit)
 (function(){
   const cnt=PED_COATS.map(()=>0);
-  for(let k=0;k<PED_N;k++){const i=(k<36?k%6:(Math.random()*6)|0),j=(k<36?(k/6)|0:(Math.random()*6)|0),coat=(Math.random()*PED_COATS.length)|0;
+  for(let k=0;k<PED_N;k++){const i=(k<36?k%6:(Math.random()*6)|0),j=(k<36?(k/6)|0:(Math.random()*6)|0),coat=(PED_RNG()*PED_COATS.length)|0;
     PEDS.push({id:k,coat,ci:cnt[coat]++,bx:blockC(i),bz:blockC(j),s:0,dsg:Math.random()<0.5?1:-1,speed:1.0+Math.random()*0.8,phase:Math.random()*6,
       state:'walk',t:0,th:0,fx:0,fz:1,ox:0,oz:0,vx:0,vz:0,h:0,x:0,z:0,timer:3,
-      hat:0.35+Math.random()*0.55,leg:(Math.random()*PED_LEGS.length)|0,hatc:(Math.random()*PED_HATS.length)|0});}   // World of DODO: hat height, legging and hat colour
-  const box=new THREE.BoxGeometry(1,1,1),ball=new THREE.SphereGeometry(1,10,8),cyl=new THREE.CylinderGeometry(1,1,1,14),
+      leg:(PED_RNG()*PED_LEGS.length)|0,hair:(PED_RNG()*PED_HAIR.length)|0,skirt:PED_RNG()<0.5,bottom:(PED_RNG()*PED_BOTTOMS.length)|0,woman:PED_RNG()<0.5});}   // World of DODO: who and what they wear
+  const box=new THREE.BoxGeometry(1,1,1),ball=new THREE.SphereGeometry(1,10,8),cyl=new THREE.CylinderGeometry(0.75,1,1,12),
     mk=(g,color,n)=>{const m=new THREE.InstancedMesh(g,new THREE.MeshLambertMaterial({color}),n);m.castShadow=true;m.frustumCulled=false;scene.add(m);return m;};
   PED_COATS.forEach((col,c)=>{if(cnt[c])PCOAT[c]=mk(box,col,cnt[c]*3);});
-  PLEG=mk(box,0xffffff,PED_N*2);PHEAD=mk(ball,0xd9b9a0,PED_N);PHAIR=mk(ball,0x2b2623,PED_N);
-  PBUST=mk(ball,0xffffff,PED_N*2);PHAT=mk(cyl,0xffffff,PED_N);PBRIM=mk(cyl,0xffffff,PED_N);   // white materials: the colour comes per instance
+  PLEG=mk(box,0xffffff,PED_N*2);PHEAD=mk(ball,0xd9b9a0,PED_N);PHAIR=mk(ball,0xffffff,PED_N);
+  PBUST=mk(ball,0xffffff,PED_N*2);PHAIRL=mk(box,0xffffff,PED_N);PSKIRT=mk(cyl,0xffffff,PED_N);PSHORT=mk(box,0xffffff,PED_N*2);   // white materials: the colour comes per instance
+  PWAIST=mk(box,0xd9b9a0,PED_N);PHIP=mk(box,0xffffff,PED_N);PBUTT=mk(ball,0xffffff,PED_N*2);
   const c=new THREE.Color();
-  for(const p of PEDS){c.setHex(PED_LEGS[p.leg]);PLEG.setColorAt(p.id*2,c);PLEG.setColorAt(p.id*2+1,c);
+  for(const p of PEDS){c.setHex(p.woman?PED_LEGS[p.leg]:PED_BOTTOMS[p.bottom]);PLEG.setColorAt(p.id*2,c);PLEG.setColorAt(p.id*2+1,c);   // her tights, his trousers
     c.setHex(PED_COATS[p.coat]);PBUST.setColorAt(p.id*2,c);PBUST.setColorAt(p.id*2+1,c);
-    c.setHex(PED_HATS[p.hatc]);PHAT.setColorAt(p.id,c);PBRIM.setColorAt(p.id,c);}
+    c.setHex(PED_HAIR[p.hair]);PHAIR.setColorAt(p.id,c);PHAIRL.setColorAt(p.id,c);
+    c.setHex(PED_BOTTOMS[p.bottom]);PSKIRT.setColorAt(p.id,c);PSHORT.setColorAt(p.id*2,c);PSHORT.setColorAt(p.id*2+1,c);
+    PHIP.setColorAt(p.id,c);PBUTT.setColorAt(p.id*2,c);PBUTT.setColorAt(p.id*2+1,c);}
   resetPeds();})();
 function makeBee(){const g=new THREE.Group();
   const ab=new THREE.Mesh(new THREE.SphereGeometry(1,18,14),M.charcoal);ab.scale.set(0.9,0.85,1.3);ab.position.z=-0.8;g.add(ab);
@@ -1901,7 +1913,7 @@ function resolveTraffic(){const fx=Math.sin(car.h),fz=Math.cos(car.h);
       for(const j of[-1.55,1.55])for(const k of[-cl,cl]){const tx=car.x+fx*j,tz=car.z+fz*j,qx=c.x+chx*k,qz=c.z+chz*k,dx=qx-tx,dz=qz-tz,d=Math.hypot(dx,dz);
         if(d<thr&&(!best||thr-d>best.pen))best={pen:thr-d,nx:d>0.01?dx/d:chx,nz:d>0.01?dz/d:chz,px:(tx+qx)/2,pz:(tz+qz)/2};}
       if(!best)break;
-      if(isScripted(c)){const bx=-best.nx*best.pen,bz=-best.nz*best.pen;if(!blockedAt(car.x+bx,car.z+bz,car.h)){car.x+=bx;car.z+=bz;}car.v*=0.6;continue;} // delivery tank on its script: you bounce off it
+      if(WORLD.on||isScripted(c)){const bx=-best.nx*best.pen,bz=-best.nz*best.pen;if(!blockedAt(car.x+bx,car.z+bz,car.h)){car.x+=bx;car.z+=bz;}car.v*=0.6;continue;} // a scripted tank, or any car of the shared city: you bounce off it
       toDyn(c);
       const A={cx:car.x,cz:car.z,vx:fx*car.v,vz:fz*car.v,w:0,im:1/TANK_M,iI:0},B=carBody(c);
       if(c.rival&&c.stunT<=0){const rv=-(c.vx*best.nx+c.vz*best.nz);                  // how fast the red tank is driving into you
@@ -2133,6 +2145,8 @@ function netMsg(m){
   if(m.t==='snap'){const t=performance.now();
     for(const s of m.p){const o=NET.others.get(s[0]);if(!o)continue;o.buf.push({t,x:s[1],z:s[2],h:s[3],v:s[4],r:s[5],s:s[6]});if(o.buf.length>30)o.buf.shift();}}
   else if(m.t==='fire')netShot(m);
+  else if(m.t==='w')worldMsg(m);
+  else if(m.t==='prop')propMsg(m);
   else if(m.t==='pong'){const rtt=performance.now()-m.c;PERF.ping=PERF.ping?PERF.ping*0.7+rtt*0.3:rtt;}   // smoothed round trip
   else if(m.t==='hit'){const o=NET.others.get(m.v);
     if(m.kill&&o&&o.on)startImpactFx(o.x,o.z,0.45,Math.hypot(o.x-car.x,o.z-car.z)<40?0.35:0);   // someone else's tank blew up
@@ -2143,7 +2157,9 @@ function netMsg(m){
   else if(m.t==='leave'){const o=NET.others.get(m.id);if(o){netDrop(o);NET.others.delete(m.id);renderBoard();}}
   else if(m.t==='welcome'){NET.live=true;NET.retry=0;NET.err='';NET.id=m.id;NET.name=m.name;NET.color=m.color;NET.pts=m.pts;paintMat(vanOwnMat,m.color);
     NET.others.forEach(netDrop);NET.others.clear();m.players.forEach(netAdd);renderBoard();
-    if(!NET.inGame){NET.inGame=true;start();}else flash(T.back);}
+    WORLD.buf.length=0;
+    if(!NET.inGame){NET.inGame=true;WORLD.on=true;start();}else flash(T.back);
+    propsDown(m.props);}
   else if(m.t==='err')NET.err={name_taken:T.errTaken,name_reserved:T.errReserved,full:T.errFull}[m.code]||T.errName;}   // the server closes the socket next
 function netFail(msg){NET.want=false;const b=$('startBtn');b.disabled=false;$('startLbl').textContent=T.start;joinErr(msg);}
 // another player or a bot: the tank in their paint, the name glowing above it
@@ -2211,6 +2227,48 @@ function renderBoard(){
   $('online').textContent=T.online(all.filter(p=>!p.bot).length);$('myPts').textContent=NET.pts;}
 function joinErr(msg){const e=$('joinErr');e.textContent=msg;e.hidden=!msg;}
 
+// ---------- WORLD OF DODO: the shared city ----------
+// Once you play, the cars, the tram and the pedestrians come from the server (server/world.js), which moves them for everyone; the
+// browser only draws them between two snapshots (about 7 a second) WORLD_DELAY ms behind. Cars are solid: a tank bounces off them.
+// A pedestrian your tank or your own parcel hits is reported, and falls (for everyone) when the server says so. A tree or a lamp you
+// knock down falls here at once and is passed on to the others. Before you join, the intro shows the browser's own city as before.
+const WORLD_DELAY=260;
+const WORLD={on:false,buf:[]};
+function worldMsg(m){WORLD.buf.push({t:performance.now(),n:m.n,c:m.c,m:m.m,p:m.p});if(WORLD.buf.length>20)WORLD.buf.shift();}
+// a car between snapshots a and n (k from 0 to 1) as [x, z, heading, speed]; a car turning back changes lane, so no sliding across
+function worldCar(a,n,k,i){const j=i*4,ax=a.c[j],az=a.c[j+1],nx=n.c[j],nz=n.c[j+1],kk=Math.hypot(nx-ax,nz-az)>4?(k<0.5?0:1):k;
+  return[lerp(ax,nx,kk),lerp(az,nz,kk),angLerp(a.c[j+2],n.c[j+2],kk),lerp(a.c[j+3],n.c[j+3],kk)];}
+// the city at server tick s, from the snapshots this browser holds (tools/browser-test.js compares two players with it), or null
+function worldAt(s){const b=WORLD.buf;
+  for(let i=0;i+1<b.length;i++){const a=b[i],n=b[i+1];if(a.n>s||n.n<s)continue;const k=(s-a.n)/((n.n-a.n)||1);
+    return{cars:TRAFFIC.slice(0,N_CARS).map((c,q)=>worldCar(a,n,k,q).slice(0,2)),peds:PEDS.map((p,q)=>[lerp(a.p[q*5],n.p[q*5],k),lerp(a.p[q*5+1],n.p[q*5+1],k)])};}
+  return null;}
+function netPed(p,vx,vz){const t=now();if(t-(p.sentAt||0)<600)return;p.sentAt=t;netSend({t:'ped',i:p.id,vx:r2(vx),vz:r2(vz)});}
+function netProp(p){if(WORLD.on)netSend({t:'prop',i:p.i,fx:r2(p.fx),fz:r2(p.fz)});}
+// another player's tank knocked a prop down (it falls the way they saw it fall), or it stands up again after a while
+function propMsg(m){const p=PROPS[m.i];if(!p)return;
+  if(m.up){const k=FALLING.indexOf(p);if(k>=0)FALLING.splice(k,1);p.state='up';p.th=0;p.w=0;p.bounced=false;p.apply(p);}
+  else if(p.state==='up'){p.fx=m.fx;p.fz=m.fz;p.state='fall';p.th=0.001;p.w=p.w0;p.bounced=false;FALLING.push(p);}}
+// props that were down already when you joined
+function propsDown(list){for(const[i,fx,fz]of list||[]){const p=PROPS[i];if(!p)continue;p.fx=fx;p.fz=fz;p.state='down';p.th=p.th0;p.apply(p);}}
+function worldUpdate(dt,tnow){
+  for(const c of TRAFFIC)if(c.rival&&c.mode!=='wreck'&&!c.dyn)updateScript(c,dt);            // REDLINE stays parked in its yard
+  const b=WORLD.buf;if(!b.length)return;
+  const rt=tnow-WORLD_DELAY;while(b.length>2&&b[1].t<=rt)b.shift();
+  const a=b[0],n=b[1]||a,k=n.t>a.t?Math.max(0,Math.min(1,(rt-a.t)/(n.t-a.t))):1;
+  // cars: the first N_CARS of TRAFFIC, in the server's order, as x, z, heading, speed
+  for(let i=0;i<N_CARS&&i*4<a.c.length;i++){const c=TRAFFIC[i],[x,z,h,v]=worldCar(a,n,k,i);
+    c.x=x;c.z=z;c.hx=Math.sin(h);c.hz=Math.cos(h);c.v=v;
+    c.g.position.set(c.x,0,c.z);c.g.rotation.y=h;c.g.userData.wheels.forEach(w=>w.rotation.x+=c.v*dt/0.34);}
+  // the tram: its place along the track, which wraps around at the end of the loop
+  const Lp=TRAM_PATH.len;let ds=n.m-a.m;if(ds<-Lp/2)ds+=Lp;else if(ds>Lp/2)ds-=Lp;TRAM.s=((a.m+ds*k)%Lp+Lp)%Lp;placeTram();
+  // pedestrians as x, z, heading, tilt, fall direction
+  if(a.p.length<PEDS.length*5)return;
+  for(let i=0;i<PEDS.length;i++){const p=PEDS[i],j=i*5,x=lerp(a.p[j],n.p[j],k),z=lerp(a.p[j+1],n.p[j+1],k);
+    p.phase+=Math.hypot(x-p.x,z-p.z)*3.2;p.x=x;p.z=z;p.h=angLerp(a.p[j+2],n.p[j+2],k);p.th=lerp(a.p[j+3],n.p[j+3],k);
+    const fa=(k<0.5?a:n).p[j+4];p.fx=Math.sin(fa);p.fz=Math.cos(fa);p.state=p.th>0.001?'down':'walk';placePed(p);}
+  pedDirty();}
+
 // ---------- WORLD OF DODO: quality and the performance readout ----------
 // The original always draws at up to 2× pixel ratio with 2048 px soft shadows: too much for a weak (integrated) GPU, where the whole
 // picture stutters. The quality level drops by itself when the game keeps missing frames while driving (below Q_MIN_FPS for two
@@ -2262,7 +2320,8 @@ function frame(){
   // shift clock: real time at CLOCK×, but never slower than the distance driven at city pace (V_CLOCK) — nobody can beat GAIA by speeding
   if(state==='drive'){realSec+=dt;gameSec+=Math.max(dt*CLOCK,lastMoved/V_CLOCK*CLOCK);lastMoved=0;}
   else if(state==='handover'){realSec+=dt;gameSec+=dt*H_GAME/HANDOVER_LEN;lastMoved=0;}
-  updateTraffic(dt);updateShots(dt);updateProps(dt);updatePeds(dt);
+  if(WORLD.on)worldUpdate(dt,tnow);else{updateTraffic(dt);updatePeds(dt);}   // World of DODO: once you play, the city comes from the server
+  updateShots(dt);updateProps(dt);
   car.gy+=(groundH(car.x,car.z)-car.gy)*Math.min(1,dt*14);van.position.set(car.x,car.gy+0.9*Math.abs(Math.sin(car.roll)),car.z);van.rotation.y=car.h;van.rotation.z=car.roll;
   van.visible=!(state==='drive'&&car.immT>0&&Math.floor(tnow/110)%2);                // World of DODO: blinks while immune after a (re)spawn
   van.userData.wheels.forEach(w=>w.rotation.x+=car.v*dt/0.46);
@@ -2328,7 +2387,7 @@ $('joinForm').addEventListener('submit',e=>{e.preventDefault();const b=$('startB
   joinErr('');b.disabled=true;$('startLbl').textContent=T.connecting;NET.name=name;NET.want=true;NET.err='';netConnect();});
 
 // automated tests (tools/browser-test.js) open the page with ?test and reach the game through this; nothing else uses it
-if(new URLSearchParams(location.search).has('test'))window.WOD={car,NET,get state(){return state;},K,PERF,setQuality,renderer,scene};
+if(new URLSearchParams(location.search).has('test'))window.WOD={car,NET,get state(){return state;},K,PERF,setQuality,renderer,scene,WORLD,TRAFFIC,PEDS,worldAt};
 
 resize();initQuality();reset();frame();
 const ready=()=>{const b=$('startBtn');b.disabled=false;$('startLbl').textContent=T.start;if(!COARSE)nameIn.focus();};

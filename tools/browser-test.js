@@ -88,6 +88,17 @@ async function shoot(a, b, petrHits) {
     check(botsSeen === 'BOT1,BOT2,BOT3', `Rosta sees the bots (${botsSeen})`);
     check((await a.$eval('#online', e => e.textContent)) === '2 online', 'the HUD says 2 online (the bots do not count)');
 
+    // the shared city: at the same server moment both have every car and pedestrian in the same place. (Comparing what the two
+    // windows show right now would measure headless Chrome, which draws a frame every few hundred ms, not the game.)
+    await Promise.all([a, b].map(p => p.waitForFunction(() => WOD.WORLD.buf.length > 2, SLOW)));
+    const newest = p => p.evaluate(() => WOD.WORLD.buf[WOD.WORLD.buf.length - 1].n);
+    const s = Math.min(await newest(a), await newest(b)) - 1;
+    const [sa, sb] = await Promise.all([a.evaluate(t => WOD.worldAt(t), s), b.evaluate(t => WOD.worldAt(t), s)]);
+    const gap = (x, y) => Math.max(...x.map((c, i) => Math.hypot(c[0] - y[i][0], c[1] - y[i][1])));
+    check(sa && sb && gap(sa.cars, sb.cars) < 0.01 && gap(sa.peds, sb.peds) < 0.01, `Rosta and Petr see the same city at server tick ${s} (largest gap: ${sa && sb ? gap(sa.cars, sb.cars).toFixed(3) + ' car, ' + gap(sa.peds, sb.peds).toFixed(3) + ' pedestrian' : 'no data'})`);
+    const lag = await Promise.all([a, b].map(p => p.evaluate(() => WOD.WORLD.buf.length)));
+    console.log(`     snapshots held: Rosta ${lag[0]}, Petr ${lag[1]}`);
+
     // Rosta and Petr on the street through the middle of the city, 26 units apart, facing each other
     await place(a, 0, -60, 0);
     await place(b, 0, -34, Math.PI);
