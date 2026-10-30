@@ -1,0 +1,9 @@
+# Local test: docker compose up --build -d, then http://localhost:3400
+# (3300 is taken by another local project on this machine.)
+name: world-of-dodo
+services:
+  game:
+    build: .
+    ports:
+      - "3400:3000"
+    restart: unless-stopped

@@ -1,0 +1,32 @@
+# World of DODO on Zerops: how the service builds and runs. The service itself is created once from
+# zerops/import.yaml (one container: the whole game lives in that process's memory).
+zerops:
+  - setup: game
+    build:
+      base: nodejs@24
+      buildCommands:
+        - npm ci --omit=dev --ignore-scripts
+      deployFiles:
+        - server
+        - client
+        - node_modules
+        - package.json
+      cache:
+        - node_modules
+    deploy:
+      # The new version gets traffic only once it answers.
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: /health
+    run:
+      base: nodejs@24
+      ports:
+        # httpSupport: the Zerops balancer terminates TLS and passes the WebSocket upgrade at /ws.
+        - port: 3000
+          httpSupport: true
+      envVariables:
+        NODE_ENV: production
+        BOTS: "3"
+        MAX_PLAYERS: "24"
+      start: node server/server.js

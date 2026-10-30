@@ -1,0 +1,15 @@
+# Creates World of DODO as a project of its own on Zerops, apart from any other app:
+#   zcli project project-import zerops/import.yaml --org-id <organisation>
+# Then deploy with `zcli push` from the repository root (zerops.yaml, setup "game").
+project:
+  name: World of DODO
+  corePackage: LIGHT
+
+services:
+  - hostname: game
+    type: nodejs@24
+    enableSubdomainAccess: true
+    # Exactly one container: all players must reach the same process, which holds the game in memory.
+    # A second container would be a second, separate world.
+    minContainers: 1
+    maxContainers: 1

@@ -1,0 +1,31 @@
+# Every pull request and every push to main: the client's scripts parse, the server starts and the
+# protocol smoke test passes against it. No secrets are used, so it is safe for pull requests from forks.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: node tools/check-client.js
+      - name: Start the server and run the smoke test
+        run: |
+          PORT=3400 node server/server.js > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -fs http://localhost:3400/health > /dev/null && break; sleep 0.5; done
+          node tools/smoke.js http://localhost:3400
+      - name: Server log
+        if: always()
+        run: cat server.log
