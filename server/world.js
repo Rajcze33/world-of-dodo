@@ -8,7 +8,7 @@
 // city's seed). A car that a tank keeps blocking turns back after a while.
 //
 // Pedestrians walk their loops here; a client that hits one with its tank or its own parcel reports it, and the fall
-// happens here, for everyone. Knocked-down trees and lamps are only remembered and passed on, and stand up again
+// happens here, for everyone. A knocked-down pedestrian lies there for a while, then walks again somewhere else. Knocked-down trees and lamps are only remembered and passed on, and stand up again
 // after PROP_BACK_MS.
 'use strict';
 
@@ -290,14 +290,30 @@ function initPeds() {
     PEDS.push(p);
   }
 }
-// a hit sends a pedestrian sliding and tipping over away from the impact; a few seconds later they get up and walk on
+// A hit sends a pedestrian sliding and tipping over away from the impact. In the original they got up a few seconds later; here
+// they stay down for PED_DOWN_T seconds, then they are gone and walk again somewhere else (out of every tank's sight, see respawnPed).
+const PED_DOWN_T = [8, 12], PED_RESPAWN_FAR = 60;
 function knockPed(p, vx, vz) {
   if (p.state !== 'walk') return false;
   const l = Math.hypot(vx, vz) || 1, sp = Math.min(8, l * 0.5);
-  p.fx = vx / l; p.fz = vz / l; p.vx = p.fx * sp; p.vz = p.fz * sp; p.state = 'fall'; p.t = 0; p.th = 0.001; p.timer = 2.5 + Math.random() * 2;
+  p.fx = vx / l; p.fz = vz / l; p.vx = p.fx * sp; p.vz = p.fz * sp; p.state = 'fall'; p.t = 0; p.th = 0.001;
+  p.timer = PED_DOWN_T[0] + Math.random() * (PED_DOWN_T[1] - PED_DOWN_T[0]);
   return true;
 }
-function stepPeds(dt) {
+// on the pavement of some block, at least PED_RESPAWN_FAR from every tank where possible
+function respawnPed(p, tanks) {
+  let best = null, bs = -1;
+  for (let k = 0; k < 12; k++) {
+    const bx = blockC((Math.random() * 6) | 0), bz = blockC((Math.random() * 6) | 0), s = Math.random() * 4 * PED_SEG, r = pedRing(bx, bz, s);
+    let d = 400;
+    for (const t of tanks) d = Math.min(d, Math.hypot(t.x - r[0], t.z - r[1]));
+    if (d > bs) { bs = d; best = { bx, bz, s }; }
+    if (d >= PED_RESPAWN_FAR) break;
+  }
+  Object.assign(p, best, { state: 'walk', t: 0, th: 0, ox: 0, oz: 0, vx: 0, vz: 0, dsg: Math.random() < 0.5 ? 1 : -1 });
+  const r = pedRing(p.bx, p.bz, p.s); p.x = r[0]; p.z = r[1]; p.h = Math.atan2(r[2] * p.dsg, r[3] * p.dsg);
+}
+function stepPeds(dt, tanks) {
   for (const p of PEDS) {
     if (p.state === 'walk') {
       p.s += p.dsg * p.speed * dt;
@@ -309,8 +325,7 @@ function stepPeds(dt) {
       if (freeAt(r[0] + nx, r[1] + nz, 0.3)) { p.ox = nx; p.oz = nz; } else p.vx = p.vz = 0;   // slides, but not into a building
       const d = Math.exp(-4 * dt); p.vx *= d; p.vz *= d; p.x = r[0] + p.ox; p.z = r[1] + p.oz;
       if (p.state === 'fall') { p.th = pedEase(p.t / 0.4) * 1.45; if (p.t >= 0.4) { p.state = 'down'; p.t = 0; } }
-      else if (p.state === 'down') { if (p.t >= p.timer) { p.state = 'rise'; p.t = 0; } }
-      else if (p.state === 'rise') { p.th = 1.45 * (1 - pedEase(p.t / 0.7)); if (p.t >= 0.7) { p.state = 'walk'; p.th = 0; } }
+      else if (p.state === 'down' && p.t >= p.timer) respawnPed(p, tanks);
     }
   }
 }
@@ -331,7 +346,7 @@ function init() {
 function step(dt, tanks) {
   stepTram(dt, tanks);
   stepTraffic(dt, tanks);
-  stepPeds(dt);
+  stepPeds(dt, tanks);
   const up = [], now = Date.now();
   for (const [i, d] of PROPS_DOWN) if (now - d.t > PROP_BACK_MS) { PROPS_DOWN.delete(i); up.push(i); }
   return up;

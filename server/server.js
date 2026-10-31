@@ -52,7 +52,7 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',          // the font licenses next to the fonts
 };
-const STATIC_DIRS = ['vendor', 'fonts', 'assets'];
+const STATIC_DIRS = ['vendor', 'fonts', 'assets', 'shared'];   // shared: data the server uses too (the construction site)
 // The page is one document with inline script and style; it connects only to this host's /ws.
 const PAGE_CSP = [
   "default-src 'self'",

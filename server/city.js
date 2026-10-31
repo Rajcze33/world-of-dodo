@@ -3,6 +3,8 @@
 // there); if the city changes in the game, change it here too.
 'use strict';
 
+const SITE = require('../client/shared/site.js');
+
 const CELL = 52, HALF = 156;
 const roadC = k => -HALF + CELL * k;          // street centre lines, k = 0..6 (junctions at roadC(i), roadC(j))
 const blockC = i => -130 + CELL * i;          // block centres, i = 0..5
@@ -24,6 +26,7 @@ const SOLIDS = (() => {
   bx = blockC(PARK_B[0]); bz = blockC(PARK_B[1]);
   s.push({ x0: bx - 5, x1: bx + 5, z0: bz - 12, z1: bz + 8, h: 15 });
   for (const sx of [-1, 1]) s.push({ x0: bx + sx * 5.6 - 2, x1: bx + sx * 5.6 + 2, z0: bz + 7.5, z1: bz + 11.5, h: 31 });
+  for (const b of SITE.solids) s.push(b);   // the construction site south of the city, the same file the page loads
   return s;
 })();
 
@@ -33,12 +36,21 @@ function solidAt(x, y, z) {
   return null;
 }
 
-// can a parcel get from (x0,z0) to (x1,z1) without a building in between (at parcel height, 2 units apart)?
+// can a parcel get from (x0,z0) to (x1,z1) without an obstacle taller than parcel height in between? (exact segment against
+// each box, so the site's thin walls and fence count too)
 function clearLine(x0, z0, x1, z1) {
-  const d = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(d / 2);
-  for (let i = 1; i < n; i++) {
-    const t = i / n;
-    if (solidAt(x0 + (x1 - x0) * t, 1.5, z0 + (z1 - z0) * t)) return false;
+  const dx = x1 - x0, dz = z1 - z0;
+  for (const b of SOLIDS) {
+    if (b.h <= 1.5) continue;
+    let t0 = 0, t1 = 1, hit = true;
+    for (const [p, d, lo, hi] of [[x0, dx, b.x0, b.x1], [z0, dz, b.z0, b.z1]]) {
+      if (Math.abs(d) < 1e-9) { if (p < lo || p > hi) { hit = false; break; } continue; }
+      let u = (lo - p) / d, v = (hi - p) / d;
+      if (u > v) [u, v] = [v, u];
+      t0 = Math.max(t0, u); t1 = Math.min(t1, v);
+      if (t0 > t1) { hit = false; break; }
+    }
+    if (hit) return false;
   }
   return true;
 }

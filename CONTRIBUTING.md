@@ -22,7 +22,8 @@ Zerops right away, so run the checks before you ask for a merge.
   comments. Changes made for World of DODO are marked "World of DODO" in comments.
 - **Some numbers live twice** and must stay in step:
   - the tank colours: `COLORS` in `server/server.js` and `TANK_COLORS` in the client (same order);
-  - the city: `server/city.js` mirrors the street grid and the buildings of the client;
+  - the city: `server/city.js` mirrors the street grid and the buildings of the client (the construction
+    site is one file both load, `client/shared/site.js`: move or change it there);
   - tank size, parcel physics and the hit rules: `server/bots.js` mirrors the client;
   - the traffic, tram and pedestrian code: `server/world.js` is a port of the client's (which still
     runs it for the intro screen), and the client must keep 33 cars and 50 pedestrians in that order.

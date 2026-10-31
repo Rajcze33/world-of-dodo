@@ -502,6 +502,7 @@ const COARSE=matchMedia('(pointer:coarse)').matches||(navigator.maxTouchPoints>0
 </script>
 
 <script src="/vendor/three.r128.min.js" integrity="sha512-dLxUelApnYxpLt6K2iomGngnHO83iUvZytA3YjDUCjT0HDOHKXnVYdf3hU4JjM8uEhxf9nD1/ey98U3t2vZ0qQ=="></script>
+<script src="/shared/site.js"></script><!-- World of DODO: the construction site's layout, shared with the server -->
 <script>
 /* ===== DODO web (scripts/dodo-christmas/game-start.js): when the 3D cannot run =====
    The start button waits on "Načítám město" until the game is ready, and in
@@ -1412,8 +1413,75 @@ function buildShop(s){
 }
 stops.forEach(buildShop);
 
+const SITE_A=window.WOD_SITE?WOD_SITE.area:null;        // World of DODO: the construction site's ground (client/shared/site.js)
 // forest around the city — only outside the outer ring road
-for(let t=0;t<220;t++){const x=(R()-0.5)*620,z=(R()-0.5)*620;if(Math.max(Math.abs(x),Math.abs(z))<180)continue;const sc=1+R()*1.4;if(Math.abs(z)<26&&Math.abs(x)<215)continue;tree(x,z,sc,0);}
+for(let t=0;t<220;t++){const x=(R()-0.5)*620,z=(R()-0.5)*620;if(Math.max(Math.abs(x),Math.abs(z))<180)continue;const sc=1+R()*1.4;if(Math.abs(z)<26&&Math.abs(x)<215)continue;
+  if(SITE_A&&x>SITE_A.x0-12&&x<SITE_A.x1+12&&z>SITE_A.z0-10&&z<SITE_A.z1+12)continue;tree(x,z,sc,0);}   // World of DODO: the construction site
+// ---------- World of DODO: the construction site on the snow south of the city ----------
+// The layout (and its solids, which the server shares) is client/shared/site.js. Everything that stands still goes into the merged
+// buckets (no extra draw calls); only the crane's top turns, as its own two meshes (CRANE_TOP, turned in the main loop).
+let CRANE_TOP=null;
+const _bq=new THREE.Quaternion(),_bv=new THREE.Vector3(),_bz=new THREE.Vector3(0,0,1),_bm=new THREE.Matrix4(),_bp=new THREE.Vector3(),_b1=new THREE.Vector3(1,1,1);
+// a square beam of thickness t from one point to another
+function beam(bk,x1,y1,z1,x2,y2,z2,t,col){_bv.set(x2-x1,y2-y1,z2-z1);const L=_bv.length();_bq.setFromUnitVectors(_bz,_bv.normalize());
+  _bm.compose(_bp.set((x1+x2)/2,(y1+y2)/2,(z1+z2)/2),_bq,_b1);addGeo(bk,new THREE.BoxGeometry(t,t,L),_bm,col);}
+const shade=(c,k)=>(Math.min(255,((c>>16)&255)*k)<<16)|(Math.min(255,((c>>8)&255)*k)<<8)|Math.min(255,(c&255)*k);
+(function(){const S=window.WOD_SITE;if(!S)return;const A=S.area,T=BK.trim,G=BK.glow;
+  // dirt instead of snow (vertices in this order face up), and darker tracks from the three gates
+  const dirt=(x0,z0,x1,z1,col)=>quad(BK.road,[x0,0.03,z0],[x0,0.03,z1],[x1,0.03,z1],[x1,0.03,z0],col);
+  dirt(A.x0-3,A.z0-3,A.x1+3,A.z1+3,0x6e5c48);
+  for(const gx of[-104,0,104])dirt(gx-4,A.z0-11,gx+4,A.z0+24,0x5a4a3a);
+  for(const b of S.solids){const w=b.x1-b.x0,d=b.z1-b.z0,cx=(b.x0+b.x1)/2,cz=(b.z0+b.z1)/2,c=b.color,along=w>=d;
+    if(b.kind==='fence'){boxB(T,cx,0,cz,w,b.h,d,c);const L=along?w:d;                    // green mesh panels between white posts
+      for(let s=0;s<=L;s+=3)boxB(T,along?b.x0+s:cx,0,along?cz:b.z0+s,0.14,b.h+0.15,0.14,0xd6d8d7);}
+    else if(b.kind==='wall'||b.kind==='column'){boxB(T,cx,0,cz,w,b.h,d,c,0,shade(c,1.08));        // concrete, rebar sticking out of the top
+      const L=Math.max(w,d);for(let s=0.4;s<L;s+=1.2)boxB(T,along?b.x0+s:cx,b.h,along?cz:b.z0+s,0.06,0.9,0.06,0x5a3a2a);}
+    else if(b.kind==='container'||b.kind==='office'){const lev=b.h>3?2:1,lh=b.h/lev;
+      for(let k=0;k<lev;k++){const col=k?shade(c,0.88):c;boxB(T,cx,k*lh,cz,w,lh-0.04,d,col,0,shade(col,1.1));
+        if(b.kind==='container')for(const e of[-1,1])boxB(T,along?cx+e*(w/2-0.06):cx,k*lh,along?cz:cz+e*(d/2-0.06),along?0.14:w+0.06,lh-0.04,along?d+0.06:0.14,shade(col,0.7));   // door ends
+        else boxB(G,cx,k*lh+1.1,b.z0-0.03,w-1,0.7,0.04,0xb2dcd6);}}                         // lit cabin windows towards the city
+    else if(b.kind==='toilet'){boxB(T,cx,0,cz,w,b.h,d,c,0,0xeaebeb);}
+    else if(b.kind==='pile'){const geo=new THREE.ConeGeometry(b.r,b.ph,12).translate(0,b.ph/2,0);
+      addGeo(T,geo,new THREE.Matrix4().makeTranslation(cx,0,cz),c);
+      addGeo(T,new THREE.ConeGeometry(b.r*0.6,b.ph*0.6,10).translate(0,b.ph*0.3,0),new THREE.Matrix4().makeTranslation(cx+b.r*0.7,0,cz-b.r*0.3),shade(c,0.9));}
+    else if(b.kind==='pipes'){for(const[py,pz]of[[0.85,-0.95],[0.85,0.95],[2.3,0]]){
+      addGeo(T,new THREE.CylinderGeometry(0.85,0.85,w,14).rotateZ(Math.PI/2),new THREE.Matrix4().makeTranslation(cx,py,cz+pz),c);
+      for(const e of[-1,1])addGeo(T,new THREE.CircleGeometry(0.55,14).rotateY(e*Math.PI/2),new THREE.Matrix4().makeTranslation(cx+e*(w/2+0.01),py,cz+pz),0x3d4543);}}
+    else if(b.kind==='barrier'){boxB(T,cx,0,cz,w,0.45,d,c);boxB(T,cx,0.45,cz,along?w:d*0.5,0.95,along?d*0.5:d,c,0,shade(c,1.05));   // jersey barrier: wide foot, narrow top
+      boxB(T,cx,1.12,cz,along?w+0.02:d*0.5+0.02,0.14,along?d*0.5+0.02:d+0.02,0xc0524a);}
+    else if(b.kind==='pallet'){boxB(T,cx,0,cz,w,0.15,d,0x8a6a44);boxB(T,cx,0.15,cz,w-0.2,b.h-0.15,d-0.2,c);}
+    else if(b.kind==='excavator'){for(const s of[-1,1])boxB(T,cx+s*1.2,0,cz,0.8,0.9,d,0x2b2b2b);   // tracks, body, cab, the arm reaching for the sand
+      boxB(T,cx,0.9,cz,2.8,1.2,3,c);boxB(T,cx+0.6,2.1,cz-0.4,1.3,1.3,1.4,c);boxB(G,cx+0.6,2.5,cz-1.12,1.1,0.7,0.04,0x9fd3ff);
+      beam(T,cx-0.6,2.3,cz+1.2,cx-3.8,5.4,cz+4.6,0.5,c);beam(T,cx-3.8,5.4,cz+4.6,cx-6,2.2,cz+7,0.4,c);
+      addGeo(T,new THREE.BoxGeometry(1.2,0.8,1),new THREE.Matrix4().makeTranslation(cx-6.1,1.8,cz+7.1),0x3d4543);}
+    else if(b.kind==='dozer'){for(const s of[-1,1])boxB(T,cx+s*1.1,0,cz,0.8,0.9,d-0.6,0x2b2b2b);
+      boxB(T,cx,0.9,cz+0.3,2.4,1,3,c);boxB(T,cx,1.9,cz+0.8,1.4,0.9,1.4,c);boxB(G,cx,2.2,cz+0.08,1.2,0.5,0.04,0x9fd3ff);
+      boxB(T,cx,0.1,b.z0+0.1,w+0.6,1.2,0.3,shade(c,0.85));}
+    else if(b.kind==='mast'){boxB(T,cx,0,cz,w,b.h,d,c);const ix=-Math.sign(cx),iz=-Math.sign(cz-(A.z0+A.z1)/2);   // floodlights facing into the site
+      boxB(T,cx,b.h,cz,1.8,0.2,0.3,c);for(const s of[-0.6,0.6])boxB(G,cx+s,b.h+0.2,cz,0.5,0.4,0.5,0xffffff);
+      const px=cx+ix*12,pz=cz+iz*12;quad(BK.pool,[px-12,0.06,pz-12],[px+12,0.06,pz-12],[px+12,0.06,pz+12],[px-12,0.06,pz+12],0xffffff,[[0,0],[1,0],[1,1],[0,1]]);}
+    else if(b.kind==='crane')boxB(T,cx,0,cz,w,1.5,d,c);}                                     // its base block; the mast is drawn below
+  // the tower crane: a lattice mast, and on top the part that turns (jib, counter-jib with its weights, cab, trolley, hook and load)
+  const cr=S.crane,mw=1.1,Y=cr.color;
+  for(const sx of[-1,1])for(const sz of[-1,1])beam(T,cr.x+sx*mw,1.5,cr.z+sz*mw,cr.x+sx*mw,cr.h,cr.z+sz*mw,0.24,Y);
+  for(let y=1.5;y<cr.h-0.5;y+=3){const y2=y+3;
+    for(const s of[-1,1]){beam(T,cr.x-mw,y,cr.z+s*mw,cr.x+mw,y,cr.z+s*mw,0.12,Y);beam(T,cr.x+s*mw,y,cr.z-mw,cr.x+s*mw,y,cr.z+mw,0.12,Y);
+      beam(T,cr.x-mw,y,cr.z+s*mw,cr.x+mw,y2,cr.z+s*mw,0.09,Y);beam(T,cr.x+s*mw,y,cr.z-mw,cr.x+s*mw,y2,cr.z+mw,0.09,Y);}}
+  const top=Bucket(),lit=Bucket(),L=cr.jib,Bk=cr.back,tx=L*0.55,hook=-(cr.h-15);
+  boxB(top,0,0,0,3.2,1,3.2,Y);boxB(top,1.6,0.2,1.7,1.7,1.9,1.8,0xeaebeb);boxB(lit,1.6,1.1,2.62,1.5,0.9,0.04,0x9fd3ff);   // turntable, cab and its window
+  for(const sx of[-1,1])for(const sz of[-1,1])beam(top,sx*mw,1,sz*mw,0,7.5,0,0.2,Y);                            // the peak
+  for(const s of[-1,1]){beam(top,1.5,1,s*0.9,L,1,s*0.9,0.2,Y);beam(top,-1.5,1,s*0.9,-Bk,1,s*0.9,0.2,Y);}          // jib and counter-jib chords
+  beam(top,1.5,2.7,0,L-2,2.7,0,0.18,Y);
+  for(let x=3;x<L-2;x+=3)for(const s of[-1,1]){beam(top,x,1,s*0.9,x,2.7,0,0.08,Y);beam(top,x,1,s*0.9,x+3,2.7,0,0.08,Y);}
+  for(let x=-3;x>-Bk;x-=3)beam(top,x,1,-0.9,x,1,0.9,0.1,Y);
+  boxB(top,-Bk/2-1,0.8,0,Bk-3,0.2,2,0x8d8d86);for(let k=0;k<3;k++)boxB(top,-Bk+1.6+k*1.3,0.9,0,1.2,2.2,2.2,0xa9a9a2);   // walkway, counterweights
+  for(const[x,y]of[[L*0.62,2.7],[-Bk,1.2]])beam(top,0,7.5,0,x,y,0,0.06,0x3d4543);                                    // tie cables
+  boxB(top,tx,0.2,0,1.4,0.6,1.6,0x3d4543);beam(top,tx,0.4,0,tx,hook+0.6,0,0.06,0x1a1d1c);                        // trolley and its cable
+  boxB(top,tx,hook-0.4,0,0.7,1,0.7,Y);for(const[a,b]of[[-1,-0.5],[1,-0.5],[-1,0.5],[1,0.5]])beam(top,tx,hook-0.4,0,tx+a*1.4,hook-2.4,b,0.04,0x1a1d1c);
+  boxB(top,tx,hook-3,0,3.2,0.6,1.3,0x7a4a2a);                                                                     // the load: a bundle of rebar
+  for(const[x,y]of[[0,7.6],[L,1.3],[-Bk,1.3]])boxB(lit,x,y,0,0.35,0.35,0.35,0xff3030);                              // aviation lights
+  const g=new THREE.Group();g.position.set(cr.x,cr.h,cr.z);
+  const tm=new THREE.Mesh(geoOf(top),VC_MAT);tm.castShadow=true;g.add(tm);g.add(new THREE.Mesh(geoOf(lit),VC_GLOW));scene.add(g);CRANE_TOP=g;})();
 
 // depot
 let depotMarker;
@@ -1577,6 +1645,7 @@ const SOLIDS=(function(){const s=[];
   bx=blockC(RIVAL_B[0]);bz=blockC(RIVAL_B[1]);s.push({x0:bx-5,x1:bx+17,z0:bz-16,z1:bz+16,h:10.5});   // REDLINE hall (mirror image of the DODO depot)
   bx=blockC(PARK_B[0]);bz=blockC(PARK_B[1]);s.push({x0:bx-5,x1:bx+5,z0:bz-12,z1:bz+8,h:15});
   for(const sx of[-1,1])s.push({x0:bx+sx*5.6-2,x1:bx+sx*5.6+2,z0:bz+7.5,z1:bz+11.5,h:31});
+  if(window.WOD_SITE)for(const b of WOD_SITE.solids)s.push(b);                                   // World of DODO: the construction site
   return s;})();
 // oriented box test for a moving vehicle c (centre c.x,c.z, heading hx,hz): half length L, half width W, height H
 function obbHit(x,y,z,px,py,pz,c,hx,hz,L,W,H){if(y>=H)return null;
@@ -2204,16 +2273,17 @@ function netUpdate(dt,tnow){
     if(tnow-(o.losAt||0)>100){o.losAt=tnow;o.seen=inSight(o.x,gy+1.3,o.z)||inSight(o.x,gy+2.6,o.z);}
     if(o.seen){o.seenAt=tnow;o.seenX=o.x;o.seenZ=o.z;}
     o.tag.visible=o.seen;o.tag.position.set(o.x,gy+3.2,o.z);}}
-// can the camera see the point (x,y,z)? a segment against the buildings (SOLIDS, boxes standing on the ground), within the fog's reach
-const SIGHT_MAX=230,SPOT_MS=3000;                       // farther is fog; a spotted tank stays on the minimap this long after it went out of sight
-function inSight(x,y,z){const ax=camera.position.x,ay=camera.position.y,az=camera.position.z,dx=x-ax,dy=y-ay,dz=z-az;
-  if(dx*dx+dz*dz>SIGHT_MAX*SIGHT_MAX)return false;
-  for(const b of SOLIDS){let t0=0,t1=1,blocked=true;
+// the first building or site obstacle (SOLIDS: boxes standing on the ground) on the segment from a to b, as 0..1 along it; 1 if none
+function segHit(ax,ay,az,bx,by,bz){const dx=bx-ax,dy=by-ay,dz=bz-az;let best=1;
+  for(const b of SOLIDS){let t0=0,t1=best,hit=true;
     for(const[p,d,lo,hi]of[[ax,dx,b.x0,b.x1],[ay,dy,0,b.h],[az,dz,b.z0,b.z1]]){
-      if(Math.abs(d)<1e-9){if(p<lo||p>hi){blocked=false;break;}continue;}
-      let u=(lo-p)/d,v=(hi-p)/d;if(u>v){const w=u;u=v;v=w;}t0=Math.max(t0,u);t1=Math.min(t1,v);if(t0>t1){blocked=false;break;}}
-    if(blocked)return false;}
-  return true;}
+      if(Math.abs(d)<1e-9){if(p<lo||p>hi){hit=false;break;}continue;}
+      let u=(lo-p)/d,v=(hi-p)/d;if(u>v){const w=u;u=v;v=w;}t0=Math.max(t0,u);t1=Math.min(t1,v);if(t0>t1){hit=false;break;}}
+    if(hit)best=t0;}
+  return best;}
+// can the camera see the point (x,y,z)? no obstacle in between, within the fog's reach
+const SIGHT_MAX=230,SPOT_MS=3000;                       // farther is fog; a spotted tank stays on the minimap this long after it went out of sight
+function inSight(x,y,z){const c=camera.position;if((x-c.x)**2+(z-c.z)**2>SIGHT_MAX*SIGHT_MAX)return false;return segHit(c.x,c.y,c.z,x,y,z)>=1;}
 // the scoreboard: the best five, and you below them if you are not among them; ties share a rank; bots are listed too
 function renderBoard(){
   const all=[{name:NET.name,color:NET.color,pts:NET.pts,me:true}].concat([...NET.others.values()]);
@@ -2264,9 +2334,10 @@ function worldUpdate(dt,tnow){
   const Lp=TRAM_PATH.len;let ds=n.m-a.m;if(ds<-Lp/2)ds+=Lp;else if(ds>Lp/2)ds-=Lp;TRAM.s=((a.m+ds*k)%Lp+Lp)%Lp;placeTram();
   // pedestrians as x, z, heading, tilt, fall direction
   if(a.p.length<PEDS.length*5)return;
-  for(let i=0;i<PEDS.length;i++){const p=PEDS[i],j=i*5,x=lerp(a.p[j],n.p[j],k),z=lerp(a.p[j+1],n.p[j+1],k);
-    p.phase+=Math.hypot(x-p.x,z-p.z)*3.2;p.x=x;p.z=z;p.h=angLerp(a.p[j+2],n.p[j+2],k);p.th=lerp(a.p[j+3],n.p[j+3],k);
-    const fa=(k<0.5?a:n).p[j+4];p.fx=Math.sin(fa);p.fz=Math.cos(fa);p.state=p.th>0.001?'down':'walk';placePed(p);}
+  for(let i=0;i<PEDS.length;i++){const p=PEDS[i],j=i*5,jump=Math.hypot(n.p[j]-a.p[j],n.p[j+1]-a.p[j+1])>6,kk=jump?(k<0.5?0:1):k;   // jump: gone, and back elsewhere
+    const x=lerp(a.p[j],n.p[j],kk),z=lerp(a.p[j+1],n.p[j+1],kk),d=Math.hypot(x-p.x,z-p.z);
+    if(d<3)p.phase+=d*3.2;p.x=x;p.z=z;p.h=angLerp(a.p[j+2],n.p[j+2],kk);p.th=lerp(a.p[j+3],n.p[j+3],kk);
+    const fa=(kk<0.5?a:n).p[j+4];p.fx=Math.sin(fa);p.fz=Math.cos(fa);p.state=p.th>0.001?'down':'walk';placePed(p);}
   pedDirty();}
 
 // ---------- WORLD OF DODO: quality and the performance readout ----------
@@ -2338,7 +2409,9 @@ function frame(){
     const tgt=new THREE.Vector3(s.door[0]+n[0]*13+sx*7,4.6,s.door[1]+n[1]*13+sz*7);camera.position.lerp(tgt,k*0.9);
     camLook.lerp(new THREE.Vector3(s.door[0]+n[0]*2.5,1.4,s.door[1]+n[1]*2.5),k);}
   else{const pt=camera.aspect<1,back=camMode?(pt?30:24):(pt?14:11.5),up=camMode?(pt?36:28):(pt?7.8:5.4),ah=pt?7:4,f=[Math.sin(car.h),Math.cos(car.h)];
-    camera.position.lerp(new THREE.Vector3(car.x-f[0]*back,up,car.z-f[1]*back),k);
+    // World of DODO: a wall or a container between the tank and the camera pulls the camera in front of it (and a little higher)
+    const cx=car.x-f[0]*back,cz=car.z-f[1]*back,hit=segHit(car.x,1.6,car.z,cx,up,cz),pull=hit<1?Math.max(0.2,hit-0.08):1;
+    camera.position.lerp(new THREE.Vector3(car.x+(cx-car.x)*pull,1.6+(up-1.6)*pull+(1-pull)*3,car.z+(cz-car.z)*pull),hit<1?Math.min(1,k*3):k);
     camLook.lerp(new THREE.Vector3(car.x+f[0]*ah,1.2,car.z+f[1]*ah),Math.min(1,k*2));}
   camera.lookAt(camLook);
 
@@ -2358,6 +2431,7 @@ function frame(){
     let x=snowPos[i*3]+Math.sin(tt*0.6+i)*dt*0.4,z=snowPos[i*3+2];
     if(x-cx>70)x-=140;else if(x-cx<-70)x+=140;if(z-cz>70)z-=140;else if(z-cz<-70)z+=140;snowPos[i*3]=x;snowPos[i*3+2]=z;}
   snowGeo.attributes.position.needsUpdate=true;
+  if(CRANE_TOP)CRANE_TOP.rotation.y=tnow*0.00005;                                    // World of DODO: the crane turns slowly (a turn in about two minutes)
 
   netUpdate(dt,tnow);
   if(state==='drive'||state==='handover'){

@@ -71,6 +71,8 @@ async function refused(hello) {
   check(r.status === 200, 'fonts are served');
   r = await fetch(BASE + '/assets/logo-white.png');
   check(r.status === 200, 'the logo is served');
+  r = await fetch(BASE + '/shared/site.js');
+  check(r.status === 200 && (await r.text()).includes('WOD_SITE'), 'the construction site layout is served');
   r = await fetch(BASE + '/vendor/..%2f..%2fserver%2fserver.js');
   // 404 from this server; behind the Zerops balancer the request is refused with 400 before it gets here
   check(r.status === 404 || r.status === 400, `no way out of the client folder (${r.status})`);
@@ -127,6 +129,12 @@ async function refused(hello) {
   a.send({ t: 'ped', i: near, vx: 6, vz: 0 });
   const fell = await b.next(m => m.t === 'w' && m.p[near * 5 + 3] > 0, 3000);
   check(!!fell, `pedestrian ${near}, hit by A, falls on B's screen too`);
+  const lay = fell && b.world;
+  await sleep(4000);
+  const still = b.world && b.world.p[near * 5 + 3] > 1;
+  const back = fell && await b.next(m => m.t === 'w' && m.p[near * 5 + 3] === 0, 15000);
+  const moved = back && Math.hypot(back.p[near * 5] - lay.p[near * 5], back.p[near * 5 + 1] - lay.p[near * 5 + 1]);
+  check(still && back && moved > 6, `she stays down a while, then walks again elsewhere (${moved ? moved.toFixed(0) : '?'} units away)`);
   a.send({ t: 'prop', i: 7, fx: 1, fz: 0 });
   const pb = await b.next(m => m.t === 'prop');
   check(pb && pb.i === 7 && pb.fx === 1 && !pb.up, 'a tree A knocked down falls for B');

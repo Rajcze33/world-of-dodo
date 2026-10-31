@@ -15,6 +15,10 @@ Christmas 2026, where the delivery van had already turned into a tank.
 - **Three hits destroy a tank.** It blows up, lies on its side for a moment and comes back at a free
   spot somewhere else, blinking and immune for a few seconds.
 - **The bots** are driven by the server: they roam the streets, chase the nearest player and shoot back.
+- **A construction site** south of the city: containers, a half-built house, sand piles, barriers, machines
+  and a tower crane. Everything there is cover: it stops parcels, tanks and the line of sight.
+- **A shared city.** The cars, the tram and the pedestrians are the same for everyone. A pedestrian a tank
+  or a parcel knocks down lies there for a while, then is gone and walks again somewhere else.
 - **Names only in plain sight.** A tank's name glows above it only while nothing stands between you,
   and it shows on the minimap only once you have spotted it. The scoreboard lists everybody.
 - **Runs on modest hardware.** The quality drops by itself when the frames do not keep up; F shows
@@ -45,6 +49,7 @@ server/server.js    serves the page, relays the players over a WebSocket, keeps 
 server/bots.js      the bots: driving, aiming, and what happens when a parcel hits one
 server/world.js     the shared city life: cars, tram, pedestrians, knocked-down trees and lamps
 server/city.js      the city's streets and buildings as numbers, for the bots and the city
+client/shared/site.js  the construction site's layout, loaded by the page and by the server
 docs/PROTOCOL.md    every message between the browser and the server
 ```
 
@@ -104,6 +109,7 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 - The city is shared (cars, tram, pedestrians, knocked-down trees and lamps), but the cars cannot be
   pushed: everyone would see them somewhere else. They stop for tanks, and turn back if one stays in the way.
 - One server is one world. More players than `MAX_PLAYERS` wait outside.
+- The minimap shows the city only; the construction site lies just below its bottom edge.
 
 ## Contributing
 
