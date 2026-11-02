@@ -3,14 +3,24 @@
 Thanks for wanting to make it better. New weapons, smarter bots, a better scoreboard, bug fixes:
 all welcome.
 
+## Bugs and ideas: the issues
+
+Everything that does not work and everything we want to add lives in the
+[issues](https://github.com/Rajcze33/world-of-dodo/issues), one thing per issue: use the
+**Chyba** (bug) or **Nápad** (idea) form. The labels say where it belongs (`hra` the game page,
+`server`, `boti`, `město` the shared city, `staveniště` the construction site, `výkon` performance)
+and what matters (`priorita`; `good first issue` for a first contribution). Before you start on
+one, assign it to yourself or say so in a comment, so two people do not build the same thing.
+
 ## How
 
-1. Fork the repository and create a branch.
+1. Pick an issue (or open one), fork the repository and create a branch.
 2. Make the change and try it: `docker compose up --build -d`, then http://localhost:3400 in two
    windows (or `npm start` and port 3000).
 3. Run the tests: `npm run check` and `npm run smoke` (against the running server). If you touched
    the game page, `npm run test:browser` is worth it too.
-4. Open a pull request that says what changes for the player and why.
+4. Open a pull request that says what changes for the player and why, with `Fixes #<issue>` in it:
+   the issue then closes by itself when the pull request is merged.
 
 A maintainer reviews and merges. There is no CI: what is merged to `main` is built and deployed by
 Zerops right away, so run the checks before you ask for a merge.

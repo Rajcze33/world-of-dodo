@@ -1,0 +1,47 @@
+name: Chyba
+description: Něco ve hře nefunguje, jak má. (A bug; English is fine too.)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Díky za nahlášení. Čím přesnější popis, tím rychlejší oprava.
+  - type: textarea
+    id: what
+    attributes:
+      label: Co se stalo
+      description: Popište, co jste viděli. Snímek obrazovky sem můžete vložit rovnou (Ctrl+V).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Co se mělo stát
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Jak to zopakovat
+      placeholder: |
+        1. Vyjet se jménem…
+        2. Dojet k…
+        3. Vystřelit na…
+  - type: dropdown
+    id: where
+    attributes:
+      label: Kde
+      options:
+        - Ostrý server (game-3a26-3000.prg1.zerops.app)
+        - Lokálně (Docker nebo npm start)
+        - Jinde
+  - type: input
+    id: device
+    attributes:
+      label: Prohlížeč a zařízení
+      placeholder: Chrome 131, Windows 11, notebook s grafikou Intel
+  - type: input
+    id: perf
+    attributes:
+      label: Výpis z klávesy F (u sekání a zpoždění)
+      placeholder: 24 FPS · max 90 ms | ping 30 ms | kvalita: střední (auto)

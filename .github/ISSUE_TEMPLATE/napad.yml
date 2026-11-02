@@ -1,0 +1,20 @@
+name: Nápad
+description: Co do hry přidat nebo změnit. (A feature idea; English is fine too.)
+labels: [nápad]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Co by hra měla umět
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Proč
+      description: Co to hráčům přinese, nebo co to řeší.
+  - type: textarea
+    id: how
+    attributes:
+      label: Jak si to představujete
+      description: Nepovinné. Náčrtek nebo snímek obrazovky pomůže.
