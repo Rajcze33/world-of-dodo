@@ -1,6 +1,8 @@
 name: Chyba
 description: Něco ve hře nefunguje, jak má. (A bug; English is fine too.)
 labels: [bug]
+# onto the board (works for people with write access to the project; others are added by a maintainer)
+projects: ["Rajcze33/1"]
 body:
   - type: markdown
     attributes:

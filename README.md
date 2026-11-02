@@ -114,7 +114,9 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 ## Contributing
 
 Found a bug or have an idea? [Open an issue](https://github.com/Rajcze33/world-of-dodo/issues/new/choose)
-(the **Chyba** or **Nápad** form). Pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
+(the **Chyba** or **Nápad** form); what is being worked on is on the
+[board](https://github.com/users/Rajcze33/projects/1). Pull requests are welcome, see
+[CONTRIBUTING.md](CONTRIBUTING.md); AI coding agents read [AGENTS.md](AGENTS.md).
 
 ## License
 

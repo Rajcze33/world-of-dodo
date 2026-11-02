@@ -1,6 +1,8 @@
 name: Nápad
 description: Co do hry přidat nebo změnit. (A feature idea; English is fine too.)
 labels: [nápad]
+# onto the board (works for people with write access to the project; others are added by a maintainer)
+projects: ["Rajcze33/1"]
 body:
   - type: textarea
     id: what
