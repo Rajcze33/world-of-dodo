@@ -332,6 +332,8 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 .sw input:focus-visible+span{outline:2px solid var(--dodo-light-teal);outline-offset:5px}
 @media (pointer:coarse){.sw{width:40px;height:40px}}
 .join .err{color:var(--dodo-peach);font-size:var(--fs-body-sm);margin:0}
+.fine a.report{color:var(--dodo-light-teal);text-underline-offset:3px}   /* World of DODO: where to report a bug or an idea */
+.fine a.report:focus-visible{outline:2px solid var(--dodo-light-teal);outline-offset:2px}
 /* World of DODO: the performance readout (F, or a tap on the speed card) */
 .stats{display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding:var(--space-2) var(--space-3);color:var(--dodo-light-grey);white-space:nowrap}
 .gauge{pointer-events:auto;cursor:pointer}
@@ -404,6 +406,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <p class="err" id="joinErr" role="alert" hidden></p>
     </form>
     <p class="fine" data-t="introFine"></p>
+    <p class="fine"><a class="report" href="https://github.com/Rajcze33/world-of-dodo/issues/new/choose" target="_blank" rel="noopener" data-t="reportLink"></a></p>
   </div>
 </section>
 
@@ -462,7 +465,7 @@ Object.assign(T,{
   boardLbl:'Skóre',boardCol:'body',ptsUnit:'body',online:n=>n+' online',
   hitBy:n=>'Zásah od '+n+'! Zpomaleno',killedBy:n=>'Zničil vás '+n+'! Za chvíli se objevíte jinde',toppled:'Zničen! Za chvíli se objevíte jinde',respawned:'Zpátky ve hře. Pár vteřin vás nic netrefí',
   youHit:(n,g)=>'Trefa! '+n+' +'+g,youKill:(n,g)=>'Zničeno! '+n+' +'+g,lost:'Spojení ztraceno, připojuji znovu…',back:'Zpátky ve hře',
-  kStats:'FPS a ping',pingLbl:'ping',qLbl:'kvalita',qNames:['vysoká','střední','nízká'],qAuto:'auto',qManual:'ručně',
+  reportLink:'Našli jste chybu nebo máte nápad? Napište nám →',kStats:'FPS a ping',pingLbl:'ping',qLbl:'kvalita',qNames:['vysoká','střední','nízká'],qAuto:'auto',qManual:'ručně',
   qDown:n=>'Hra nestíhala, kvalita snížena na: '+n
 });
 /* ===== DODO web (scripts/dodo-christmas/game-lang.js): the game in English =====
@@ -487,7 +490,7 @@ if(LANG==='en')Object.assign(T,{
   boardLbl:'Score',boardCol:'points',ptsUnit:'points',online:n=>n+' online',
   hitBy:n=>'Hit by '+n+'! Slowed down',killedBy:n=>n+' destroyed you! You’ll be back somewhere else in a moment',toppled:'Destroyed! You’ll be back somewhere else in a moment',respawned:'Back in. Nothing can hit you for a few seconds',
   youHit:(n,g)=>'Hit! '+n+' +'+g,youKill:(n,g)=>'Destroyed! '+n+' +'+g,lost:'Connection lost, reconnecting…',back:'Back in the game',
-  kStats:'FPS and ping',pingLbl:'ping',qLbl:'quality',qNames:['high','medium','low'],qAuto:'auto',qManual:'manual',
+  reportLink:'Found a bug or have an idea? Tell us →',kStats:'FPS and ping',pingLbl:'ping',qLbl:'quality',qNames:['high','medium','low'],qAuto:'auto',qManual:'manual',
   qDown:n=>'The game was struggling: quality lowered to '+n
 });
 // Decimal separator for kilometres and milliseconds (fmtKm, finish()): the handoff wrote a Czech comma.

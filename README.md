@@ -25,6 +25,23 @@ Christmas 2026, where the delivery van had already turned into a tank.
   FPS, ping and the level, Q changes the level by hand.
 - Czech by default, English with `?lang=en`. Works on phones (touch controls).
 
+## Našli jste chybu nebo máte nápad?
+
+Pro hráče, bez programování:
+
+1. Otevřete **[nové hlášení](https://github.com/Rajcze33/world-of-dodo/issues/new/choose)**. Potřebujete
+   účet na GitHubu, je zdarma. Ze hry se sem dostanete odkazem na úvodní obrazovce.
+2. Vyberte **Chyba**, když něco nefunguje, nebo **Nápad**, když chcete něco přidat či změnit.
+3. Vyplňte formulář a odešlete ho. Snímek obrazovky vložíte přes Ctrl+V; když se hra seká, přidejte,
+   co ukazuje klávesa F.
+
+Hlášení se samo objeví na **[tabuli](https://github.com/users/Rajcze33/projects/1)** ve sloupci
+*Nápady*. Co se bude dělat, se přesune do *Na řadě*, pak do *Dělá se* a nakonec do *Hotovo*: na tabuli
+tak vždycky vidíte, co se s vaším hlášením děje.
+
+*In English: report bugs and ideas with the [issue forms](https://github.com/Rajcze33/world-of-dodo/issues/new/choose);
+the [board](https://github.com/users/Rajcze33/projects/1) shows what is being worked on.*
+
 ## Play it locally
 
 With Docker:
