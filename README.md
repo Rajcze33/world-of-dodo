@@ -111,9 +111,10 @@ zcli project project-import zerops/import.yaml --org-id <organisation>   # once:
 zcli service enable-subdomain --project-id <project> --service-id <service "game">   # once, after the first deploy
 ```
 
-**Every push to `main` deploys**: the service `game` is connected to this repository in the Zerops
-GUI (the service's build/CI settings, GitHub, branch `main`, trigger on push), and Zerops builds with
-`zerops.yaml` from the repository. By hand, from the repository root:
+**Every push to `main` deploys** (a merged pull request too), in about two minutes: the service `game`
+is connected to this repository in the Zerops GUI (Pipelines & CI/CD settings, GitHub, trigger *Push
+to branch* `main`), and Zerops builds with `zerops.yaml` from the repository. A push that must not
+deploy carries `[skip ci]` in its commit message. By hand, from the repository root:
 `zcli push --project-id <project> --service-id <service "game">` (on Windows from a folder outside
 OneDrive, e.g. a `git archive HEAD` copy: OneDrive's placeholder files break zcli's archive).
 
