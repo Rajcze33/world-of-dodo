@@ -127,7 +127,6 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 - The city is shared (cars, tram, pedestrians, knocked-down trees and lamps), but the cars cannot be
   pushed: everyone would see them somewhere else. They stop for tanks, and turn back if one stays in the way.
 - One server is one world. More players than `MAX_PLAYERS` wait outside.
-- The minimap shows the city only; the construction site lies just below its bottom edge.
 
 ## Contributing
 

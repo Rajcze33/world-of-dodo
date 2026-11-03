@@ -1869,14 +1869,19 @@ function clearImpactFx(){bigParcel.visible=false;puff.visible=false;shockRing.vi
 
 // ---------- minimap ----------
 function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+// World of DODO: the map reaches south far enough for the construction site (client/shared/site.js); the city is a little smaller and centred
 function drawMap(ctx,S,opt){
-  const sc=S/(2*HALF+ROAD+20),mx=x=>(x+HALF+ROAD/2+10)*sc,my=z=>(z+HALF+ROAD/2+10)*sc;
+  const E=HALF+ROAD/2+10,SZ=window.WOD_SITE?WOD_SITE.area.z1+6:E,sc=S/(E+SZ),ox=(S-2*E*sc)/2,mx=x=>ox+(x+E)*sc,my=z=>(z+E)*sc;
   ctx.fillStyle='#3d4543';ctx.fillRect(0,0,S,S);
   ctx.fillStyle='#adb1b0';ctx.fillRect(mx(-HALF-7),my(-HALF-7),(2*HALF+14)*sc,(2*HALF+14)*sc);
   for(let i=0;i<6;i++)for(let j=0;j<6;j++){const bx=blockC(i),bz=blockC(j),k=i+','+j;
     ctx.fillStyle=k===PARK_B.join(',')||k===PLAZA_B.join(',')?'#00746a':'#3d4543';rr(ctx,mx(bx-19),my(bz-19),38*sc,38*sc,RC*sc);ctx.fill();
     if(k===DEPOT_B.join(',')){ctx.strokeStyle='#b2dcd6';ctx.lineWidth=Math.max(1,2*sc*2);ctx.strokeRect(mx(bx-17),my(bz-17),34*sc,34*sc);}
     if(k===RIVAL_B.join(',')){ctx.strokeStyle='#e03b3b';ctx.lineWidth=Math.max(1,2*sc*2);ctx.strokeRect(mx(bx-17),my(bz-17),34*sc,34*sc);}}
+  if(window.WOD_SITE){const A=WOD_SITE.area;                                      // World of DODO: the site's ground, and everything standing on it in its colour
+    ctx.fillStyle='#797e7d';ctx.fillRect(mx(A.x0),my(A.z0),(A.x1-A.x0)*sc,(A.z1-A.z0)*sc);
+    for(const b of WOD_SITE.solids){ctx.fillStyle='#'+(b.color>>>0).toString(16).padStart(6,'0');
+      ctx.fillRect(mx(b.x0),my(b.z0),Math.max(1,(b.x1-b.x0)*sc),Math.max(1,(b.z1-b.z0)*sc));}}
   if(opt.gaia){ctx.fillStyle='#27a28c';const step=7;for(const seg of opt.gaia){let acc=0;for(let i=0;i<seg.length-1;i++){const a=seg[i],b=seg[i+1],L=Math.hypot(b[0]-a[0],b[1]-a[1]);for(let d=acc;d<L;d+=step){const t=d/L;ctx.beginPath();ctx.arc(mx(a[0]+(b[0]-a[0])*t),my(a[1]+(b[1]-a[1])*t),Math.max(1.6,S/170),0,Math.PI*2);ctx.fill();}acc=(acc-L)%step;if(acc<0)acc+=step;}}}
   if(opt.trail&&opt.trail.length>1){ctx.strokeStyle='#b2dcd6';ctx.lineWidth=Math.max(1.5,S/150);ctx.lineJoin='round';ctx.beginPath();opt.trail.forEach((p,i)=>i?ctx.lineTo(mx(p[0]),my(p[1])):ctx.moveTo(mx(p[0]),my(p[1])));ctx.stroke();}
   const r=Math.max(6,S/24);ctx.font='600 '+Math.round(r*1.1)+'px "IBM Plex Mono", monospace';ctx.textAlign='center';ctx.textBaseline='middle';
