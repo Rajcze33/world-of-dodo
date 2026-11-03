@@ -205,8 +205,44 @@ async function refused(hello) {
   }
   check(hbot && hbot.by === wa.id && hbot.gain === 1, 'a parcel on a bot scores 1 point for A');
 
+  // planes (issue #14): a plane's row carries its kind, height and pitch; a bullet's shooter reports its hit (shot), the victim gets it
+  // passed on (dmg) and answers like a parcel hit: 3 points for a bullet in a tank, 5 in a plane; a bot fires at a low plane
+  a.send({ t: 'st', ct: t0 + 500, x: 30, z: -300, h: 0, v: 32, r: 0.2, s: 0, k: 1, y: 80, p: 0.1 });
+  const sp = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[8] === 1));
+  const ra = sp && sp.p.find(s => s[0] === wa.id);
+  check(ra && ra.length === 11 && ra[9] === 80 && ra[10] === 0.1 && ra[2] === -300, 'a plane\'s row carries its kind, height and pitch, beyond the tanks\' world');
+  const rb = b.last.get(wb.id) || [0, 0, 0];                       // A flies over to B (a bullet hit counts within 400 units)
+  a.send({ t: 'st', ct: t0 + 505, x: rb[1], z: rb[2] - 40, h: 0, v: 32, r: 0, s: 0, k: 1, y: 20, p: 0 });
+  await sleep(120);
+  a.send({ t: 'fire', k: 1, sid: 20, x: rb[1], y: 20, z: rb[2] - 38, vx: 0, vy: -50, vz: 190 });
+  const fk = await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 20);
+  check(fk && fk.k === 1 && fk.vz === 190, 'B gets A\'s bullet');
+  a.send({ t: 'shot', v: wb.id, sid: 20 });
+  const dm = await b.next(m => m.t === 'dmg');
+  check(dm && dm.by === wa.id && dm.sid === 20, 'A\'s bullet that hit B on A\'s screen is passed on to B');
+  b.send({ t: 'hit', by: wa.id, sid: 20 });
+  const hg = await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id && m.pts > (hbot ? hbot.pts : 20));
+  check(hg && hg.gain === 3, 'a bullet in a tank scores 3');
+  a.send({ t: 'shot', v: wb.id, sid: 20 });
+  a.send({ t: 'shot', v: wb.id, sid: 2 });
+  check(!(await b.next(m => m.t === 'dmg', 500)), 'a bullet hits only once, and only a bullet is reported by its shooter');
+  b.send({ t: 'fire', k: 1, sid: 21, x: rb[1], y: 2, z: rb[2], vx: 0, vy: 100, vz: -100 });
+  b.send({ t: 'shot', v: wa.id, sid: 21 });
+  const da = await a.next(m => m.t === 'dmg');
+  a.send({ t: 'hit', by: wb.id, sid: 21 });
+  const hp = await b.next(m => m.t === 'hit' && m.v === wa.id && m.by === wb.id);
+  check(da && hp && hp.gain === 5, 'a bullet in a plane scores 5');
+  let flak = null;
+  for (let i = 0; i < 25 && !flak; i++) {
+    const s = a.last.get(bot1.id);
+    if (!s) { await sleep(200); continue; }
+    a.send({ t: 'st', ct: t0 + 510 + i, x: s[1], z: s[2], h: 0, v: 20, r: 0, s: 0, k: 1, y: 30, p: 0 });   // right above the bot
+    flak = await a.next(m => m.t === 'fire' && m.k === 1 && botsA.some(p => p.id === m.id), 300);
+  }
+  check(!!flak, 'a bot fires at a low plane above it');
+
   // A drops (pushing a car) and comes back from the same page (same key): the car goes back to the traffic, the points are still there
-  const ptsA = hbot ? hbot.pts : 20;
+  const ptsA = hg ? hg.pts : hbot ? hbot.pts : 20;
   const [dx, dz, dh] = carAt(b.snap, 2);
   a.send({ t: 'st', ct: t0 + 900, x: dx, z: dz, h: 0, v: 0, r: 0, s: 0, c: [[2, dx, dz, dh, 1, 0]] });
   const held = await b.next(m => m.t === 'snap' && ownerOf(m, 2) === wa.id);

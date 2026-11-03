@@ -1,7 +1,8 @@
 // Browser test of World of DODO: two players in headless Chrome pick a name and a colour, see each other and
 // the bots and the same city, a tank slides along a wall instead of sticking to it, a car one of them shoves
 // is his for the other too, one shoots the other, the points show in both scoreboards, and a hit that destroys
-// the tank brings it back somewhere else. Saves screenshots for a look by eye.
+// the tank brings it back somewhere else, then he takes a plane, flies, and the other's anti-aircraft gun hits it.
+// Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
 //   node tools/browser-test.js [http://localhost:3400] [screenshot folder]
@@ -172,6 +173,30 @@ async function shoot(a, b, petrHits) {
     check(await b.evaluate(() => WOD.car.immT > 0), 'and is immune for a moment after it');
     await frames(b, 4);
     await b.screenshot({ path: path.join(OUT, '5-petr-respawned.png') });
+
+    // issue #14: Petr switches to a plane (V); it comes in at the edge of the airspace and flies; Rosta sees a plane; Petr is put
+    // 30 units above Rosta, and Rosta's anti-aircraft gun (E) aims itself at him and hits (5 points a bullet in a plane)
+    await b.keyboard.press('KeyV');
+    await b.waitForFunction(() => WOD.car.k === 1 && WOD.car.topT === 0, SLOW);
+    const fly0 = await b.evaluate(() => ({ x: WOD.car.x, y: WOD.car.y, z: WOD.car.z }));
+    await frames(b, 10);
+    const fly1 = await b.evaluate(() => ({ x: WOD.car.x, y: WOD.car.y, z: WOD.car.z, alt: document.getElementById('alt').textContent }));
+    check(fly0.y > 40 && Math.hypot(fly1.x - fly0.x, fly1.z - fly0.z) > 5 && Number(fly1.alt) > 200, `V puts Petr in a plane that flies (${Math.round(fly0.x)},${Math.round(fly0.z)} → ${Math.round(fly1.x)},${Math.round(fly1.z)}, ${fly1.alt} m)`);
+    await a.waitForFunction(() => [...WOD.NET.others.values()].some(o => o.name === 'Petr' && o.on && o.k === 1 && o.y > 20 && o.pg && o.pg.isEnabled()), SLOW);
+    check(true, 'Rosta sees Petr\'s plane in the air');
+    await b.screenshot({ path: path.join(OUT, '5b-petr-flies.png') });
+    const ptsAA = await a.evaluate(() => WOD.NET.pts);
+    await a.evaluate(() => { WOD.car.immT = 0; WOD.HELD.add('KeyE'); });
+    let flak = false;
+    for (let i = 0; i < 12 && !flak; i++) {
+      const r = await a.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z, h: WOD.car.h }));
+      await b.evaluate(r => { Object.assign(WOD.car, { x: r.x - Math.cos(r.h) * 25, z: r.z + Math.sin(r.h) * 25, y: 30, h: r.h, p: 0, v: 18, immT: 0 }); Object.assign(WOD.pl, { aimY: r.h, aimP: 0, thr: 0.3 }); }, r);
+      await frames(a, 8);
+      flak = (await a.evaluate(() => WOD.NET.pts)) > ptsAA;
+    }
+    await a.evaluate(() => WOD.HELD.delete('KeyE'));
+    check(flak, 'Rosta\'s anti-aircraft gun hits Petr\'s plane and scores');
+    await a.screenshot({ path: path.join(OUT, '5c-rosta-flak.png') });
 
     // names: a taken one and a bot's one are refused under the form
     const c = await player(browser, null);

@@ -3,7 +3,7 @@
 import type { TransformNode } from '@babylonjs/core';
 
 // a networked row: the moment it shows (server clock, ms) and where the thing was
-export interface Row { t: number; x: number; z: number; h: number; v: number; r?: number; s?: number }
+export interface Row { t: number; x: number; z: number; h: number; v: number; r?: number; s?: number; k?: number; y?: number; p?: number }
 
 // a car of the traffic or a parked car (world/traffic.ts)
 export interface Car {
@@ -54,10 +54,13 @@ export interface Prop {
   [more: string]: any;
 }
 
-// another player (or a bot), drawn from the server's rows (net/net.ts)
+// another player (or a bot), drawn from the server's rows (net/net.ts). World of DODO, issue #14: k 1 flies a plane (pg, made when
+// first needed) at height y with pitch p; s 2 is destroyed
 export interface Other {
   id: number; name: string; color: number; pts: number; bot: boolean;
   g: TransformNode;                      // the tank
+  pg: TransformNode | null;              // the plane
+  k: number; y: number; p: number;
   tag: HTMLElement;                      // the name tag (a DOM element over the canvas)
   buf: Row[];
   on: boolean;

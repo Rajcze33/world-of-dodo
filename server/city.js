@@ -55,6 +55,23 @@ function clearLine(x0, z0, x1, z1) {
   return true;
 }
 
+// can a bullet fly from a to b without a building in between? (the segment against each box, in 3D, as segHit in the client)
+function clearRay(ax, ay, az, bx, by, bz) {
+  const a = [ax, ay, az], d = [bx - ax, by - ay, bz - az];
+  for (const b of SOLIDS) {
+    let t0 = 0, t1 = 1, hit = true;
+    for (const [i, lo, hi] of [[0, b.x0, b.x1], [1, 0, b.h], [2, b.z0, b.z1]]) {
+      if (Math.abs(d[i]) < 1e-9) { if (a[i] < lo || a[i] > hi) { hit = false; break; } continue; }
+      let u = (lo - a[i]) / d[i], v = (hi - a[i]) / d[i];
+      if (u > v) [u, v] = [v, u];
+      t0 = Math.max(t0, u); t1 = Math.min(t1, v);
+      if (t0 > t1) { hit = false; break; }
+    }
+    if (hit) return false;
+  }
+  return true;
+}
+
 // is (x,z) open ground, at least m from every building and inside the world? (the client's free(), without its trees and lamps)
 const WORLD_LIM = 250;
 function freeAt(x, z, m) {
@@ -65,4 +82,4 @@ function freeAt(x, z, m) {
 
 const DEPOT_PARK = [-107.5, -130];            // where the original van started; no car is placed near it
 
-module.exports = { CELL, HALF, roadC, blockC, TRAM_K, SOLIDS, DEPOT_PARK, solidAt, clearLine, freeAt };
+module.exports = { CELL, HALF, roadC, blockC, TRAM_K, SOLIDS, DEPOT_PARK, solidAt, clearLine, clearRay, freeAt };

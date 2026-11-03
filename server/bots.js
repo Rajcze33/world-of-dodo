@@ -12,9 +12,13 @@
 // shooter's browser showed when firing (lag compensation, in favour of the shooter). A hit follows the game's rules for a tank: slowed for a moment,
 // three hits within 8 s destroy it (it lies on its side, then comes back at a junction far from the players,
 // immune for a few seconds), and only a hit that takes effect scores.
+//
+// Planes (issue #14): a bot does not hunt them, but one flying low and close (AA_R, below AA_TOP) gets bursts of bullets, led by the
+// plane's speed and with some aim error; the plane's player decides the hits, as for any parcel. A person's bullets that hit a bot are
+// reported by the shooter (server.js shot); they do a quarter of a parcel's damage and do not slow the bot.
 'use strict';
 
-const { roadC, solidAt, clearLine } = require('./city');
+const { roadC, solidAt, clearLine, clearRay } = require('./city');
 
 const SPEED = 11;                     // units/s; a player's tank tops out at 24
 const HUNT_R = 150, FIRE_MIN = 10, FIRE_MAX = 50;
@@ -23,6 +27,10 @@ const AHEAD = 7, BLOCK_W = 2.6, BLOCK_T = 1.5;   // a tank this close in front s
 const SHOT_G = 14, SHOT_UP = 4, SHOT_E = 0.4, LEAD_T = 0.79;
 const TANK_L = 2.4, TANK_W = 1.15, TANK_H = 2.1;
 const SLOW_T = 2.4, DEAD_T = 3.2, SPAWN_IMMUNE_T = 3, HIT_WINDOW_MS = 8000;   // the same numbers as the players' tanks
+const BULLET_W = 0.25;                // a bullet's share of a hit (HIT_W in server.js and client/src/game/tank.ts)
+// anti-aircraft: reach, the highest plane, seconds between bullets, a burst and the pause after it, aim error (radians), bullet speed.
+// A nuisance for a plane that stays low near a bot, not a threat to one that keeps moving (a bot is worth 1 point).
+const AA_R = 60, AA_TOP = 60, AA_RATE = 0.2, AA_BURST = [0.4, 0.8], AA_PAUSE = [3, 5], AA_ERR = 0.16, BUL_V = 170, AA_Y = 2.3;
 
 const nbrs = (i, j) => [[i + 1, j], [i - 1, j], [i, j + 1], [i, j - 1]].filter(([a, b]) => a >= 0 && a <= 6 && b >= 0 && b <= 6);
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -46,7 +54,7 @@ function placeFar(bot, humans) {
   }
   Object.assign(bot, {
     x: roadC(best[0]), z: roadC(best[1]), h: 0, v: 0, roll: 0, prev: null, from: best, to: null,
-    slowT: 0, deadT: 0, immT: bot.st ? SPAWN_IMMUNE_T : 0, hitLog: [], fireCd: rand(2, 4), hist: [],
+    slowT: 0, deadT: 0, immT: bot.st ? SPAWN_IMMUNE_T : 0, hitLog: [], fireCd: rand(2, 4), hist: [], aaCd: 0, aaLeft: 0,
   });
   bot.to = nextJunction(bot, null);
   bot.h = Math.atan2(roadC(bot.to[0]) - bot.x, roadC(bot.to[1]) - bot.z);
@@ -67,10 +75,10 @@ function nextJunction(bot, target) {
   return opts[Math.random() * opts.length | 0];
 }
 
-// the snapshot row, as the clients send theirs: id, x, z, heading, speed, roll, immune after a respawn (the server adds the time)
-const state = b => [b.id, r2(b.x), r2(b.z), Math.round(b.h * 1000) / 1000, r2(b.v), r2(b.roll), b.immT > 0 ? 1 : 0];
+// the snapshot row, as the clients send theirs: id, x, z, heading, speed, roll, 1 immune after a respawn or 2 destroyed (the server adds the time)
+const state = b => [b.id, r2(b.x), r2(b.z), Math.round(b.h * 1000) / 1000, r2(b.v), r2(b.roll), b.deadT > 0 ? 2 : b.immT > 0 ? 1 : 0];
 
-// one step of a bot among the people (humans) and every other tank (tanks); returns a parcel to fire, or null
+// one step of a bot among the people (humans, in tanks or planes) and every other tank (tanks); returns a parcel or a bullet to fire, or null
 function stepBot(bot, dt, humans, tanks) {
   bot.slowT = Math.max(0, bot.slowT - dt);
   bot.immT = Math.max(0, bot.immT - dt);
@@ -85,7 +93,7 @@ function stepBot(bot, dt, humans, tanks) {
 
   let target = null, td = HUNT_R;
   for (const h of humans) {
-    if (!h.st || h.st[6]) continue;                                       // not a player who has just (re)spawned
+    if (!h.st || h.st[6] || h.st[8] === 1) continue;                      // not a player who has just (re)spawned, nor a plane
     const d = Math.hypot(h.st[1] - bot.x, h.st[2] - bot.z);
     if (d < td) { td = d; target = h; }
   }
@@ -118,8 +126,10 @@ function stepBot(bot, dt, humans, tanks) {
   bot.hist.push({ t: now, x: bot.x, z: bot.z, h: bot.h });
   while (bot.hist.length > 2 && bot.hist[0].t < now - 1000) bot.hist.shift();
 
-  // fire at the player, leading by the parcel's flight time
+  // fire at the player, leading by the parcel's flight time; a low plane nearby comes first
   bot.fireCd -= dt;
+  const flak = aa(bot, dt, humans);
+  if (flak) return flak;
   if (bot.fireCd > 0 || !target || td < FIRE_MIN || td > FIRE_MAX) return null;
   if (!clearLine(bot.x, bot.z, target.st[1], target.st[2])) return null;
   const [, px, pz, ph, pv] = target.st;
@@ -129,6 +139,32 @@ function stepBot(bot, dt, humans, tanks) {
   const fx = Math.sin(yaw), fz = Math.cos(yaw);
   bot.fireCd = rand(...FIRE_CD);
   return { sid: ++bot.sid, x: r2(bot.x + fx * 3.1), y: 1.5, z: r2(bot.z + fz * 3.1), vx: r2(fx * sp), vy: SHOT_UP, vz: r2(fz * sp) };
+}
+
+// a bullet at the nearest low plane in sight, in bursts, or null
+function aa(bot, dt, humans) {
+  bot.aaCd -= dt;
+  if (bot.aaCd > 0) return null;
+  let best = null, bd = AA_R;
+  for (const h of humans) {
+    const s = h.st;
+    if (!s || s[8] !== 1 || s[6] || s[9] > AA_TOP) continue;              // a plane (k 1, altitude y at 9), not just (re)spawned
+    const d = Math.hypot(s[1] - bot.x, s[9] - AA_Y, s[2] - bot.z);
+    if (d < bd && clearRay(bot.x, AA_Y, bot.z, s[1], s[9], s[2])) { bd = d; best = s; }
+  }
+  if (!best) { bot.aaLeft = 0; bot.aaCd = 0.5; return null; }               // look again in half a second
+  if (!bot.aaLeft) bot.aaLeft = Math.max(1, Math.round(rand(...AA_BURST) / AA_RATE));
+  bot.aaLeft--;
+  bot.aaCd = bot.aaLeft > 0 ? AA_RATE : rand(...AA_PAUSE);
+  // lead: where the plane will be when the bullet gets there (its row is up to a tick old and the bullet reaches its player later still)
+  const [, px, pz, ph, pv, , , , , py, pp] = best;
+  const vx = Math.sin(ph) * Math.cos(pp) * pv, vy = Math.sin(pp) * pv, vz = Math.cos(ph) * Math.cos(pp) * pv;
+  let t = bd / BUL_V + 0.08, ax = px, ay = py, az = pz;
+  for (let k = 0; k < 2; k++) { ax = px + vx * t; ay = py + vy * t; az = pz + vz * t; t = Math.hypot(ax - bot.x, ay - AA_Y, az - bot.z) / BUL_V + 0.08; }
+  const yaw = Math.atan2(ax - bot.x, az - bot.z) + (Math.random() - 0.5) * AA_ERR;
+  const pitch = Math.atan2(ay - AA_Y, Math.hypot(ax - bot.x, az - bot.z)) + (Math.random() - 0.5) * AA_ERR;
+  const fx = Math.sin(yaw) * Math.cos(pitch), fy = Math.sin(pitch), fz = Math.cos(yaw) * Math.cos(pitch);
+  return { k: 1, sid: ++bot.sid, x: r2(bot.x + fx), y: r2(AA_Y + fy), z: r2(bot.z + fz), vx: r2(fx * BUL_V), vy: r2(fy * BUL_V), vz: r2(fz * BUL_V) };
 }
 
 // where the bot was at time t: between the two records around it (a respawn in between is not slid across)
@@ -176,15 +212,15 @@ function flyParcels(parcels, bots, dt, onHit) {
   }
 }
 
-// A parcel reached the bot: false if it did not take effect (destroyed already, or just back and immune),
-// 'kill' if it was the third hit within 8 s, otherwise true.
-function hitBot(bot) {
+// A parcel (k 0) or a bullet (k 1) reached the bot: false if it did not take effect (destroyed already, or just back and immune),
+// 'kill' if the hits within 8 s add up to three parcels' worth, otherwise true.
+function hitBot(bot, k = 0) {
   if (bot.deadT > 0 || bot.immT > 0) return false;
   const t = Date.now();
-  bot.hitLog = bot.hitLog.filter(x => t - x < HIT_WINDOW_MS);
-  bot.hitLog.push(t);
-  bot.slowT = SLOW_T;
-  if (bot.hitLog.length < 3) return true;
+  bot.hitLog = bot.hitLog.filter(x => t - x[0] < HIT_WINDOW_MS);
+  bot.hitLog.push([t, k === 1 ? BULLET_W : 1]);
+  if (k !== 1) bot.slowT = SLOW_T;
+  if (bot.hitLog.reduce((sum, x) => sum + x[1], 0) < 2.999) return true;
   bot.deadT = DEAD_T;
   bot.hitLog = [];
   return 'kill';

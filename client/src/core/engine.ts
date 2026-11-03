@@ -57,10 +57,18 @@ moon.intensity = 0.55; moon.specular = Color3.Black();
 moon.position = new Vector3(-50, 110, 40);
 moon.autoUpdateExtends = false;
 moon.shadowMinZ = 10; moon.shadowMaxZ = 260;
-// the box the shadows are drawn in, around the light's target: ±80 around the tank, ±190 for the wide views
-export function moonAt(x: number, z: number, half: number) {
-  moon.position.set(x - 50, 110, z + 40);
+// the box the shadows are drawn in, around the light's target: ±80 around the tank, ±190 for the wide views. top: the light's height,
+// above everything that casts a shadow (a plane flies higher than the city's 110); the depth range grows with it.
+export function moonAt(x: number, z: number, half: number, top = 110) {
+  const k = top / 110;
+  moon.position.set(x - 50 * k, top, z + 40 * k);
   moon.orthoLeft = -half; moon.orthoRight = half; moon.orthoTop = half; moon.orthoBottom = -half;
+  moon.shadowMaxZ = 260 * k;
+}
+// the fog: near in a tank (the city's look), far in the air (issue #14: from a plane the land around the city shows)
+export function setFog(air: boolean) {
+  const s = air ? 160 : 90, e = air ? 800 : 300;
+  if (scene.fogStart !== s || scene.fogEnd !== e) { scene.fogStart = s; scene.fogEnd = e; }
 }
 
 // The shadow casters, remembered so the shadow map can be rebuilt at another size (quality levels) or switched off.

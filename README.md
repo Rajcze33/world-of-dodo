@@ -1,20 +1,29 @@
 # World of DODO
 
-A small multiplayer tank game in the browser. One snowy city, everybody in their own DODO tank,
-parcels for ammunition. Built on *Poslední míle* (The Last Mile), the 3D delivery game DODO made for
+A small multiplayer tank and plane game in the browser. One snowy city, everybody in their own DODO
+tank or plane, parcels for ammunition. Built on *Poslední míle* (The Last Mile), the 3D delivery game DODO made for
 Christmas 2026, where the delivery van had already turned into a tank.
 
 **Play: https://game-3a26-3000.prg1.zerops.app** (English: add `?lang=en`)
 
 ![Two players and a bot in the city](docs/screenshot.png)
 
-- **Join with a name only.** Pick a name and a tank colour, drive out. No account, no password,
-  nothing is stored: your score lasts as long as you stay connected.
-- **Shoot the others.** Space (or the green button on a phone) fires a parcel. A hit on another
-  player is worth **10 points**, a hit on a bot (BOT1, BOT2, …) **1 point**.
-- **Three hits destroy a tank.** It blows up, lies on its side for a moment and comes back at a free
-  spot somewhere else, blinking and immune for a few seconds.
-- **The bots** are driven by the server: they roam the streets, chase the nearest player and shoot back.
+- **Join with a name only.** Pick a name, a colour and a tank or a plane, and go. No account, no
+  password, nothing is stored: your score lasts as long as you stay connected.
+- **Shoot the others.** In a tank, Space (or the green button on a phone) fires a parcel and E the
+  anti-aircraft gun, which aims itself at the nearest plane. A parcel in another player's tank is worth
+  **10 points**, a hit on a bot (BOT1, BOT2, …) **1 point**.
+- **Fly.** A plane flies where the mouse points, as in War Thunder's arcade "mouse aim": click into the
+  game, move the mouse, W and S for the throttle, Space or the left button for the guns, E (or the right
+  button) drops a parcel on the tanks below. The arrow keys fly it too. Climb too steeply and it stalls;
+  the ground, a building or a tree end the flight; the airspace reaches far beyond the city, over
+  forests, villages and an airfield, and the plane turns back at its edge.
+- **Damage adds up.** Three parcels or twelve bullets destroy a tank, one parcel or six bullets a plane,
+  and every hit scores its share: a bullet is 3 points in a tank, 5 in a plane. A destroyed vehicle
+  comes back somewhere else, blinking and immune for a few seconds; V switches between tank and plane
+  (while destroyed, 1 or 2 picks the next one).
+- **The bots** are driven by the server: they roam the streets, chase the nearest tank and shoot back,
+  and fire short bursts at a plane that flies low over them.
 - **A construction site** south of the city: containers, a half-built house, sand piles, barriers, machines
   and a tower crane. Everything there is cover: it stops parcels, tanks and the line of sight.
 - **A shared city.** The cars, the tram and the pedestrians are the same for everyone. Tanks shove cars
@@ -69,8 +78,8 @@ http://localhost:5173 and passes the game's WebSocket to `npm start` (run both).
 client/index.html   the page: HUD, intro screen, touch controls (markup and styles)
 client/src/         the game in TypeScript on Babylon.js, built by Vite into client/dist:
   core/             engine, scene, lights and shadows, geometry, materials, textures
-  world/            the city grid, buildings, props, traffic and tram, pedestrians
-  game/             the player's tank, parcels, effects, input, quality levels
+  world/            the city grid, buildings, props, traffic and tram, pedestrians, the land around
+  game/             the player's tank and plane, parcels, bullets, effects, input, quality levels
   net/              the other players and the shared city from the server
   ui/               HUD and minimap;  main.ts: the frame loop and the join form
 server/server.js    serves the built page, relays the players over a WebSocket, keeps the score
@@ -81,10 +90,11 @@ client/shared/site.js  the construction site's layout, loaded by the page and by
 docs/PROTOCOL.md    every message between the browser and the server
 ```
 
-The server does not simulate the players. Each browser drives its own tank and sends where it is,
-20 times a second; the server sends everyone's tanks back in one snapshot. A fired parcel is
-passed on, and every browser flies it. **The player who gets hit decides the hit**, because on that
-screen their tank is exactly where it is; the server then awards the points. The bots and the life
+The server does not simulate the players. Each browser drives its own tank or flies its plane and
+sends where it is, 20 times a second; the server sends everyone back in one snapshot. A fired parcel
+or bullet is passed on, and every browser flies it. **The player who gets hit by a parcel decides the
+hit**, because on that screen their tank is exactly where it is; **a bullet's shooter decides** (a fast
+plane would be out of reach otherwise), and the server passes the hit on. The server awards the points. The bots and the life
 of the city (cars, tram, pedestrians) run on the server, so everyone sees the same city, and the
 server decides what hits a bot. **A car a tank shoves is that player's** until it comes to rest: their
 browser moves it and the server passes it on.
@@ -140,8 +150,10 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 
 ## Known limits
 
-- **The clients are trusted.** A modified browser can lie about its own tank or report hits. It is a
-  game for fun, not a tournament.
+- **The clients are trusted.** A modified browser can lie about its own tank or plane or report hits.
+  It is a game for fun, not a tournament.
+- A plane needs a mouse (or the arrow keys); on a phone it flies with the steering pad, which is
+  clumsier.
 - What you see of the others is 150 ms old, plus the network's delay: a tank you ram is where it was a
   moment ago on its owner's screen. A car somebody else is pushing does not give way to you until they
   let go of it.

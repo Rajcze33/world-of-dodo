@@ -29,6 +29,10 @@ export const SOLIDS: Solid[] = (function () {
   return s;
 })();
 
+// World of DODO, issue #14: the planes' airspace, a square of ±AIR_LIM (they are turned back at its edge); above AIR_TOP the engine
+// loses power. The tanks stay inside WORLD_LIM.
+export const AIR_LIM = 450, AIR_TOP = 220;
+
 // Drivable space: everywhere inside a big square around the city (streets, pavements, snow, the depot yard) except inside the
 // solids and the standing props. m = how far from them the point must stay.
 export const WORLD_LIM = 250;
