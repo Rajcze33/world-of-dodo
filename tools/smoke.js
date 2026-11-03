@@ -22,7 +22,7 @@ function client() {
   const last = new Map();                 // id -> the newest snapshot row of that tank
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
-    if (m.t === 'snap') for (const s of m.p) last.set(s[0], s);
+    if (m.t === 'snap') { for (const s of m.p) last.set(s[0], s); api.snap = m; }
     if (m.t === 'w') api.world = m;
     const i = waiters.findIndex(w => w.test(m));
     if (i >= 0) waiters.splice(i, 1)[0].resolve(m);
@@ -31,7 +31,7 @@ function client() {
   const opened = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   const closed = new Promise(res => { ws.onclose = e => res(e); });
   const api = {
-    ws, opened, closed, last, world: null,
+    ws, opened, closed, last, world: null, snap: null,
     send: m => ws.send(JSON.stringify(m)),
     // the next message that passes test (also one that already arrived), or null after ms
     next(test, ms = 2000) {
@@ -109,11 +109,18 @@ async function refused(hello) {
   const pong = await a.next(m => m.t === 'pong');
   check(pong && pong.c === 12345, 'a ping gets its pong');
 
-  // positions
-  a.send({ t: 'st', x: 10.5, z: -20.25, h: 1.2, v: 12, r: 0, s: 1 });
+  // positions, each stamped with the moment it shows on the server's clock (from the browser's own clock, ct)
+  const t0 = Math.round(performance.now());
+  a.send({ t: 'st', ct: t0, x: 10.5, z: -20.25, h: 1.2, v: 12, r: 0, s: 1 });
   const snap = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id));
   const sa = snap && snap.p.find(s => s[0] === wa.id);
   check(sa && sa[1] === 10.5 && sa[2] === -20.25 && sa[6] === 1, 'B gets A\'s position (and the spawn shield) in a snapshot');
+  check(snap && typeof snap.ts === 'number' && sa.length === 8 && sa[7] <= snap.ts, 'the snapshot and its rows carry the server\'s clock');
+  await sleep(100);
+  a.send({ t: 'st', ct: t0 + 100, x: 10.5, z: -20.25, h: 1.2, v: 12, r: 0, s: 1 });
+  const snapT = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[7] > sa[7]));
+  const gapT = snapT && snapT.p.find(s => s[0] === wa.id)[7] - sa[7];
+  check(gapT >= 80 && gapT <= 120, `two reports 100 ms apart by A's clock are about 100 ms apart on the server's (${gapT})`);
   a.send({ t: 'st', x: 9999, z: 0, h: 0, v: 0, r: 0 });
   const snap2 = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[1] !== 10.5), 500);
   check(!snap2, 'a position outside the world is ignored');
@@ -122,9 +129,11 @@ async function refused(hello) {
   const p1 = b.last.get(bot1.id);
   check(p0 && p1 && Math.hypot(p1[1] - p0[1], p1[2] - p0[2]) > 3, 'BOT1 drives around the city');
 
-  // the shared city: snapshots with the cars, the tram and the pedestrians; a knocked pedestrian falls for everyone
+  // the shared city: every snapshot has the cars and the tram, every other one the pedestrians; a knocked pedestrian falls for everyone
+  const s1 = await b.next(m => m.t === 'snap');
+  check(s1 && s1.c.length === 33 * 4 && typeof s1.m === 'number' && Array.isArray(s1.k) && Array.isArray(s1.q), 'the shared city arrives: 33 cars and the tram in every snapshot');
   const w = await b.next(m => m.t === 'w');
-  check(w && w.c.length === 33 * 4 && w.p.length === 50 * 5 && typeof w.m === 'number', 'the shared city arrives: 33 cars, 50 pedestrians, the tram');
+  check(w && w.p.length === 50 * 5 && typeof w.ts === 'number', 'and the 50 pedestrians in every other one');
   const near = [...Array(50).keys()].sort((x, y) => Math.hypot(w.p[x * 5] - 10.5, w.p[x * 5 + 1] + 20.25) - Math.hypot(w.p[y * 5] - 10.5, w.p[y * 5 + 1] + 20.25))[0];
   a.send({ t: 'ped', i: near, vx: 6, vz: 0 });
   const fell = await b.next(m => m.t === 'w' && m.p[near * 5 + 3] > 0, 3000);
@@ -135,6 +144,29 @@ async function refused(hello) {
   const back = fell && await b.next(m => m.t === 'w' && m.p[near * 5 + 3] === 0, 15000);
   const moved = back && Math.hypot(back.p[near * 5] - lay.p[near * 5], back.p[near * 5 + 1] - lay.p[near * 5 + 1]);
   check(still && back && moved > 6, `she stays down a while, then walks again elsewhere (${moved ? moved.toFixed(0) : '?'} units away)`);
+  // a car A's tank shoves becomes A's: A reports it, B sees it there, nobody else can take it until A lets go
+  const ownerOf = (m, i) => { const k = m && m.k.find(r => r[0] === i); return k ? k[1] : 0; };
+  const carAt = (m, i) => m && [m.c[i * 4], m.c[i * 4 + 1], m.c[i * 4 + 2]];
+  const [cx, cz, ch] = carAt(b.snap, 0);
+  a.send({ t: 'st', ct: t0 + 200, x: cx, z: cz, h: 0, v: 5, r: 0, s: 0, c: [[0, cx + 1, cz, ch, 3, 0]] });
+  const own = await b.next(m => m.t === 'snap' && ownerOf(m, 0) === wa.id);
+  check(own && Math.abs(own.c[0] - (cx + 1)) < 0.01 && own.k.find(r => r[0] === 0)[3] === Math.round((cx + 1) * 100) / 100, 'a car A shoves is A\'s: B sees it where A reports it');
+  b.send({ t: 'st', ct: 1, x: cx, z: cz, h: 0, v: 0, r: 0, s: 0, c: [[0, cx + 3, cz, ch, 0, 0]] });
+  await sleep(150);
+  check(ownerOf(b.snap, 0) === wa.id && Math.abs(b.snap.c[0] - (cx + 1)) < 0.01, 'B cannot take it over while A pushes it');
+  a.send({ t: 'st', ct: t0 + 250, x: cx, z: cz, h: 0, v: 0, r: 0, s: 0, c: [[0, cx + 1, cz, ch, 0, 1]] });
+  const free = await b.next(m => m.t === 'snap' && !ownerOf(m, 0));
+  check(!!free, 'when A lets go, the car belongs to the traffic again');
+  a.send({ t: 'st', ct: t0 + 300, x: cx, z: cz, h: 0, v: 0, r: 0, s: 0, c: [[33, cx + 2, cz + 4, 0, 1, 0]] });
+  const pk = await b.next(m => m.t === 'snap' && ownerOf(m, 33) === wa.id);
+  a.send({ t: 'st', ct: t0 + 350, x: cx, z: cz, h: 0, v: 0, r: 0, s: 0, c: [[33, cx + 2, cz + 4, 0, 0, 1]] });
+  const pq = await b.next(m => m.t === 'snap' && m.q.some(r => r[0] === 33));
+  check(pk && pq && Math.abs(pq.q.find(r => r[0] === 33)[1] - (cx + 2)) < 0.01, 'a parked car A pushed away stays where A left it, for B too');
+  a.send({ t: 'st', ct: t0 + 400, x: cx, z: cz, h: 0, v: 0, r: 0, s: 0, c: [[1, cx + 200, cz, 0, 1, 0]] });
+  await sleep(150);
+  check(!ownerOf(b.snap, 1), 'a car far from the tank cannot be claimed');
+  a.send({ t: 'st', ct: t0 + 450, x: 10.5, z: -20.25, h: 1.2, v: 0, r: 0, s: 0 });
+
   a.send({ t: 'prop', i: 7, fx: 1, fz: 0 });
   const pb = await b.next(m => m.t === 'prop');
   check(pb && pb.i === 7 && pb.fx === 1 && !pb.up, 'a tree A knocked down falls for B');
@@ -171,11 +203,16 @@ async function refused(hello) {
   }
   check(hbot && hbot.by === wa.id && hbot.gain === 1, 'a parcel on a bot scores 1 point for A');
 
-  // A drops and comes back from the same page (same key): the points are still there
+  // A drops (pushing a car) and comes back from the same page (same key): the car goes back to the traffic, the points are still there
   const ptsA = hbot ? hbot.pts : 20;
+  const [dx, dz, dh] = carAt(b.snap, 2);
+  a.send({ t: 'st', ct: t0 + 900, x: dx, z: dz, h: 0, v: 0, r: 0, s: 0, c: [[2, dx, dz, dh, 1, 0]] });
+  const held = await b.next(m => m.t === 'snap' && ownerOf(m, 2) === wa.id);
   a.ws.close();
   const lb = await b.next(m => m.t === 'leave' && m.id === wa.id);
   check(!!lb, 'B hears that A left');
+  await sleep(150);
+  check(held && !ownerOf(b.snap, 2), 'the car A was pushing goes back to the traffic');
   const a2 = client();
   await a2.opened;
   a2.send({ t: 'hello', name: 'Tester A', key: ka });

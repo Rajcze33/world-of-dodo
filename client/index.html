@@ -1047,6 +1047,7 @@ function towHome(c){c.x=c.home[0];c.z=c.home[1];c.ang=c.home[2];c.hx=Math.sin(c.
 function resetParked(){PARKED.forEach(c=>{if(c.dyn||c.moved||c.x!==c.home[0]||c.z!==c.home[1])towHome(c);});}
 function toDyn(c){if(c.dyn)return;
   if(c.ai&&isScripted(c))return;                                   // a delivery tank driving a depot script cannot be knocked off it
+  if(WORLD.on){c.mine=true;c.rel=false;c.claimAt=now();c.ackAt=0;}  // World of DODO: a car of the shared city is yours while you shove it (see the shared city)
   if(c.parked){c.dyn=true;c.vx=c.vz=c.w=0;c.dynT=0;c.calm=0;return;}  // wake a parked car up
   c.x+=c.ox||0;c.z+=c.oz||0;c.ang=Math.atan2(c.hx,c.hz)+(c.oa||0);c.ox=c.oz=c.oa=0;c.hx=Math.sin(c.ang);c.hz=Math.cos(c.ang);
   c.vx=c.hx*c.v;c.vz=c.hz*c.v;c.w=0;c.v=0;c.dyn=true;c.phase='dyn';c.dynT=0;c.calm=0;c.waitJ=false;c.plan=null;}
@@ -1079,7 +1080,7 @@ function dynStatics(c){const hx=c.hx,hz=c.hz,cl=c.cl||1.2,cr=c.cr||1.05,mg=cr-0.
       const ol=o.cl||1.2,thr=cr+(o.cr||1.05);
       for(const m of[ol,-ol]){const qx=o.x+o.hx*m,qz=o.z+o.hz*m,dx=qx-px,dz=qz-pz,d=Math.hypot(dx,dz);if(d>=thr)continue;
         const nx=d>0.01?dx/d:o.hx,nz=d>0.01?dz/d:o.hz,pen=thr-d,mx=(px+qx)/2,mz=(pz+qz)/2;
-        if(isScripted(o)){const A=carBody(c);impulse(wallBody(),A,mx,mz,-nx,-nz,CAR_E);putBody(c,A);c.x-=nx*pen;c.z-=nz*pen;} // a tank on its depot script is immovable
+        if(isScripted(o)||(WORLD.on&&o.net)){const A=carBody(c);impulse(wallBody(),A,mx,mz,-nx,-nz,CAR_E);putBody(c,A);c.x-=nx*pen;c.z-=nz*pen;} // a tank on its depot script (or a car another player is pushing) is immovable
         else{if(!o.dyn)toDyn(o);const A=carBody(c),B=carBody(o);impulse(A,B,mx,mz,nx,nz,CAR_E);putBody(c,A);putBody(o,B);
           c.x-=nx*pen*0.5;c.z-=nz*pen*0.5;o.x+=nx*pen*0.5;o.z+=nz*pen*0.5;}
         px=c.x+hx*k;pz=c.z+hz*k;}}}}
@@ -1114,9 +1115,9 @@ function updateDyn(c,dt){
   if(c.parked)placeParked(c);
   else{c.g.position.set(c.x,c.gy,c.z);c.g.rotation.y=c.ang;const vfw=c.vx*hx+c.vz*hz;c.g.userData.wheels.forEach(w=>w.rotation.x+=vfw*dt/0.34);}
   const slow=Math.hypot(c.vx,c.vz)<0.8&&Math.abs(c.w)<0.4;c.calm=slow?c.calm+dt:0;
-  if(c.parked){if(c.calm>0.6||c.dynT>25){c.dyn=false;c.vx=c.vz=c.w=0;const da=Math.atan2(Math.sin(c.ang-c.home[2]),Math.cos(c.ang-c.home[2]));c.moved=Math.hypot(c.x-c.home[0],c.z-c.home[1])>0.8||Math.abs(da)>0.5;c.awayT=0;}return;} // it stays where it ended up
+  if(c.parked){if(c.calm>0.6||c.dynT>25){c.dyn=false;c.vx=c.vz=c.w=0;const da=Math.atan2(Math.sin(c.ang-c.home[2]),Math.cos(c.ang-c.home[2]));c.moved=Math.hypot(c.x-c.home[0],c.z-c.home[1])>0.8||Math.abs(da)>0.5;c.awayT=0;if(c.mine)letGo(c);}return;} // it stays where it ended up
   if(c.rival)return;
-  if(c.calm>0.8||c.dynT>25){const dT=Math.hypot(c.x-car.x,c.z-car.z);if(dT>5&&(roadOff(c)<9||dT>70))rejoin(c);}} // back onto the street once it has settled and the tank is not on top of it
+  if(c.calm>0.8||c.dynT>25){const dT=Math.hypot(c.x-car.x,c.z-car.z);if(dT>5&&(roadOff(c)<9||dT>70)){if(c.mine)letGo(c);else rejoin(c);}}} // back onto the street once it has settled and the tank is not on top of it (World of DODO: the server does that for a shared car)
 // ---------- delivery tanks: the two tanks of the depot do what a delivery vehicle does ----------
 // wait in the depot yard → drive out → for 2-3 addresses: drive along the streets to a firing spot, stop, fire a parcel at the address
 // → drive back to the depot door → park → wait → repeat. They are traffic cars with a mission: they obey the junction and give-way rules,
@@ -1677,7 +1678,7 @@ function shotHit(x,y,z,px,py,pz,owner){
 function fireShot(){if(shotCd>0)return;shotCd=SHOT_CD;
   const s=shots[shotNext];shotNext=(shotNext+1)%SHOT_MAX;
   const fx=Math.sin(car.h),fz=Math.cos(car.h),sp=SHOT_SPEED+Math.max(0,car.v);
-  s.on=true;s.rest=false;s.touched=false;s.owner='p';s.age=0;s.x=car.x+fx*3.1;s.y=1.5+car.gy;s.z=car.z+fz*3.1;s.vx=fx*sp;s.vz=fz*sp;s.vy=SHOT_UP;
+  s.on=true;s.rest=false;s.touched=false;s.owner='p';s.age=0;s.ox=s.oz=0;s.x=car.x+fx*3.1;s.y=1.5+car.gy;s.z=car.z+fz*3.1;s.vx=fx*sp;s.vz=fz*sp;s.vy=SHOT_UP;
   s.wx=(Math.random()-0.5)*10;s.wy=(Math.random()-0.5)*10;
   // muzzle pushed into a wall or a parked car: drop the parcel at the tank instead of firing it through
   if(shotHit(s.x,s.y,s.z,car.x,1.5+car.gy,car.z)){s.x=car.x;s.z=car.z;s.vx=s.vz=0;}
@@ -1685,7 +1686,7 @@ function fireShot(){if(shotCd>0)return;shotCd=SHOT_CD;
   netFire(s);}
 // a parcel fired by a delivery tank (owner 'ai'): flies and collides like yours, but never delivers one of your stops
 function spawnShot(x,z,fx,fz,sp,owner){const s=shots[shotNext];shotNext=(shotNext+1)%SHOT_MAX;
-  s.on=true;s.rest=false;s.touched=false;s.owner=owner;s.age=0;s.x=x+fx*3.1;s.y=1.5;s.z=z+fz*3.1;s.vx=fx*sp;s.vz=fz*sp;s.vy=SHOT_UP;
+  s.on=true;s.rest=false;s.touched=false;s.owner=owner;s.age=0;s.ox=s.oz=0;s.x=x+fx*3.1;s.y=1.5;s.z=z+fz*3.1;s.vx=fx*sp;s.vz=fz*sp;s.vy=SHOT_UP;
   s.wx=(Math.random()-0.5)*10;s.wy=(Math.random()-0.5)*10;s.g.visible=true;s.g.scale.setScalar(1);s.g.rotation.set(0,Math.atan2(fx,fz),0);s.g.position.set(s.x,s.y,s.z);return s;}
 function clearShots(){shots.forEach(s=>{s.on=false;s.g.visible=false;});shotCd=0;}
 function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
@@ -1702,7 +1703,7 @@ function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
         if(hit.top!==undefined){s.y=hit.top+0.25;s.vx=s.vy=s.vz=0;s.rest=true;s.g.rotation.x=s.g.rotation.z=0;break;} // lands on a roof
         s.x=px;s.y=py;s.z=pz;                                   // step back out of the obstacle, then bounce
         const nx=hit.n[0],ny=hit.n[1],nz=hit.n[2],vn=s.vx*nx+s.vy*ny+s.vz*nz;
-        if(hit.car&&hit.car.hold!==undefined&&ny===0&&!WORLD.on){ // parcel vs traffic car: the parcel shoves it (not in the shared city, where cars only bounce it)
+        if(hit.car&&hit.car.hold!==undefined&&ny===0&&(!WORLD.on||(s.owner==='p'&&!hit.car.net))){ // parcel vs traffic car: the parcel shoves it (World of DODO: only your own parcel, a car nobody else is pushing, which becomes yours)
           const c=hit.car;toDyn(c);if(c.rival&&s.owner==='p'&&!(c.stunT>0.5)){c.stunT=2.0;flash(T.rivalStun);}   // your parcel stuns a REDLINE tank
           const A=carBody(c),B={cx:s.x,cz:s.z,vx:s.vx,vz:s.vz,w:0,im:1/PARCEL_M,iI:0};
           impulse(A,B,s.x,s.z,nx,nz,0.35);putBody(c,A);s.vx=B.vx;s.vz=B.vz;}
@@ -1724,7 +1725,8 @@ function updateShots(dt){shotCd=Math.max(0,shotCd-dt);
           if(Math.hypot(s.vx,s.vz)<0.4){s.vx=s.vz=0;s.rest=true;s.g.rotation.x=s.g.rotation.z=0;break;}}}
     }
     if(!s.on)continue;
-    s.g.position.set(s.x,s.y,s.z);
+    if(s.ox||s.oz){const f=Math.exp(-6*dt);s.ox*=f;s.oz*=f;if(Math.abs(s.ox)+Math.abs(s.oz)<0.02)s.ox=s.oz=0;}   // World of DODO: another player's parcel slides onto its real path
+    s.g.position.set(s.x+(s.ox||0),s.y,s.z+(s.oz||0));
     if(!s.rest){s.g.rotation.x+=s.wx*dt;s.g.rotation.y+=s.wy*dt;}
   }}
 // ---------- pedestrians: people walk loops along the pavement around the blocks; a parcel (or the tank) knocks them over, they get back up ----------
@@ -1975,9 +1977,36 @@ function blockedAt(x,z,h){const fx=Math.sin(h)*1.55,fz=Math.cos(h)*1.55;if(!(fre
 // the closest distance between the front and rear circle centres of a tank at (x,z,h) and another player's tank o
 function tankGap(x,z,h,o){const fx=Math.sin(h)*1.55,fz=Math.cos(h)*1.55,gx=o.hx*1.55,gz=o.hz*1.55;let d=Infinity;
   for(const a of[-1,1])for(const b of[-1,1])d=Math.min(d,Math.hypot(x+fx*a-o.x-gx*b,z+fz*a-o.z-gz*b));return d;}
+// World of DODO: the tank moves by collide and slide. The original tried the new spot and refused a move that overlapped anything,
+// always with the new heading: steering against a wall stopped even a straight move, and on the construction site or next to
+// another tank a tank got stuck. Now it moves in short steps, each of its three circles is pushed out of whatever it overlaps
+// (buildings and site obstacles, standing trees and lamps, the other tanks), and it loses only the speed that went into the
+// obstacle, so it slides along walls (pushLoss).
+const TANK_C=[-1.55,0,1.55],TANK_CR=1.0;               // circle centres along the tank, their radius (as free() and blockedAt use it)
+function tankPen(x,z,h){const fx=Math.sin(h),fz=Math.cos(h);let best=null;
+  const take=(nx,nz,pen)=>{if(pen>1e-4&&(!best||pen>best.pen))best={nx,nz,pen};};
+  for(const j of TANK_C){const px=x+fx*j,pz=z+fz*j,w=solidPush(px,pz,TANK_CR);if(w)take(w.nx,w.nz,w.pen);
+    for(const p of propsNear(px,pz)){if(p.state!=='up')continue;const dx=px-p.x,dz=pz-p.z,d=Math.hypot(dx,dz);if(d>1e-6)take(dx/d,dz/d,p.r+TANK_CR-d);}
+    for(const o of NET.others.values()){if(!o.on||Math.abs(o.x-px)>5||Math.abs(o.z-pz)>5)continue;                 // another tank: its two circles
+      for(const b of[-1.55,1.55]){const dx=px-o.x-o.hx*b,dz=pz-o.z-o.hz*b,d=Math.hypot(dx,dz);if(d<2.1)take(d>1e-6?dx/d:-fx,d>1e-6?dz/d:-fz,2.1-d);}}}
+  return best;}
+// turn to heading nh and drive dist along it (steps of at most 0.4, so a thin wall cannot be skipped), pushed out of obstacles on the way
+function moveTank(nh,dist,dt){const n=Math.max(1,Math.ceil(Math.abs(dist)/0.4)),dh=(nh-car.h)/n,dd=dist/n;let px=0,pz=0;
+  for(let i=0;i<n;i++){car.h+=dh;car.x+=Math.sin(car.h)*dd;car.z+=Math.cos(car.h)*dd;
+    for(let it=0;it<3;it++){const p=tankPen(car.x,car.z,car.h);if(!p)break;car.x+=p.nx*p.pen;car.z+=p.nz*p.pen;px+=p.nx*p.pen;pz+=p.nz*p.pen;}}
+  pushLoss(px,pz,dt);}
+// pushed by (px,pz) out of something this frame: the tank keeps the speed that runs along the obstacle and loses what went into it;
+// a fast crash head-on bounces it back a little, as in the original
+function pushLoss(px,pz,dt){const l=Math.hypot(px,pz);if(l<1e-4||Math.abs(car.v)<0.01)return;
+  const d=(Math.sin(car.h)*px+Math.cos(car.h)*pz)/l*Math.sign(car.v);              // -1: straight into it, 0: along it
+  if(d>=0)return;
+  if(d<-0.85&&Math.abs(car.v)>8){car.v*=-0.25;return;}
+  car.v*=Math.exp(-6*d*d*dt);}
 // tank ↔ car: rigid-body collision. The tank is heavy (TANK_M vs CAR_M), so it shoves cars aside and loses only a little speed.
 // Normally the car gives way; if it is jammed against a kerb or a parked car, the tank is pushed back instead.
-function resolveTraffic(){const fx=Math.sin(car.h),fz=Math.cos(car.h);
+// World of DODO: a car of the shared city that you shove becomes yours for as long as it moves (toDyn); one someone else is shoving
+// does not give way, you slide off it.
+function resolveTraffic(dt){const fx=Math.sin(car.h),fz=Math.cos(car.h);let px=0,pz=0;
   for(const c of ALLCARS){if(Math.abs(c.x-car.x)>9||Math.abs(c.z-car.z)>9)continue;
     const cl=c.cl||1.2,thr=1.05+(c.cr||1.05);
     for(let it=0;it<4;it++){
@@ -1985,7 +2014,7 @@ function resolveTraffic(){const fx=Math.sin(car.h),fz=Math.cos(car.h);
       for(const j of[-1.55,1.55])for(const k of[-cl,cl]){const tx=car.x+fx*j,tz=car.z+fz*j,qx=c.x+chx*k,qz=c.z+chz*k,dx=qx-tx,dz=qz-tz,d=Math.hypot(dx,dz);
         if(d<thr&&(!best||thr-d>best.pen))best={pen:thr-d,nx:d>0.01?dx/d:chx,nz:d>0.01?dz/d:chz,px:(tx+qx)/2,pz:(tz+qz)/2};}
       if(!best)break;
-      if(WORLD.on||isScripted(c)){const bx=-best.nx*best.pen,bz=-best.nz*best.pen;if(!blockedAt(car.x+bx,car.z+bz,car.h)){car.x+=bx;car.z+=bz;}car.v*=0.6;continue;} // a scripted tank, or any car of the shared city: you bounce off it
+      if(isScripted(c)||(WORLD.on&&c.net)){const bx=-best.nx*best.pen,bz=-best.nz*best.pen;if(!blockedAt(car.x+bx,car.z+bz,car.h)){car.x+=bx;car.z+=bz;px+=bx;pz+=bz;}continue;} // a scripted tank, or a car another player is pushing
       toDyn(c);
       const A={cx:car.x,cz:car.z,vx:fx*car.v,vz:fz*car.v,w:0,im:1/TANK_M,iI:0},B=carBody(c);
       if(c.rival&&c.stunT<=0){const rv=-(c.vx*best.nx+c.vz*best.nz);                  // how fast the red tank is driving into you
@@ -1996,7 +2025,8 @@ function resolveTraffic(){const fx=Math.sin(car.h),fz=Math.cos(car.h);
       const ox=c.x,oz=c.z;c.x+=best.nx*best.pen*0.9;c.z+=best.nz*best.pen*0.9;
       const share=dynBlocked(c)?(c.x=ox,c.z=oz,1):0.1;                // 1 = the vehicle cannot move, the tank backs off the whole overlap
       const bx=-best.nx*best.pen*share,bz=-best.nz*best.pen*share;
-      if(!blockedAt(car.x+bx,car.z+bz,car.h)){car.x+=bx;car.z+=bz;}}}}
+      if(!blockedAt(car.x+bx,car.z+bz,car.h)){car.x+=bx;car.z+=bz;}}}
+  pushLoss(px,pz,dt);}
 
 function resolveTram(){const fx=Math.sin(car.h),fz=Math.cos(car.h);let hit=false;
   for(const v of TRAM.vag){if(Math.abs(v.x-car.x)>12||Math.abs(v.z-car.z)>12)continue;const A=TRAM_L/2+0.95,B=TRAM_W/2+0.95;
@@ -2022,15 +2052,10 @@ function updateDrive(dt){
   car.steer+=(st-car.steer)*Math.min(1,dt*7);
   const grip=Math.max(-1,Math.min(1,car.v/7))*(1-Math.min(0.45,Math.abs(car.v)/MAX*0.45));
   const nh=car.h+car.steer*2.0*dt*grip;
-  const nx=car.x+Math.sin(nh)*car.v*dt,nz=car.z+Math.cos(nh)*car.v*dt;
   const ox=car.x,oz=car.z;
-  breakProps(nx,nz,nh);                                            // fast enough: trees and lamps go down instead of blocking
-  if(!blockedAt(nx,nz,nh)){car.x=nx;car.z=nz;car.h=nh;}
-  else if(!blockedAt(nx,car.z,nh)){car.x=nx;car.h=nh;car.v*=0.96;}
-  else if(!blockedAt(car.x,nz,nh)){car.z=nz;car.h=nh;car.v*=0.96;}
-  else if(!blockedAt(car.x,car.z,nh)){car.h=nh;car.v*=-0.25;}
-  else car.v*=-0.25;
-  resolveTraffic();resolveTram();hitPeds();
+  breakProps(car.x+Math.sin(nh)*car.v*dt,car.z+Math.cos(nh)*car.v*dt,nh);   // fast enough: trees and lamps go down instead of blocking
+  moveTank(nh,car.v*dt,dt);                                        // World of DODO: collide and slide (see tankPen)
+  resolveTraffic(dt);resolveTram();hitPeds();
   const moved=Math.hypot(car.x-ox,car.z-oz);odo+=moved;lastMoved+=moved;
   const lt=trail[trail.length-1];if(Math.hypot(car.x-lt[0],car.z-lt[1])>2.5)trail.push([car.x,car.z]);
 
@@ -2189,10 +2214,17 @@ function updateFinale(dt){
 // everyone's tanks back in one snapshot. A parcel fired here is sent to the others, who fly the same parcel in their own world. Whether
 // it hits is decided on the screen of the tank it hits (there that tank is exactly where it is), and the server scores it for the
 // shooter: a person is worth POINTS (10), a bot 1. The bots (BOT1, BOT2, ...) are driven by the server, which also decides what hits them;
-// here they are drawn like the other players, in grey. The cars, the tram and the people stay each player's own, so a parcel can bounce
-// off a car that only one of you sees.
-const NET_SEND=1/15,NET_DELAY=130;                     // send interval (s); others are drawn this far (ms) behind their newest snapshot, between two
-const NET={ws:null,id:0,name:'',color:0,pts:0,want:false,live:false,inGame:false,err:'',retry:0,sendT:0,sid:0,others:new Map(),
+// here they are drawn like the other players, in grey. The cars, the tram and the people are the shared city, see below.
+//
+// World of DODO, timing, as most network games do it (Valve's Source engine; Gabriel Gambetta's and Glenn Fiedler's write-ups on
+// snapshot interpolation): every snapshot row says which moment of the server's clock it shows, and this browser draws the others INTERP
+// ms behind its estimate of that clock, between the two rows around that moment. Drawing by the time a packet arrived (as before) turned
+// network jitter, and every tick in which a player's report missed the server's beat, into a stop and a jump. When the next row is late,
+// a tank goes on along its heading for at most EXTRAP ms instead of stopping dead.
+// INTERP: a player's row can wait up to a tick on the server and the next snapshot comes a tick later, so two ticks (100 ms) plus room
+// for the network's jitter.
+const NET_SEND=1/20,INTERP=150,EXTRAP=150;            // send interval (s); the others are drawn this far (ms) behind the server's clock; at most this far past the newest row
+const NET={ws:null,id:0,name:'',color:0,pts:0,want:false,live:false,inGame:false,err:'',retry:0,sendT:0,sid:0,rr:0,off:null,others:new Map(),
   key:Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[b&63]).join('')};   // this page load: a reconnect keeps the score, a reload starts at 0
 // the colours a player can pick; the server accepts only these (COLORS in server/server.js, same order)
 const TANK_COLORS=[0x00a99a,0xf9aa8f,0x4d8dff,0xf2c94c,0x9b6bff,0xff7eb6,0x5ad1e6,0xff9f43,0xa3d977,0xeaebeb,0x7b8cff,0xc59b6d];
@@ -2202,6 +2234,23 @@ const r2=v=>Math.round(v*100)/100;
 function cleanName(s){const t=String(s||'').normalize('NFC').replace(/[\p{C}<>]/gu,'').replace(/\s+/g,' ').trim();return Array.from(t).slice(0,16).join('').trim();}
 const botName=s=>/^bot\s*\d+$/i.test(s);              // BOT1, bot 2, ...: kept for the bots
 function netName(id){const o=NET.others.get(id);return o?o.name:'?';}
+// the server's clock seen from here: the offset of the fastest snapshot so far (a slower one only adds network delay), creeping up slowly
+// in case the route got longer; null until the first snapshot
+function clockSample(ts){if(typeof ts!=='number')return;const o=performance.now()-ts;NET.off=NET.off===null||o<NET.off?o:NET.off+(o-NET.off)*0.01;}
+const serverNow=()=>performance.now()-NET.off;
+// a row ({t: server time, x, z, h, v, ...}) for something networked: rows only move forward, two seconds of them are kept
+function pushRow(b,e){if(b.length&&e.t<=b[b.length-1].t)return;b.push(e);if(b.length>40)b.shift();}
+// the networked thing at server time R from its rows b: between the two rows around R; past the newest it goes on along its heading for
+// at most EXTRAP ms; a jump between two rows (a respawn, a car turning back into the other lane) is not slid across. Writes into one
+// shared object and returns it, so the caller copies what it needs at once.
+const BODY={x:0,z:0,h:0,v:0,r:0,s:0};
+function bodyAt(b,R,jumpD){const n=b?b.length:0;if(!n)return null;
+  let i=n-1;while(i>0&&b[i].t>R)i--;                                             // the newest row not after R (or the oldest one)
+  const a=b[i],c=b[i+1],o=BODY;
+  if(!c||R<=a.t){const e=R>a.t?Math.min(R-a.t,EXTRAP)/1000:0;
+    o.x=a.x+Math.sin(a.h)*a.v*e;o.z=a.z+Math.cos(a.h)*a.v*e;o.h=a.h;o.v=a.v;o.r=a.r||0;o.s=a.s||0;return o;}
+  const k=Math.hypot(c.x-a.x,c.z-a.z)>jumpD?(R-a.t<c.t-R?0:1):(R-a.t)/(c.t-a.t);
+  o.x=lerp(a.x,c.x,k);o.z=lerp(a.z,c.z,k);o.h=angLerp(a.h,c.h,k);o.v=lerp(a.v,c.v,k);o.r=lerp(a.r||0,c.r||0,k);o.s=(k<0.5?a:c).s||0;return o;}
 function netSend(m){if(NET.live&&NET.ws&&NET.ws.readyState===1)NET.ws.send(JSON.stringify(m));}
 function netConnect(){let ws;
   try{ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');}catch(e){netFail(T.errConn);return;}
@@ -2214,8 +2263,9 @@ function netConnect(){let ws;
     if(was)flash(T.lost);
     NET.retry=Math.min(5000,(NET.retry||500)*2);setTimeout(netConnect,NET.retry);};}       // in the game: keep driving, keep trying
 function netMsg(m){
-  if(m.t==='snap'){const t=performance.now();
-    for(const s of m.p){const o=NET.others.get(s[0]);if(!o)continue;o.buf.push({t,x:s[1],z:s[2],h:s[3],v:s[4],r:s[5],s:s[6]});if(o.buf.length>30)o.buf.shift();}}
+  if(m.t==='snap'){clockSample(m.ts);
+    for(const s of m.p){const o=NET.others.get(s[0]);if(o)pushRow(o.buf,{t:s[7]??m.ts,x:s[1],z:s[2],h:s[3],v:s[4],r:s[5],s:s[6]});}   // t: the moment the row shows
+    worldSnap(m);}
   else if(m.t==='fire')netShot(m);
   else if(m.t==='w')worldMsg(m);
   else if(m.t==='prop')propMsg(m);
@@ -2229,7 +2279,7 @@ function netMsg(m){
   else if(m.t==='leave'){const o=NET.others.get(m.id);if(o){netDrop(o);NET.others.delete(m.id);renderBoard();}}
   else if(m.t==='welcome'){NET.live=true;NET.retry=0;NET.err='';NET.id=m.id;NET.name=m.name;NET.color=m.color;NET.pts=m.pts;paintMat(vanOwnMat,m.color);
     NET.others.forEach(netDrop);NET.others.clear();m.players.forEach(netAdd);renderBoard();
-    WORLD.buf.length=0;
+    NET.off=null;worldClear();                                                     // the server may have restarted: a new clock, a new city
     if(!NET.inGame){NET.inGame=true;WORLD.on=true;start();}else flash(T.back);
     propsDown(m.props);}
   else if(m.t==='err')NET.err={name_taken:T.errTaken,name_reserved:T.errReserved,full:T.errFull}[m.code]||T.errName;}   // the server closes the socket next
@@ -2253,21 +2303,30 @@ const TAG_H=0.042;                                     // name tag height as a s
 function netShot(m){const o=NET.others.get(m.id);if(!o)return;
   const s=shots[shotNext];shotNext=(shotNext+1)%SHOT_MAX;
   Object.assign(s,{on:true,rest:false,touched:false,owner:'r',by:m.id,sid:m.sid,scored:false,age:0,x:m.x,y:m.y,z:m.z,vx:m.vx,vy:m.vy,vz:m.vz,wx:(Math.random()-0.5)*10,wy:(Math.random()-0.5)*10});
-  s.g.visible=true;s.g.scale.setScalar(1);s.g.rotation.set(0,Math.atan2(m.vx,m.vz),0);s.g.position.set(s.x,s.y,s.z);}
-function netFire(s){s.sid=++NET.sid;netSend({t:'fire',sid:s.sid,x:r2(s.x),y:r2(s.y),z:r2(s.z),vx:r2(s.vx),vy:r2(s.vy),vz:r2(s.vz)});}
+  // World of DODO: the parcel flies from where the shooter really was; here the shooter's tank is drawn a little in the past. So it is
+  // drawn leaving the barrel you see and slides onto its real path within a fraction of a second (it hits where it really is).
+  const l=Math.hypot(m.vx,m.vz),dx=o.x+(l>0.01?m.vx/l*3.1:0)-m.x,dz=o.z+(l>0.01?m.vz/l*3.1:0)-m.z,far=!o.on||Math.hypot(dx,dz)>12;
+  s.ox=far?0:dx;s.oz=far?0:dz;
+  s.g.visible=true;s.g.scale.setScalar(1);s.g.rotation.set(0,Math.atan2(m.vx,m.vz),0);s.g.position.set(s.x+s.ox,s.y,s.z+s.oz);}
+// rt: the moment of the city drawn here when you fired (server clock): the server tests the parcel against the bots where you saw them
+function netFire(s){s.sid=++NET.sid;const m={t:'fire',sid:s.sid,x:r2(s.x),y:r2(s.y),z:r2(s.z),vx:r2(s.vx),vy:r2(s.vy),vz:r2(s.vz)};
+  if(NET.off!==null)m.rt=Math.round(serverNow()-INTERP);netSend(m);}
 function netHit(s,kill){netSend({t:'hit',by:s.by,sid:s.sid,kill});}
-// every frame: send this tank now and then, draw the others between their two snapshots around NET_DELAY ago
+// the cars this tank pushes (or has just let go of), for the server: [index, x, z, heading, speed, let go]; at most 8 a message, taking turns
+function pushedRows(){const all=BODIES.filter(c=>(c.mine&&c.dyn)||c.rel),out=[];
+  for(let k=0;k<all.length&&out.length<8;k++){const c=all[(k+NET.rr)%all.length];
+    out.push([c.ni,r2(c.x),r2(c.z),Math.round(c.ang*1000)/1000,r2(Math.hypot(c.vx||0,c.vz||0)),c.rel?1:0]);c.rel=false;}
+  NET.rr+=8;return out;}
+// every frame: send this tank 20 times a second (ct: the moment, on this browser's clock), draw the others INTERP ms behind the server
 function netUpdate(dt,tnow){
-  if(state==='drive'&&NET.live){NET.sendT-=dt;if(NET.sendT<=0){NET.sendT=NET_SEND;
-    netSend({t:'st',x:r2(car.x),z:r2(car.z),h:Math.round(car.h*1000)/1000,v:r2(car.v),r:r2(car.roll),s:car.immT>0?1:0});}}
+  if(state==='drive'&&NET.live){NET.sendT-=dt;if(NET.sendT<=0){NET.sendT=Math.max(0,NET.sendT+NET_SEND);   // on average 20 a second, whatever the frame rate
+    const m={t:'st',ct:Math.round(tnow),x:r2(car.x),z:r2(car.z),h:Math.round(car.h*1000)/1000,v:r2(car.v),r:r2(car.roll),s:car.immT>0?1:0},c=pushedRows();
+    if(c.length)m.c=c;netSend(m);}}
   if(NET.live&&tnow-(NET.pingAt||0)>2000){NET.pingAt=tnow;netSend({t:'ping',c:Math.round(tnow)});}   // the ping in the performance readout
-  const rt=tnow-NET_DELAY;
-  for(const o of NET.others.values()){const b=o.buf;if(!b.length)continue;
-    while(b.length>2&&b[1].t<=rt)b.shift();
-    const a=b[0],c=b[1]||a,jump=Math.hypot(c.x-a.x,c.z-a.z)>20;                                         // a respawn: no sliding across the city
-    const k=jump?(rt>=c.t?1:0):c.t>a.t?Math.max(0,Math.min(1,(rt-a.t)/(c.t-a.t))):1;
-    o.x=lerp(a.x,c.x,k);o.z=lerp(a.z,c.z,k);o.h=angLerp(a.h,c.h,k);o.v=lerp(a.v,c.v,k);o.r=lerp(a.r,c.r,k);o.hx=Math.sin(o.h);o.hz=Math.cos(o.h);
-    o.s=(k<0.5?a:c).s;
+  if(NET.off===null)return;
+  const R=serverNow()-INTERP;
+  for(const o of NET.others.values()){const s=bodyAt(o.buf,R,20);if(!s)continue;                       // 20: a respawn, no sliding across the city
+    o.x=s.x;o.z=s.z;o.h=s.h;o.v=s.v;o.r=s.r;o.s=s.s;o.hx=Math.sin(o.h);o.hz=Math.cos(o.h);
     o.on=true;
     o.g.visible=!(o.s&&Math.floor(tnow/110)%2);                                                           // blinks while immune after a (re)spawn
     const gy=groundH(o.x,o.z);o.g.position.set(o.x,gy+0.9*Math.abs(Math.sin(o.r)),o.z);o.g.rotation.y=o.h;o.g.rotation.z=o.r;
@@ -2301,22 +2360,49 @@ function renderBoard(){
 function joinErr(msg){const e=$('joinErr');e.textContent=msg;e.hidden=!msg;}
 
 // ---------- WORLD OF DODO: the shared city ----------
-// Once you play, the cars, the tram and the pedestrians come from the server (server/world.js), which moves them for everyone; the
-// browser only draws them between two snapshots (about 7 a second) WORLD_DELAY ms behind. Cars are solid: a tank bounces off them.
-// A pedestrian your tank or your own parcel hits is reported, and falls (for everyone) when the server says so. A tree or a lamp you
-// knock down falls here at once and is passed on to the others. Before you join, the intro shows the browser's own city as before.
-const WORLD_DELAY=260;
+// Once you play, the cars, the tram and the pedestrians come from the server (server/world.js), which moves them for everyone; this
+// browser draws them like the other tanks, INTERP ms behind the server's clock (the pedestrians, sent half as often, PED_INTERP).
+// A car your tank (or a car you pushed) runs into becomes yours, as the original let the van shove the traffic about: this browser
+// moves it with the original body physics, reports it with every state of your tank, and lets go of it once it has come to rest;
+// the server then puts it back into the traffic (a parked car stays where it ended up). A car someone else is pushing is theirs
+// (snapshot field k): for you it is solid and does not give way until they let go. A pedestrian your tank or your own parcel hits
+// falls here at once and is reported; the server knocks them over for everyone (if it does not, because someone else was first,
+// they stand up again here). A tree or a lamp you knock down falls here at once and is passed on to the others. Before you join,
+// the intro shows the browser's own city as before.
+const PED_INTERP=INTERP+50;                            // the pedestrians come every other tick
 const WORLD={on:false,buf:[]};
-function worldMsg(m){WORLD.buf.push({t:performance.now(),n:m.n,c:m.c,m:m.m,p:m.p});if(WORLD.buf.length>20)WORLD.buf.shift();}
-// a car between snapshots a and n (k from 0 to 1) as [x, z, heading, speed]; a car turning back changes lane, so no sliding across
-function worldCar(a,n,k,i){const j=i*4,ax=a.c[j],az=a.c[j+1],nx=n.c[j],nz=n.c[j+1],kk=Math.hypot(nx-ax,nz-az)>4?(k<0.5?0:1):k;
-  return[lerp(ax,nx,kk),lerp(az,nz,kk),angLerp(a.c[j+2],n.c[j+2],kk),lerp(a.c[j+3],n.c[j+3],kk)];}
-// the city at server tick s, from the snapshots this browser holds (tools/browser-test.js compares two players with it), or null
-function worldAt(s){const b=WORLD.buf;
-  for(let i=0;i+1<b.length;i++){const a=b[i],n=b[i+1];if(a.n>s||n.n<s)continue;const k=(s-a.n)/((n.n-a.n)||1);
-    return{cars:TRAFFIC.slice(0,N_CARS).map((c,q)=>worldCar(a,n,k,q).slice(0,2)),peds:PEDS.map((p,q)=>[lerp(a.p[q*5],n.p[q*5],k),lerp(a.p[q*5+1],n.p[q*5+1],k)])};}
-  return null;}
-function netPed(p,vx,vz){const t=now();if(t-(p.sentAt||0)<600)return;p.sentAt=t;netSend({t:'ped',i:p.id,vx:r2(vx),vz:r2(vz)});}
+const BODIES=TRAFFIC.slice(0,N_CARS).concat(PARKED);BODIES.forEach((c,i)=>{c.ni=i;c.nb=[];});   // what the server shares: index i in its messages
+TRAM.nb=[];
+function worldClear(){WORLD.buf.length=0;TRAM.nb.length=0;BODIES.forEach(c=>{c.nb.length=0;c.net=0;if(c.mine)dropBody(c);});resetParked();}
+// pedestrians, every other snapshot: kept whole, by the moment they show
+function worldMsg(m){clockSample(m.ts);const b=WORLD.buf;if(b.length&&m.ts<=b[b.length-1].t)return;b.push({t:m.ts,n:m.n,p:m.p});if(b.length>40)b.shift();}
+// the cars and the tram of a tank snapshot: a row for every car (a pushed one at the moment its owner reported it) and whose it is
+function worldSnap(m){if(!m.c)return;
+  const own=new Map(),rest=new Map();for(const k of m.k||[])own.set(k[0],k);for(const q of m.q||[])rest.set(q[0],q);
+  for(const c of BODIES){const i=c.ni,k=own.get(i);netOwner(c,k?k[1]:0);
+    if(k)pushRow(c.nb,{t:k[2],x:k[3],z:k[4],h:k[5],v:k[6]});
+    else if(i<N_CARS){const j=i*4;pushRow(c.nb,{t:m.ts,x:m.c[j],z:m.c[j+1],h:m.c[j+2],v:m.c[j+3]});}
+    else{const q=rest.get(i);if(q)pushRow(c.nb,{t:m.ts,x:q[1],z:q[2],h:q[3],v:0});
+      else if(c.nb.length&&!c.mine){c.nb.length=0;c.tow=true;}}}                  // a parked car that is not out of its spot any more: towed home
+  pushRow(TRAM.nb,{t:m.ts,x:m.m,z:0,h:0,v:0});}
+// whose the car is: c.net = the id of another player pushing it (0: nobody else). A car this tank claimed and the server did not give
+// it (someone else was first, or it was refused) is given up after a moment, and from then on drawn from the server again.
+function netOwner(c,o){c.net=o&&o!==NET.id?o:0;
+  if(!c.mine)return;
+  if(o===NET.id)c.ackAt=now();else if(c.net||now()-(c.ackAt||c.claimAt)>1500)dropBody(c);}
+function dropBody(c){c.dyn=false;c.mine=false;c.rel=false;c.calm=0;if(c.parked&&!c.nb.length)towHome(c);}   // a parked car the server never had out of its spot goes back to it
+// let go of a car that has come to rest: the next state of the tank tells the server, which puts it back into the traffic
+function letGo(c){c.dyn=false;c.mine=false;c.rel=true;c.calm=0;}
+// the city at server time t, from the rows this browser holds (tools/browser-test.js compares two players with it), or null
+function worldAt(t){const b=WORLD.buf;let peds=null;
+  for(let i=0;i+1<b.length;i++){const a=b[i],n=b[i+1];if(a.t>t||n.t<t)continue;const k=(t-a.t)/((n.t-a.t)||1);
+    peds=PEDS.map((p,q)=>[lerp(a.p[q*5],n.p[q*5],k),lerp(a.p[q*5+1],n.p[q*5+1],k)]);break;}
+  if(!peds)return null;
+  const cars=[];for(let i=0;i<N_CARS;i++){const nb=TRAFFIC[i].nb;if(!nb.length||nb[0].t>t||nb[nb.length-1].t<t)return null;const s=bodyAt(nb,t,4);cars.push([s.x,s.z]);}
+  return{cars,peds};}
+// your tank or your own parcel knocked pedestrian p over: they fall here at once, as the server will make them fall for everyone
+function predictPed(p,vx,vz){if(p.pred||p.state!=='walk')return;const l=Math.hypot(vx,vz)||1;p.pred={t:now(),x:p.x,z:p.z,fx:vx/l,fz:vz/l,sp:Math.min(8,l*0.5)};}
+function netPed(p,vx,vz){predictPed(p,vx,vz);const t=now();if(t-(p.sentAt||0)<600)return;p.sentAt=t;netSend({t:'ped',i:p.id,vx:r2(vx),vz:r2(vz)});}
 function netProp(p){if(WORLD.on)netSend({t:'prop',i:p.i,fx:r2(p.fx),fz:r2(p.fz)});}
 // another player's tank knocked a prop down (it falls the way they saw it fall), or it stands up again after a while
 function propMsg(m){const p=PROPS[m.i];if(!p)return;
@@ -2326,20 +2412,33 @@ function propMsg(m){const p=PROPS[m.i];if(!p)return;
 function propsDown(list){for(const[i,fx,fz]of list||[]){const p=PROPS[i];if(!p)continue;p.fx=fx;p.fz=fz;p.state='down';p.th=p.th0;p.apply(p);}}
 function worldUpdate(dt,tnow){
   for(const c of TRAFFIC)if(c.rival&&c.mode!=='wreck'&&!c.dyn)updateScript(c,dt);            // REDLINE stays parked in its yard
-  const b=WORLD.buf;if(!b.length)return;
-  const rt=tnow-WORLD_DELAY;while(b.length>2&&b[1].t<=rt)b.shift();
-  const a=b[0],n=b[1]||a,k=n.t>a.t?Math.max(0,Math.min(1,(rt-a.t)/(n.t-a.t))):1;
-  // cars: the first N_CARS of TRAFFIC, in the server's order, as x, z, heading, speed
-  for(let i=0;i<N_CARS&&i*4<a.c.length;i++){const c=TRAFFIC[i],[x,z,h,v]=worldCar(a,n,k,i);
-    c.x=x;c.z=z;c.hx=Math.sin(h);c.hz=Math.cos(h);c.v=v;
-    c.g.position.set(c.x,0,c.z);c.g.rotation.y=h;c.g.userData.wheels.forEach(w=>w.rotation.x+=c.v*dt/0.34);}
+  if(NET.off===null)return;
+  const R=serverNow()-INTERP;
+  // the cars (and the parked cars out of their spot): yours run the original physics until they rest, the others come from their rows
+  for(const c of BODIES){
+    if(c.mine&&c.dyn){updateDyn(c,dt);continue;}
+    if(c.parked){if(c.tow){c.tow=false;towHome(c);}if(!c.nb.length)continue;}
+    const s=bodyAt(c.nb,R,4);if(!s)continue;                                                   // 4: a car turning back changes lane, no sliding across
+    if(c.parked){if(s.x!==c.x||s.z!==c.z||s.h!==c.ang){c.x=s.x;c.z=s.z;c.ang=s.h;c.hx=Math.sin(s.h);c.hz=Math.cos(s.h);c.moved=true;placeParked(c);}continue;}
+    c.x=s.x;c.z=s.z;c.ang=s.h;c.hx=Math.sin(s.h);c.hz=Math.cos(s.h);c.v=s.v;c.gy=(c.gy||0)+(groundH(c.x,c.z)-(c.gy||0))*Math.min(1,dt*12);
+    c.g.position.set(c.x,c.gy,c.z);c.g.rotation.y=s.h;c.g.userData.wheels.forEach(w=>w.rotation.x+=c.v*dt/0.34);}
   // the tram: its place along the track, which wraps around at the end of the loop
-  const Lp=TRAM_PATH.len;let ds=n.m-a.m;if(ds<-Lp/2)ds+=Lp;else if(ds>Lp/2)ds-=Lp;TRAM.s=((a.m+ds*k)%Lp+Lp)%Lp;placeTram();
+  const tb=TRAM.nb;
+  if(tb.length){const Lp=TRAM_PATH.len;let i=tb.length-1;while(i>0&&tb[i].t>R)i--;const a=tb[i],b=tb[i+1];let ts=a.x;
+    if(b&&R>a.t){let ds=b.x-a.x;if(ds<-Lp/2)ds+=Lp;else if(ds>Lp/2)ds-=Lp;ts=a.x+ds*(R-a.t)/(b.t-a.t);}
+    TRAM.s=((ts%Lp)+Lp)%Lp;placeTram();}
   // pedestrians as x, z, heading, tilt, fall direction
+  const b=WORLD.buf;if(!b.length)return;
+  const Rp=serverNow()-PED_INTERP;let i=b.length-1;while(i>0&&b[i].t>Rp)i--;
+  const a=b[i],n=b[i+1]||a,k=n.t>a.t?Math.max(0,Math.min(1,(Rp-a.t)/(n.t-a.t))):1,tn=now();
   if(a.p.length<PEDS.length*5)return;
-  for(let i=0;i<PEDS.length;i++){const p=PEDS[i],j=i*5,jump=Math.hypot(n.p[j]-a.p[j],n.p[j+1]-a.p[j+1])>6,kk=jump?(k<0.5?0:1):k;   // jump: gone, and back elsewhere
-    const x=lerp(a.p[j],n.p[j],kk),z=lerp(a.p[j+1],n.p[j+1],kk),d=Math.hypot(x-p.x,z-p.z);
-    if(d<3)p.phase+=d*3.2;p.x=x;p.z=z;p.h=angLerp(a.p[j+2],n.p[j+2],kk);p.th=lerp(a.p[j+3],n.p[j+3],kk);
+  for(let q=0;q<PEDS.length;q++){const p=PEDS[q],j=q*5,jump=Math.hypot(n.p[j]-a.p[j],n.p[j+1]-a.p[j+1])>6,kk=jump?(k<0.5?0:1):k;   // jump: gone, and back elsewhere
+    const x=lerp(a.p[j],n.p[j],kk),z=lerp(a.p[j+1],n.p[j+1],kk),th=lerp(a.p[j+3],n.p[j+3],kk);
+    if(p.pred){const d=p.pred,e=(tn-d.t)/1000;                                                 // knocked over here: falling ahead of the server
+      if(th>=1.4||(e>1.5&&th<0.01)||e>4)p.pred=null;                                          // the server's fall has caught up (or never came)
+      else{const o=d.sp*(1-Math.exp(-4*e))/4;p.x=d.x+d.fx*o;p.z=d.z+d.fz*o;p.th=Math.max(th,pedEase(e/0.4)*1.45);p.fx=d.fx;p.fz=d.fz;p.state='down';placePed(p);continue;}}
+    const dd=Math.hypot(x-p.x,z-p.z);
+    if(dd<3)p.phase+=dd*3.2;p.x=x;p.z=z;p.h=angLerp(a.p[j+2],n.p[j+2],kk);p.th=th;
     const fa=(kk<0.5?a:n).p[j+4];p.fx=Math.sin(fa);p.fz=Math.cos(fa);p.state=p.th>0.001?'down':'walk';placePed(p);}
   pedDirty();}
 
@@ -2464,7 +2563,7 @@ $('joinForm').addEventListener('submit',e=>{e.preventDefault();const b=$('startB
   joinErr('');b.disabled=true;$('startLbl').textContent=T.connecting;NET.name=name;NET.want=true;NET.err='';netConnect();});
 
 // automated tests (tools/browser-test.js) open the page with ?test and reach the game through this; nothing else uses it
-if(new URLSearchParams(location.search).has('test'))window.WOD={car,NET,get state(){return state;},K,PERF,setQuality,renderer,scene,WORLD,TRAFFIC,PEDS,worldAt};
+if(new URLSearchParams(location.search).has('test'))window.WOD={car,NET,get state(){return state;},K,PERF,setQuality,renderer,scene,WORLD,TRAFFIC,PARKED,BODIES,PEDS,worldAt,serverNow,moveTank};
 
 resize();initQuality();reset();frame();
 const ready=()=>{const b=$('startBtn');b.disabled=false;$('startLbl').textContent=T.start;if(!COARSE)nameIn.focus();};

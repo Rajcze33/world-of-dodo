@@ -17,8 +17,9 @@ Christmas 2026, where the delivery van had already turned into a tank.
 - **The bots** are driven by the server: they roam the streets, chase the nearest player and shoot back.
 - **A construction site** south of the city: containers, a half-built house, sand piles, barriers, machines
   and a tower crane. Everything there is cover: it stops parcels, tanks and the line of sight.
-- **A shared city.** The cars, the tram and the pedestrians are the same for everyone. A pedestrian a tank
-  or a parcel knocks down lies there for a while, then is gone and walks again somewhere else.
+- **A shared city.** The cars, the tram and the pedestrians are the same for everyone. Tanks shove cars
+  about as in the original game, and everyone sees the car fly. A pedestrian a tank or a parcel knocks
+  down lies there for a while, then is gone and walks again somewhere else.
 - **Names only in plain sight.** A tank's name glows above it only while nothing stands between you,
   and it shows on the minimap only once you have spotted it. The scoreboard lists everybody.
 - **Runs on modest hardware.** The quality drops by itself when the frames do not keep up; F shows
@@ -71,11 +72,16 @@ docs/PROTOCOL.md    every message between the browser and the server
 ```
 
 The server does not simulate the players. Each browser drives its own tank and sends where it is,
-about 15 times a second; the server sends everyone's tanks back in one snapshot. A fired parcel is
+20 times a second; the server sends everyone's tanks back in one snapshot. A fired parcel is
 passed on, and every browser flies it. **The player who gets hit decides the hit**, because on that
 screen their tank is exactly where it is; the server then awards the points. The bots and the life
 of the city (cars, tram, pedestrians) run on the server, so everyone sees the same city, and the
-server decides what hits a bot.
+server decides what hits a bot. **A car a tank shoves is that player's** until it comes to rest: their
+browser moves it and the server passes it on.
+
+Every row of a snapshot carries the moment it shows on the server's clock, and the browsers draw the
+others a fixed 150 ms behind that clock, between two rows (snapshot interpolation, as most network games
+do it), so the network's jitter does not show. [docs/PROTOCOL.md](docs/PROTOCOL.md) has the details.
 
 The game page is one self-contained HTML file on purpose: no build step, no bundler. three.js r128
 and the fonts are served from `client/vendor` and `client/fonts`.
@@ -124,8 +130,9 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 
 - **The clients are trusted.** A modified browser can lie about its own tank or report hits. It is a
   game for fun, not a tournament.
-- The city is shared (cars, tram, pedestrians, knocked-down trees and lamps), but the cars cannot be
-  pushed: everyone would see them somewhere else. They stop for tanks, and turn back if one stays in the way.
+- What you see of the others is 150 ms old, plus the network's delay: a tank you ram is where it was a
+  moment ago on its owner's screen. A car somebody else is pushing does not give way to you until they
+  let go of it.
 - One server is one world. More players than `MAX_PLAYERS` wait outside.
 - The minimap shows the city only; the construction site lies just below its bottom edge.
 

@@ -1,14 +1,20 @@
 // World of DODO: the multiplayer server.
 //
 // It serves the game (client/) and relays the players over one WebSocket at /ws. It does not simulate the
-// players: each client drives its own tank and its own city, sends where the tank is about 15 times a
-// second and gets everyone's tanks back in one snapshot per tick. A parcel fired by one player is passed on
+// players: each client drives its own tank, sends where the tank is 20 times a second and gets everyone's
+// tanks back in one snapshot per tick. A parcel fired by one player is passed on
 // to the others, who fly the same parcel in their own world. Whether it hits is decided by the player it
 // hits (on that screen the target tank is exactly where it is), and the server scores it for the shooter.
 //
 // The bots (BOT1, BOT2, ...) are the exception: they live here (server/bots.js), so this server drives them,
 // fires their parcels and decides when a parcel hits one of them. So does the life of the city (server/world.js):
-// the cars, the tram and the pedestrians move here and everyone gets the same picture of them.
+// the cars, the tram and the pedestrians move here and everyone gets the same picture of them. A car a player's
+// tank shoves is that player's until it comes to rest: their browser moves it and the server passes it on.
+//
+// Timing, as in the usual snapshot interpolation of network games: every row of a snapshot carries the moment it
+// describes on this server's clock (ms since the start). A player's row gets the moment the player's browser
+// took it, mapped onto the server's clock (see state()), so the pace of their tank survives the network and
+// the tick. The browsers draw everything a fixed delay behind the server's clock, between two such rows.
 //
 // Everything lives in memory: a player is a name, a colour and a score for as long as they are connected.
 // Nothing is written anywhere.
@@ -25,11 +31,12 @@ const PORT = Number(process.env.PORT) || 3000;
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS) || 24;     // people; the bots come on top
 const BOTS = Math.max(0, Math.min(8, Number(process.env.BOTS ?? 3)));
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
-const TICK_MS = 66;                // snapshot rate, about 15 Hz (the clients send at the same rate)
+const TICK_MS = 50;                // snapshot rate, 20 Hz (the clients send at the same rate)
+const REWIND_MAX_MS = 400;         // a parcel aimed at a bot is tested against where the bot was up to this long ago
 const SHOT_TTL_MS = 15000;         // a parcel can score this long after it was fired (it lives 14 s in the game)
 const REJOIN_MS = 60000;           // a player who lost the connection and comes back from the same page keeps the score
 const HEARTBEAT_MS = 15000;        // ping every socket; one that has not answered since the last ping is dropped
-const MSG_PER_SEC = 60;            // a client sends about 15 states, at most ~4 parcels and a few hits a second
+const MSG_PER_SEC = 90;            // a client sends 20 states, a ping, at most ~4 parcels and a few hits a second
 const NAME_MAX = 16;
 const WORLD = 300;                 // the game's world ends at 250 units from the centre
 
@@ -149,6 +156,8 @@ function broadcast(msg, except) {
 }
 
 const num = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
+// the server's clock for the snapshots: ms since the start, monotonic (a clock adjustment of the machine must not jump it)
+const clock = () => Math.round(performance.now());
 
 function welcome(p) {
   send(p.ws, { t: 'welcome', id: p.id, name: p.name, color: p.color, pts: p.pts,
@@ -198,14 +207,27 @@ function leave(ws) {
   ws.player = null;
   players.delete(p.id);
   if (p.key) recent.set(p.key, { name: p.name, pts: p.pts, until: Date.now() + REJOIN_MS });
+  world.dropOwner(p.id);                                // the cars they were pushing go back to the traffic
   broadcast({ t: 'leave', id: p.id });
   if (!humans().length) removeBots();                   // nobody left to play with: the bots go home
   console.log(`leave #${p.id} (${humans().length} online)`);
 }
 
+// A player's tank (and the cars it pushes, field c). ct is the moment the browser took it, on the browser's own clock. Its offset
+// to the server's clock is the smallest arrival delay seen so far (a report that came faster shows the true offset better; the
+// estimate creeps up slowly in case the route got longer), so the stamp keeps the browser's pace whatever the network does.
 function state(p, m) {
   if (!num(m.x, WORLD) || !num(m.z, WORLD) || !num(m.h, 100) || !num(m.v, 40) || !num(m.r, 4)) return;
-  p.st = [p.id, m.x, m.z, m.h, m.v, m.r, m.s === 1 ? 1 : 0];     // s: just (re)spawned and immune, the others draw it blinking
+  const now = clock();
+  let ts = now;
+  if (num(m.ct, 1e12)) {
+    const off = now - m.ct;
+    p.off = p.off === undefined || off < p.off ? off : p.off + (off - p.off) * 0.01;
+    ts = Math.round(m.ct + p.off);
+  }
+  if (p.st && ts <= p.st[7]) ts = p.st[7] + 1;
+  p.st = [p.id, m.x, m.z, m.h, m.v, m.r, m.s === 1 ? 1 : 0, ts];  // s: just (re)spawned and immune, the others draw it blinking
+  if (Array.isArray(m.c)) world.carsFrom(p.id, { x: m.x, z: m.z }, m.c, ts);
 }
 
 function remember(p, sid) {
@@ -220,7 +242,9 @@ function fire(p, m) {
   remember(p, m.sid);
   const shot = { t: 'fire', id: p.id, sid: m.sid, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz };
   broadcast(shot, p);
-  if (players.size > humans().length && parcels.length < 300) parcels.push({ ...shot, by: p.id, age: 0 });
+  // rt: the moment of the city the shooter saw when firing (server clock); the bots are tested where they were then
+  const lag = num(m.rt, 1e12) ? Math.max(0, Math.min(REWIND_MAX_MS, clock() - m.rt)) : 200;
+  if (players.size > humans().length && parcels.length < 300) parcels.push({ ...shot, by: p.id, age: 0, lag });
 }
 
 // A scoring hit: once per parcel, only for a parcel the shooter really fired and only while it can still fly.
@@ -316,18 +340,24 @@ wss.on('connection', ws => {
 });
 
 // Each tick: the bots drive and fire, the city moves on (in two half steps: its code was written for browser frames),
-// then one snapshot of every tank goes to everyone; every second tick also one of the city.
+// then one snapshot goes to everyone: every tank, the cars and the tram; every second tick also the pedestrians.
+// ts: the server's clock now, the moment of the bots, the traffic and the tram; n: the tick (the same for everyone).
 let lastTick = Date.now(), tick = 0;
 setInterval(() => {
   const now = Date.now(), dt = Math.min(0.2, (now - lastTick) / 1000);
   lastTick = now;
   if (!humans().length) return;                         // nobody to watch: the city waits
   stepBots(dt);
-  const p = [], tanks = [];
-  for (const pl of players.values()) if (pl.st) { p.push(pl.st); tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] }); }
+  const ts = clock(), p = [], tanks = [];
+  for (const pl of players.values()) {
+    if (!pl.st) continue;
+    if (pl.bot) pl.st[7] = ts;
+    p.push(pl.st); tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] });
+  }
   for (let k = 0; k < 2; k++) for (const i of world.step(dt / 2, tanks)) broadcast({ t: 'prop', i, up: 1 });
-  if (p.length) broadcast({ t: 'snap', p });
-  if (++tick % 2 === 0) broadcast({ ...world.snapshot(), n: tick });   // n: the server's tick, the same snapshot for everyone
+  tick++;
+  broadcast({ t: 'snap', ts, n: tick, p, ...world.fast() });
+  if (tick % 2 === 0) broadcast({ t: 'w', ts, n: tick, ...world.slow() });
 }, TICK_MS);
 
 // The message budget refills once a second.

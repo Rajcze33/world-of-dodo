@@ -1,6 +1,7 @@
 // Browser test of World of DODO: two players in headless Chrome pick a name and a colour, see each other and
-// the bots, one shoots the other, the points show in both scoreboards, and a hit that destroys the tank
-// brings it back somewhere else. Saves screenshots for a look by eye.
+// the bots and the same city, a tank slides along a wall instead of sticking to it, a car one of them shoves
+// is his for the other too, one shoots the other, the points show in both scoreboards, and a hit that destroys
+// the tank brings it back somewhere else. Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
 //   node tools/browser-test.js [http://localhost:3400] [screenshot folder]
@@ -88,16 +89,42 @@ async function shoot(a, b, petrHits) {
     check(botsSeen === 'BOT1,BOT2,BOT3', `Rosta sees the bots (${botsSeen})`);
     check((await a.$eval('#online', e => e.textContent)) === '2 online', 'the HUD says 2 online (the bots do not count)');
 
-    // the shared city: at the same server moment both have every car and pedestrian in the same place. (Comparing what the two
-    // windows show right now would measure headless Chrome, which draws a frame every few hundred ms, not the game.)
+    // the shared city: at the same moment of the server's clock both have every car and pedestrian in the same place. (Comparing
+    // what the two windows show right now would measure headless Chrome, which draws a frame every few hundred ms, not the game.)
     await Promise.all([a, b].map(p => p.waitForFunction(() => WOD.WORLD.buf.length > 2, SLOW)));
-    const newest = p => p.evaluate(() => WOD.WORLD.buf[WOD.WORLD.buf.length - 1].n);
-    const s = Math.min(await newest(a), await newest(b)) - 1;
-    const [sa, sb] = await Promise.all([a.evaluate(t => WOD.worldAt(t), s), b.evaluate(t => WOD.worldAt(t), s)]);
+    const newest = p => p.evaluate(() => WOD.WORLD.buf[WOD.WORLD.buf.length - 1].t);
     const gap = (x, y) => Math.max(...x.map((c, i) => Math.hypot(c[0] - y[i][0], c[1] - y[i][1])));
-    check(sa && sb && gap(sa.cars, sb.cars) < 0.01 && gap(sa.peds, sb.peds) < 0.01, `Rosta and Petr see the same city at server tick ${s} (largest gap: ${sa && sb ? gap(sa.cars, sb.cars).toFixed(3) + ' car, ' + gap(sa.peds, sb.peds).toFixed(3) + ' pedestrian' : 'no data'})`);
-    const lag = await Promise.all([a, b].map(p => p.evaluate(() => WOD.WORLD.buf.length)));
-    console.log(`     snapshots held: Rosta ${lag[0]}, Petr ${lag[1]}`);
+    let sa = null, sb = null, s = 0;
+    for (let i = 0; i < 5 && !(sa && sb); i++) {
+      s = Math.min(await newest(a), await newest(b)) - 100;            // one pedestrian snapshot back, held by both
+      [sa, sb] = await Promise.all([a.evaluate(t => WOD.worldAt(t), s), b.evaluate(t => WOD.worldAt(t), s)]);
+    }
+    check(sa && sb && gap(sa.cars, sb.cars) < 0.01 && gap(sa.peds, sb.peds) < 0.01, `Rosta and Petr see the same city at server time ${s} (largest gap: ${sa && sb ? gap(sa.cars, sb.cars).toFixed(3) + ' car, ' + gap(sa.peds, sb.peds).toFixed(3) + ' pedestrian' : 'no data'})`);
+
+    // a tank against the site's thin fence (north side z 174..174.4, x -150..-111): full speed head-on does not get through it, and
+    // a tank along it that steers into it still drives on (the old blocked-or-free test stopped it dead)
+    await place(a, -130, 166, 0);
+    await a.evaluate(() => { WOD.car.v = 24; WOD.K.up = true; });
+    await frames(a, 12);
+    const wallZ = await a.evaluate(() => WOD.car.z);
+    check(wallZ < 172.5, `head-on at full speed, the tank stops at the fence (front at z ${(wallZ + 1.55).toFixed(2)}, the fence at 174)`);
+    await place(a, -145, 172.9, Math.PI / 2);
+    await a.evaluate(() => { WOD.car.v = 6; WOD.K.up = true; WOD.K.right = true; });
+    await frames(a, 25);
+    const slid = await a.evaluate(() => { WOD.K.up = WOD.K.right = false; return { x: WOD.car.x, z: WOD.car.z }; });
+    check(slid.x > -143 && slid.z < 173.1, `steering into the fence, the tank still drives along it (${(slid.x + 145).toFixed(1)} units)`);
+
+    // a car Rosta's tank shoves becomes his: it moves on Petr's screen as on his, and is the traffic's again once it rests
+    const rostaId = await a.evaluate(() => WOD.NET.id);
+    await a.evaluate(() => { const c = WOD.TRAFFIC[0]; Object.assign(WOD.car, { x: c.x - c.hx * 3, z: c.z - c.hz * 3, h: Math.atan2(c.hx, c.hz), v: 12 }); WOD.K.up = true; });
+    await a.waitForFunction(() => WOD.TRAFFIC[0].mine, SLOW);
+    await a.evaluate(() => { WOD.K.up = false; WOD.car.v = 0; });
+    check(true, 'Rosta\'s tank shoves car 0 and it is his');
+    const seen = await b.waitForFunction(id => WOD.TRAFFIC[0].net === id, SLOW, rostaId).then(() => true, () => false);
+    check(seen, 'Petr sees that Rosta is pushing it');
+    await place(a, 0, -60, 0);
+    const back = await b.waitForFunction(() => WOD.TRAFFIC[0].net === 0, SLOW).then(() => true, () => false);
+    check(back && !(await a.evaluate(() => WOD.TRAFFIC[0].mine)), 'once it rests Rosta lets go, and it is the traffic\'s again');
 
     // Rosta and Petr on the street through the middle of the city, 26 units apart, facing each other
     await place(a, 0, -60, 0);
