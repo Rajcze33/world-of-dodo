@@ -134,7 +134,6 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
   moment ago on its owner's screen. A car somebody else is pushing does not give way to you until they
   let go of it.
 - One server is one world. More players than `MAX_PLAYERS` wait outside.
-- The minimap shows the city only; the construction site lies just below its bottom edge.
 
 ## Contributing
 
