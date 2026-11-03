@@ -1,6 +1,6 @@
 // World of DODO: the multiplayer server.
 //
-// It serves the game (client/) and relays the players over one WebSocket at /ws. It does not simulate the
+// It serves the game (client/dist, built from client/ by `npm run build`) and relays the players over one WebSocket at /ws. It does not simulate the
 // players: each client drives its own tank, sends where the tank is 20 times a second and gets everyone's
 // tanks back in one snapshot per tick. A parcel fired by one player is passed on
 // to the others, who fly the same parcel in their own world. Whether it hits is decided by the player it
@@ -31,6 +31,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS) || 24;     // people; the bots come on top
 const BOTS = Math.max(0, Math.min(8, Number(process.env.BOTS ?? 3)));
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
+const DIST_DIR = path.join(CLIENT_DIR, 'dist');         // the built game page (npm run build: Vite, TypeScript, Babylon.js)
+const SHARED_DIR = path.join(CLIENT_DIR, 'shared');     // data the server uses too (the construction site), loaded by the page as it is
 const TICK_MS = 50;                // snapshot rate, 20 Hz (the clients send at the same rate)
 const REWIND_MAX_MS = 400;         // a parcel aimed at a bot is tested against where the bot was up to this long ago
 const SHOT_TTL_MS = 15000;         // a parcel can score this long after it was fired (it lives 14 s in the game)
@@ -54,13 +56,16 @@ const BOT_COLOR = 0x8f9997;
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.ttf': 'font/ttf',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',          // the font licenses next to the fonts
 };
-const STATIC_DIRS = ['vendor', 'fonts', 'assets', 'shared'];   // shared: data the server uses too (the construction site)
-// The page is one document with inline script and style; it connects only to this host's /ws.
+// The built page's folders (app: the scripts Vite built, named by their content, so they never change under the same name)
+// and the shared data. Anything else is a 404.
+const STATIC_DIRS = { app: DIST_DIR, fonts: DIST_DIR, assets: DIST_DIR, licenses: DIST_DIR, shared: CLIENT_DIR };
+// The page loads its scripts from this host, keeps its styles inline and connects only to this host's /ws.
 const PAGE_CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
@@ -73,9 +78,33 @@ const PAGE_CSP = [
   "form-action 'none'",
 ].join('; ');
 
-function sendFile(res, file, cache) {
+// enc: the encodings the browser accepts (Accept-Encoding); a .br or .gz copy written by the build (tools/compress.js) goes out
+// instead of the file when there is one
+function sendFile(res, file, cache, enc = '') {
+  const takes = name => String(enc || '').split(',').some(e => e.trim().split(';')[0] === name);
+  const alt = takes('br') ? ['.br', 'br'] : takes('gzip') ? ['.gz', 'gzip'] : null;
+  if (alt) {
+    return fs.stat(file + alt[0], (err, st) => {
+      if (err || !st.isFile()) return sendFile(res, file, cache);
+      res.writeHead(200, {
+        'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
+        'Content-Encoding': alt[1],
+        'Content-Length': st.size,
+        'Cache-Control': cache,
+        'Vary': 'Accept-Encoding',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      fs.createReadStream(file + alt[0]).pipe(res);
+    });
+  }
   fs.stat(file, (err, st) => {
-    if (err || !st.isFile()) return notFound(res);
+    if (err || !st.isFile()) {
+      if (file === path.join(DIST_DIR, 'index.html')) {        // the server runs, but nobody built the page
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('The game is not built yet: run npm run build');
+      }
+      return notFound(res);
+    }
     res.writeHead(200, {
       'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
       'Content-Length': st.size,
@@ -110,13 +139,14 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Security-Policy', PAGE_CSP);
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
-    return sendFile(res, path.join(CLIENT_DIR, 'index.html'), 'no-cache');
+    return sendFile(res, path.join(DIST_DIR, 'index.html'), 'no-cache', req.headers['accept-encoding']);
   }
   const top = pathname.split('/')[1];
-  if (!STATIC_DIRS.includes(top)) return notFound(res);
-  const file = path.resolve(CLIENT_DIR, '.' + pathname);
-  if (!file.startsWith(path.join(CLIENT_DIR, top) + path.sep)) return notFound(res);
-  sendFile(res, file, 'public, max-age=86400');
+  if (!Object.hasOwn(STATIC_DIRS, top)) return notFound(res);
+  const root = STATIC_DIRS[top];
+  const file = path.resolve(root, '.' + pathname);
+  if (!file.startsWith(path.join(root, top) + path.sep)) return notFound(res);
+  sendFile(res, file, top === 'app' ? 'public, max-age=31536000, immutable' : 'public, max-age=86400', req.headers['accept-encoding']);
 });
 
 // ---------- players ----------

@@ -56,14 +56,24 @@ Or with Node.js 24:
 
 ```sh
 npm ci
+npm run build      # the game page: client/ → client/dist
 npm start          # http://localhost:3000
 ```
+
+While working on the game page, `npm run dev` serves `client/` with live reload on
+http://localhost:5173 and passes the game's WebSocket to `npm start` (run both).
 
 ## How it works
 
 ```
-client/index.html   the whole game: three.js city, tank physics, HUD, and the network part
-server/server.js    serves the page, relays the players over a WebSocket, keeps the score
+client/index.html   the page: HUD, intro screen, touch controls (markup and styles)
+client/src/         the game in TypeScript on Babylon.js, built by Vite into client/dist:
+  core/             engine, scene, lights and shadows, geometry, materials, textures
+  world/            the city grid, buildings, props, traffic and tram, pedestrians
+  game/             the player's tank, parcels, effects, input, quality levels
+  net/              the other players and the shared city from the server
+  ui/               HUD and minimap;  main.ts: the frame loop and the join form
+server/server.js    serves the built page, relays the players over a WebSocket, keeps the score
 server/bots.js      the bots: driving, aiming, and what happens when a parcel hits one
 server/world.js     the shared city life: cars, tram, pedestrians, knocked-down trees and lamps
 server/city.js      the city's streets and buildings as numbers, for the bots and the city
@@ -83,8 +93,10 @@ Every row of a snapshot carries the moment it shows on the server's clock, and t
 others a fixed 150 ms behind that clock, between two rows (snapshot interpolation, as most network games
 do it), so the network's jitter does not show. [docs/PROTOCOL.md](docs/PROTOCOL.md) has the details.
 
-The game page is one self-contained HTML file on purpose: no build step, no bundler. three.js r128
-and the fonts are served from `client/vendor` and `client/fonts`.
+The game page is TypeScript on [Babylon.js](https://www.babylonjs.com/), built with Vite
+(`npm run build`; the server sends `client/dist`). The scene is right-handed like the three.js
+original it was ported from (x east, z south, y up). The fonts and images are in `client/public`.
+The first load is about 1.2 MB of compressed script (Babylon.js), sent as brotli or gzip.
 
 ## Configuration
 
@@ -99,7 +111,7 @@ Environment variables of the server:
 ## Tests
 
 ```sh
-npm run check          # every inline script of the game page parses
+npm run check          # TypeScript: the whole game page type-checks
 npm run smoke          # protocol test against a running server (default http://localhost:3400)
 npm run test:browser   # two players in headless Chrome; needs Chrome and: npm i --no-save puppeteer-core@25.14.0
 ```

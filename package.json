@@ -1,6 +1,6 @@
 {
   "name": "world-of-dodo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "World of DODO: a multiplayer tank game in the browser, built on the DODO Christmas game.",
   "license": "MIT",
@@ -9,11 +9,18 @@
   },
   "scripts": {
     "start": "node server/server.js",
-    "check": "node tools/check-client.js",
+    "dev": "vite",
+    "build": "vite build && node tools/compress.js",
+    "check": "tsc --noEmit -p client",
     "smoke": "node tools/smoke.js",
     "test:browser": "node tools/browser-test.js"
   },
   "dependencies": {
     "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@babylonjs/core": "9.31.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
   }
 }
