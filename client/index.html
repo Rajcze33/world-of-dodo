@@ -8,7 +8,8 @@
   What changed against the original: no shift, no stops, no clock, no REDLINE hunt and no police.
   The player joins with a name and a tank colour; the other players and the server's bots drive in
   the same city with their names glowing above them; parcels hit other tanks (10 points for a
-  player, 1 for a bot), three hits destroy a tank and it comes back somewhere else. Changes against
+  player, 1 for a bot), three hits destroy a tank and it comes back somewhere else. A player may fly
+  a plane (issue #14) or sail a warship on the Vltava (issue #20) instead. Changes against
   the original are marked "World of DODO" in the code.
 
   This file is the page around the 3D view: the HUD, the intro screen, the touch controls and their
@@ -370,10 +371,39 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   .board li{font-size:var(--fs-caption)}
   .board li:nth-child(n+4):not(.me){display:none}
 }
+/* World of DODO, issue #20: the ship's aim cross (placed over the canvas every frame) with the shells' flight time and the range under
+   it, the turrets' marks (where their guns point now: green on target, amber turning, grey loading), the binoculars' frame, and the
+   ship's card over the speedometer: the telegraph, the rudder, the turrets and the torpedoes */
+.shipx{position:fixed;left:0;top:0;pointer-events:none;width:46px;height:46px;filter:drop-shadow(0 0 3px rgba(0,0,0,.75))}
+.shipx::before{content:"";position:absolute;left:0;right:0;top:22px;height:2px;background:linear-gradient(90deg,#fff 0 17px,transparent 17px 29px,#fff 29px)}
+.shipx::after{content:"";position:absolute;top:0;bottom:0;left:22px;width:2px;background:linear-gradient(#fff 0 17px,transparent 17px 29px,#fff 29px)}
+.shipx span{position:absolute;top:52px;left:50%;transform:translateX(-50%);white-space:nowrap;font:600 12px/1 var(--font-secondary);letter-spacing:.04em;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.9)}
+.tmark{position:fixed;left:0;top:0;pointer-events:none;width:12px;height:12px;box-sizing:border-box;border-radius:50%;border:2px solid var(--dodo-grey);filter:drop-shadow(0 0 2px rgba(0,0,0,.8))}
+.tmark.ok{border-color:#7ee2a8;background:rgba(126,226,168,.4)}
+.tmark.turn{border-color:var(--dodo-peach)}
+.tmark.load{opacity:.55}
+.scope{position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 50%,transparent 0 37vmin,rgba(0,0,0,.6) 37.3vmin,rgba(0,0,0,.92) 39vmin)}
+.scope::before{content:"";position:absolute;left:calc(50% - 30vmin);right:calc(50% - 30vmin);top:50%;height:1px;background:repeating-linear-gradient(90deg,rgba(255,255,255,.6) 0 1px,transparent 1px 3vmin)}
+.scope::after{content:"";position:absolute;top:calc(50% - 30vmin);bottom:calc(50% - 30vmin);left:50%;width:1px;background:repeating-linear-gradient(rgba(255,255,255,.6) 0 1px,transparent 1px 3vmin)}
+.sea{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:var(--space-2) var(--space-4);padding:var(--space-2) var(--space-4);max-width:calc(100vw - 32px);box-sizing:border-box}
+.sea .grp{display:flex;align-items:center;gap:var(--space-2)}
+.sea .meta{color:var(--dodo-grey)}
+.tel{display:flex;gap:2px}
+.tel span{padding:2px 6px;border-radius:6px;border:1px solid var(--dodo-charcoal-80);color:var(--dodo-grey);font:500 11px/1.4 var(--font-secondary)}
+.tel span.on{background:var(--dodo-white);border-color:var(--dodo-white);color:var(--dodo-charcoal)}
+.rudder{position:relative;width:64px;height:6px;border-radius:3px;background:var(--dodo-charcoal-80)}
+.rudder i{position:absolute;left:50%;top:-3px;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:var(--dodo-light-teal)}
+.chip{display:inline-flex;align-items:center;gap:6px;font:500 11px/1.4 var(--font-secondary);text-transform:uppercase;letter-spacing:.04em;color:var(--dodo-light-grey);white-space:nowrap}
+.chip b{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:var(--dodo-charcoal-80);color:var(--dodo-white);font-weight:600}
+.chip.ok b{background:var(--dodo-green)}
+.chip.turn b{background:#b8862b}
+.chip.block b{background:#8a4b45}
+@media (max-width:760px),(pointer:coarse) and (max-width:1024px){.sea .lbl{display:none}.sea{gap:var(--space-1) var(--space-3)}}
 </style>
 
 <canvas id="gl" data-ta="glAria"></canvas>
 <div class="ret" id="aimC" hidden></div><div class="ret x" id="gunX" hidden></div>
+<div class="scope" id="scope" hidden></div><div class="tmark" id="tm0" hidden></div><div class="tmark" id="tm1" hidden></div><div class="shipx" id="shipX" hidden><span id="shipT"></span></div>
 
 <div id="hud" hidden>
   <div class="tl">
@@ -398,10 +428,15 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
     <p class="attr" data-t="attrib"></p>
   </div>
   <div class="bc">
-    <div class="card pick" id="pick" hidden><span class="meta" data-t="pickLbl"></span><button class="camBtn" type="button" data-v="0">1 · <span data-t="vehTank"></span></button><button class="camBtn" type="button" data-v="1">2 · <span data-t="vehPlane"></span></button></div>
+    <div class="card pick" id="pick" hidden><span class="meta" data-t="pickLbl"></span><button class="camBtn" type="button" data-v="0">1 · <span data-t="vehTank"></span></button><button class="camBtn" type="button" data-v="1">2 · <span data-t="vehPlane"></span></button><button class="camBtn" type="button" data-v="2">3 · <span data-t="vehShip"></span></button></div>
     <div id="toast" class="off"></div>
+    <div class="card sea" id="sea" hidden>
+      <div class="grp"><span class="meta lbl" data-t="telLbl"></span><div class="tel"><span id="tel0"></span><span id="tel1"></span><span id="tel2"></span><span id="tel3"></span><span id="tel4"></span></div></div>
+      <div class="grp"><span class="meta lbl" data-t="rudLbl"></span><div class="rudder"><i id="rud"></i></div></div>
+      <div class="grp"><span class="chip" id="tur0"><b>1</b><span id="turS0"></span></span><span class="chip" id="tur1"><b>2</b><span id="turS1"></span></span><span class="chip" id="torp"><b>T</b><span id="torpS"></span></span></div>
+    </div>
     <div class="card gauge">
-      <div><b id="spd">0</b> <span class="meta" data-t="speedUnit"></span></div>
+      <div><b id="spd">0</b> <span class="meta" id="spdU" data-t="speedUnit"></span></div>
       <div class="air" hidden><b id="alt">0</b> <span class="meta">m</span></div>
       <div class="air" hidden><b id="thr">0</b> <span class="meta" data-t="thrUnit"></span></div>
       <div class="air" hidden><b id="bombs">0</b> <span class="meta" data-t="bombsUnit"></span></div>
@@ -437,6 +472,8 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <span><kbd>V</kbd><span data-t="kVeh"></span></span>
       <span><kbd data-t="kMouse"></kbd><span data-t="kAim"></span></span>
       <span><kbd>W S</kbd><span data-t="kThr"></span></span>
+      <span><kbd>Q</kbd><span data-t="kTorp"></span></span>
+      <span><kbd>Shift</kbd><span data-t="kZoom"></span></span>
       <span><kbd>C</kbd><span data-t="kCam"></span></span>
       <span><kbd>F</kbd><span data-t="kStats"></span></span>
     </div>
@@ -445,7 +482,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <label class="mono" for="nameIn" data-t="nameLbl"></label>
       <input id="nameIn" name="name" type="text" maxlength="16" autocomplete="nickname" autocapitalize="words" spellcheck="false" enterkeyhint="go" data-tp="namePh">
       <fieldset class="swatches"><legend class="mono" data-t="colorLbl"></legend><div class="sw-row" id="swatches"></div></fieldset>
-      <fieldset class="vehs"><legend class="mono" data-t="vehLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="veh" value="0" checked><span data-t="vehTank"></span></label><label class="veh"><input type="radio" name="veh" value="1"><span data-t="vehPlane"></span></label></div></fieldset>
+      <fieldset class="vehs"><legend class="mono" data-t="vehLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="veh" value="0" checked><span data-t="vehTank"></span></label><label class="veh"><input type="radio" name="veh" value="1"><span data-t="vehPlane"></span></label><label class="veh"><input type="radio" name="veh" value="2"><span data-t="vehShip"></span></label></div></fieldset>
       <button class="cta" id="startBtn" type="submit" disabled><span id="startLbl" data-t="loading"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
       <p class="err" id="joinErr" role="alert" hidden></p>
     </form>

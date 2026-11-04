@@ -3,7 +3,8 @@
 // arrows, the tanks as dots. World of DODO, issue #16: the real Karlín. The map itself (the river, the woods, the far houses, the
 // streets, the blocks and the houses on them, the squares, the site, the depot) is drawn once per size into a canvas of its own and
 // copied every frame; only the markers are drawn each time. The arena is wider than high: its view is a square round the arena's
-// middle as wide as the arena, so the river shows above it and Vítkov below.
+// middle as wide as the arena, so the river shows above it and Vítkov below. World of DODO, issue #20: in a ship it shows the river round
+// it (a window of SEA_E either side of the ship, cut from the airspace's map drawn twice as big), and the ships are drawn as hulls.
 import { DATA, ARENA, AIR_LIM, SITE, DEPOT, BLOCKS } from '../../shared/map.ts';
 import { $ } from '../core/dom';
 import { now, hexCss } from '../core/util';
@@ -21,6 +22,7 @@ export interface MapOpt {
   car?: { x: number; z: number; h: number };   // your tank or plane: an arrow, kept inside the map
   others?: Iterable<Other>;                    // the other players and the bots
   air?: boolean;                               // flying: the whole airspace
+  sea?: boolean;                               // sailing: the river round the ship (issue #20)
 }
 // an arrow pointing along heading h, q its size
 function arrow(c: CanvasRenderingContext2D, x: number, y: number, h: number, q: number) {
@@ -28,9 +30,17 @@ function arrow(c: CanvasRenderingContext2D, x: number, y: number, h: number, q: 
   c.beginPath(); c.moveTo(0, -q * 1.2); c.lineTo(q * 0.8, q * 0.8); c.lineTo(0, q * 0.35); c.lineTo(-q * 0.8, q * 0.8); c.closePath();
   c.fill(); c.stroke(); c.restore();
 }
+// a ship's hull pointing along heading h, q its size (issue #20)
+function hull(c: CanvasRenderingContext2D, x: number, y: number, h: number, q: number) {
+  c.save(); c.translate(x, y); c.rotate(-h + Math.PI);
+  c.beginPath(); c.moveTo(0, -q * 1.6); c.quadraticCurveTo(q * 0.75, -q * 0.4, q * 0.55, q * 1.2); c.lineTo(-q * 0.55, q * 1.2); c.quadraticCurveTo(-q * 0.75, -q * 0.4, 0, -q * 1.6); c.closePath();
+  c.fill(); c.stroke(); c.restore();
+}
 // the window of a view: its middle and half size in world units
-const AX = (ARENA.x0 + ARENA.x1) / 2, AZ = (ARENA.z0 + ARENA.z1) / 2, AE = (ARENA.x1 - ARENA.x0) / 2 + 10;
+const AX = (ARENA.x0 + ARENA.x1) / 2, AZ = (ARENA.z0 + ARENA.z1) / 2, AE = (ARENA.x1 - ARENA.x0) / 2 + 10, SEA_E = 260;
 const view = (air: boolean) => air ? { cx: 0, cz: 0, e: AIR_LIM } : { cx: AX, cz: AZ, e: AE };
+// a ship's window: round the ship, kept inside the airspace's map
+const seaView = (x: number, z: number) => ({ cx: Math.max(-AIR_LIM + SEA_E, Math.min(AIR_LIM - SEA_E, x)), cz: Math.max(-AIR_LIM + SEA_E, Math.min(AIR_LIM - SEA_E, z)), e: SEA_E });
 
 // the map drawn once into a canvas of S × S pixels for one view
 const CACHE: { S: number; air: boolean; c: HTMLCanvasElement | null } = { S: 0, air: false, c: null };
@@ -75,9 +85,13 @@ function base(S: number, air: boolean): HTMLCanvasElement {
 // the arena's map only: the original's stops, time windows, GAIA's route, your trail, the police and the hunting tanks are gone with
 // the single-player game
 export function drawMap(ctx: CanvasRenderingContext2D, S: number, opt: MapOpt) {
-  const air = !!opt.air, { cx, cz, e } = view(air), sc = S / (2 * e);
+  const sea = !!opt.sea && !!opt.car, air = !!opt.air, { cx, cz, e } = sea ? seaView(opt.car!.x, opt.car!.z) : view(air), sc = S / (2 * e);
   const mx = (x: number) => (x - cx + e) * sc, my = (z: number) => (z - cz + e) * sc;
-  ctx.drawImage(base(S, air), 0, 0);
+  if (sea) {                                                                          // the window, cut from the airspace's map
+    const B = Math.round(S * 2), k = B / (2 * AIR_LIM);
+    ctx.fillStyle = '#2f3534'; ctx.fillRect(0, 0, S, S);
+    ctx.drawImage(base(B, true), (cx - e + AIR_LIM) * k, (cz - e + AIR_LIM) * k, 2 * e * k, 2 * e * k, 0, 0, S, S);
+  } else ctx.drawImage(base(S, air), 0, 0);
   const r = Math.max(6, S / 24);
   ctx.fillStyle = '#b2dcd6'; ctx.beginPath(); ctx.arc(mx(DEPOT.park.x), my(DEPOT.park.z), r * 0.7, 0, Math.PI * 2); ctx.fill();   // the depot's start
   if (opt.others) {
@@ -87,13 +101,14 @@ export function drawMap(ctx: CanvasRenderingContext2D, S: number, opt: MapOpt) {
       ctx.globalAlpha = o.seen ? 1 : Math.max(0.2, 1 - age / SPOT_MS);            // then their last seen place, fading
       ctx.fillStyle = hexCss(o.color); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
       if (o.k === 1) arrow(ctx, mx(o.seenX!), my(o.seenZ!), o.h, r * 0.7);
+      else if (o.k === 2) hull(ctx, mx(o.seenX!), my(o.seenZ!), o.h, r * 0.6);
       else { ctx.beginPath(); ctx.arc(mx(o.seenX!), my(o.seenZ!), r * 0.62, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
     }
     ctx.globalAlpha = 1;
   }
   if (opt.car) {
     const c = opt.car; ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#3d4543'; ctx.lineWidth = 1.5;
-    arrow(ctx, Math.max(r, Math.min(S - r, mx(c.x))), Math.max(r, Math.min(S - r, my(c.z))), c.h, r * 0.9);
+    (sea ? hull : arrow)(ctx, Math.max(r, Math.min(S - r, mx(c.x))), Math.max(r, Math.min(S - r, my(c.z))), c.h, r * (sea ? 0.75 : 0.9));
   }
 }
 

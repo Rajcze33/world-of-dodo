@@ -71,9 +71,35 @@ for (const e of [...WAYS, ...RELS]) {
   }
 }
 log('water polygons', water.length);
+// World of DODO, issue #20 (warships): the Vltava is the water connected to the biggest piece (the pieces of one polygon share
+// their cut edges; the simplification may move a corner a little, so "touching" is within 0.5 u). Ponds and fountains are not
+// the river: they keep the old shallow bed and stay frozen. client/shared/naval.ts picks the river the same way.
+{
+  const touch = (a, b) => {
+    if (!G.boxHit(G.box(a.r), G.box(b.r), 0.5)) return false;
+    for (const [p, q] of [[a, b], [b, a]]) for (const v of p.r) if (G.distPoly2(q.r, v[0], v[1], true) < 0.25) return true;
+    return false;
+  };
+  let big = null; for (const w of water) if (!big || G.area(w.r) > G.area(big.r)) big = w;
+  const st = big ? [big] : []; if (big) big.vltava = true;
+  while (st.length) { const a = st.pop(); for (const b of water) if (!b.vltava && touch(a, b)) { b.vltava = true; st.push(b); } }
+  REPORT.vltava = { pieces: water.filter(w => w.vltava).length, of: water.length };
+  log('the Vltava', water.filter(w => w.vltava).length, 'pieces of', water.length);
+}
+// the river's surface and bed (issue #20): the water is liquid now, its surface WATER_Y under the embankments (Prague's stand some
+// 5-7 m over the river), its bed RIVER_BED. A bridge over the river keeps its deck's underside CLEAR over the water (a ship's
+// superstructure fits under it): road decks (1 u thick in the game) at least ROAD_DECK_MIN, rail decks (map.ts: deck - 1) RAIL_DECK_MIN.
+const WATER_Y = -4.5, RIVER_BED = -8, CLEAR = 6.5, ROAD_DECK_MIN = WATER_Y + CLEAR + 1.5, RAIL_DECK_MIN = WATER_Y + CLEAR + 1;
+const inVltava = (x, z) => water.some(w => { if (!w.vltava) return false; const b = w.b || (w.b = G.box(w.r)); return x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3] && G.pip(w.r, x, z); });
+// does the polyline (pairs) cross the river? (a point every unit along it)
+const overVltava = pts => G.resample(pts, 1).some(q => inVltava(q[0], q[1]));
 
 const TER = { x0: -F.OUTER_U, z0: -F.OUTER_U, step: 10, nx: 0, nz: 0, h: [] };
 TER.nx = Math.round((OUTER[2] - OUTER[0]) / TER.step) + 1; TER.nz = TER.nx;
+// TER0: the terrain as it was before the river got its deep bed (issue #20: under all water -2). The far buildings' bases and the
+// bridges' end heights are still taken from it, so that a house on the bank keeps its footing (the 10 u grid's slope into the deep
+// bed would sink it) and nothing but the river changes.
+const TER0 = { ...TER, h: [] };
 let terrainRoute = 'ČÚZK DMR 5G';
 {
   let dem = null;
@@ -111,21 +137,35 @@ let terrainRoute = 'ČÚZK DMR 5G';
       return ridge + north;
     };
   }
+  // World of DODO, issue #20: how far a point of the river is from its bank (land, an island, a pier), up to 6 u: rings of 16
+  // samples every half unit
+  const toBank = (x, z) => {
+    for (let r = 0.5; r <= 6; r += 0.5) for (let k = 0; k < 16; k++) { const a = k * Math.PI / 8; if (!inVltava(x + Math.cos(a) * r, z + Math.sin(a) * r)) return r - 0.25; }
+    return 6;
+  };
+  let bed = 0;
   for (let j = 0; j < TER.nz; j++) for (let i = 0; i < TER.nx; i++) {
     const x = TER.x0 + i * TER.step, z = TER.z0 + j * TER.step, d = outDist(x, z);
-    let h = 0;
+    let h = 0, h0 = 0;
     if (d > ZERO_M) {
       const s = Math.min(1, (d - ZERO_M) / BLEND), k = s * s * (3 - 2 * s);
-      // the river bed sits at -2 (the water is drawn above it); the land never dips below -0.6 so that it stays dry
-      h = wet(x, z) ? -2 : Math.max(-0.6, k * sample(x, z));
+      // under water -2 (TER0); the land never dips below -0.6 so that it stays dry
+      h = h0 = wet(x, z) ? -2 : Math.max(-0.6, k * sample(x, z));
+      // World of DODO, issue #20: the Vltava's bed at RIVER_BED, rising to the bank over its last few units. The terrain is a 10 u
+      // grid read bilinearly: a point just inside the bank at -8 would drag the land beside it far under the water, one at the
+      // land's height would lift the bed over the water; this ramp keeps both errors within a few units of the bank (the game
+      // draws the bank itself as an embankment wall and asks client/shared/naval.ts, not the grid, where the water is).
+      if (inVltava(x, z)) { h = Math.max(RIVER_BED, -0.6 - 1.6 * toBank(x, z)); bed++; }
     }
-    TER.h.push(r1(h));
+    TER.h.push(r1(h)); TER0.h.push(r1(h0));
   }
+  REPORT.riverBed = { gridPoints: bed, depth: RIVER_BED };
 }
-const terrainH = (x, z) => {
-  const fx = (x - TER.x0) / TER.step, fz = (z - TER.z0) / TER.step;
-  const i = Math.max(0, Math.min(TER.nx - 2, Math.floor(fx))), j = Math.max(0, Math.min(TER.nz - 2, Math.floor(fz))), tx = Math.min(1, Math.max(0, fx - i)), tz = Math.min(1, Math.max(0, fz - j));
-  const h = (a, b) => TER.h[b * TER.nx + a];
+// the terrain under (x, z), bilinear like client/shared/map.ts terrainH; over TER0 (see there) for the buildings and the bridges
+const terrainH = (x, z, T = TER0) => {
+  const fx = (x - T.x0) / T.step, fz = (z - T.z0) / T.step;
+  const i = Math.max(0, Math.min(T.nx - 2, Math.floor(fx))), j = Math.max(0, Math.min(T.nz - 2, Math.floor(fz))), tx = Math.min(1, Math.max(0, fx - i)), tz = Math.min(1, Math.max(0, fz - j));
+  const h = (a, b) => T.h[b * T.nx + a];
   return (h(i, j) * (1 - tx) + h(i + 1, j) * tx) * (1 - tz) + (h(i, j + 1) * (1 - tx) + h(i + 1, j + 1) * tx) * tz;
 };
 log('terrain', terrainRoute, TER.nx + '×' + TER.nz, 'max', Math.max(...TER.h));
@@ -649,6 +689,7 @@ const RAIL = [];
       // the Negrelli viaduct: its track bed about 8 m above the street; other bridges land on the terrain at their ends
       const ends = Math.max(terrainH(...s[0]), terrainH(...s[s.length - 1]), 0);
       deck = l.neg || inArena(...s[Math.floor(s.length / 2)], 40) ? Math.max(hU(8), ends) : Math.max(ends, hU(6));
+      if (overVltava(s)) deck = Math.max(deck, RAIL_DECK_MIN);       // issue #20: a ship passes under it
     }
     RAIL.push({ pts: flat(s), deck: r1(deck), bridge: l.br });
   }
@@ -657,7 +698,8 @@ const RAIL = [];
 
 // ---- the streets outside the arena (issue #16, 4. 11.: drawn for the planes only; no graph, no traffic) ------------------
 // The same car roads as the arena's, in the outer square, without the parts inside the arena (the graph draws those). A piece on a
-// bridge keeps a deck height: the higher of its two ends' terrain, and never below the river's ice.
+// bridge keeps a deck height: the higher of its two ends' terrain, and never below the river's ice. World of DODO, issue #20: one
+// over the Vltava at least ROAD_DECK_MIN, so that a ship passes under it (map.ts stands its piers in the river).
 const FAR_ROADS = [];
 {
   // the parts of a polyline outside the rectangle, as polylines
@@ -680,17 +722,21 @@ const FAR_ROADS = [];
     if (cur) out.push(cur);
     return out;
   };
+  let river = 0, raised = 0;
   for (const w of roadWays) {
     const t = w.tags, c = CLS[t.highway], wm = num(t.width) > 0 ? Math.min(Math.max(num(t.width), 3), 30) : WIDTH_M[c], pts = wayPts(w);
     if (pts.length < 2) continue;
     for (const pc of G.clipLine(pts, ...OUTER)) for (const piece of outside(pc.pts, AX0, AZ0, AX1, AZ1)) {
       const s = G.simplifyLine(piece, 0.6); if (s.length < 2 || G.len(s) < 2) continue;
       const o = { pts: flat(s), w: r1(wm / U) };
-      if (t.bridge && t.bridge !== 'no') o.y = r1(Math.max(terrainH(...s[0]), terrainH(...s[s.length - 1]), 0.3));
+      if (t.bridge && t.bridge !== 'no') {
+        o.y = r1(Math.max(terrainH(...s[0]), terrainH(...s[s.length - 1]), 0.3));
+        if (overVltava(s)) { river++; if (o.y < ROAD_DECK_MIN) { o.y = r1(ROAD_DECK_MIN); raised++; } }
+      }
       FAR_ROADS.push(o);
     }
   }
-  REPORT.farRoads = { pieces: FAR_ROADS.length, length: Math.round(FAR_ROADS.reduce((a, o) => { let l = 0; for (let i = 2; i < o.pts.length; i += 2) l += Math.hypot(o.pts[i] - o.pts[i - 2], o.pts[i + 1] - o.pts[i - 1]); return a + l; }, 0)), bridges: FAR_ROADS.filter(o => o.y !== undefined).length };
+  REPORT.farRoads = { pieces: FAR_ROADS.length, length: Math.round(FAR_ROADS.reduce((a, o) => { let l = 0; for (let i = 2; i < o.pts.length; i += 2) l += Math.hypot(o.pts[i] - o.pts[i - 2], o.pts[i + 1] - o.pts[i - 1]); return a + l; }, 0)), bridges: FAR_ROADS.filter(o => o.y !== undefined).length, overRiver: river, raisedOverRiver: raised };
   log('far roads', JSON.stringify(REPORT.farRoads));
 }
 

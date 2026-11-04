@@ -238,8 +238,8 @@ export function onRoad(x: number, z: number, m = 0): boolean {
 
 // ---------- the solids ----------
 // A solid is a footprint polygon extruded from y0 to h. b: the building's index in DATA.buildings; top: the roof's ridge (a pitched
-// roof counts half its height in h, as a box would average it); site: a construction-site box.
-export interface Solid { i: number; p: number[]; y0: number; h: number; box: Box; kind?: string; far?: boolean; b?: number; top?: number; site?: boolean }
+// roof counts half its height in h, as a box would average it); site: a construction-site box; road: a road bridge's pier (issue #20).
+export interface Solid { i: number; p: number[]; y0: number; h: number; box: Box; kind?: string; far?: boolean; b?: number; top?: number; site?: boolean; road?: boolean }
 export const LOW_Y = 2.5;                                             // solids reaching below this stop tanks and cars
 export const VIADUCT_W = 6.5, PIER_STEP = 11, PIER_L = 2;             // the Negrelli viaduct: deck width, arch spacing, pier length
 export const SOLIDS: Solid[] = [];
@@ -260,12 +260,44 @@ DATA.buildings.forEach((b, k) => {
 });
 // how far (x,z) is from the nearest carriageway's edge (negative: on it)
 const roadGap = (x: number, z: number) => { const n = nearestEdge(x, z); return n ? n.d - n.e.w / 2 : Infinity; };
+// World of DODO, issue #20 (warships): where a bridge crosses the Vltava, its piers stand in the river every SPAN at most (real spans,
+// a ship passes between them), from the river bed (client/shared/naval.ts BED_Y) up to the deck. crossings(): the stretches of a
+// bridge's line over the water (a sample every half unit), joined across dry gaps under GAP_MAX: such a gap inside the river is a pier
+// the data maps as a hole in the riverbank (the Negrelli viaduct's) or a lock's wall, and gets a pier of ours on it. pierSpots(): where
+// the piers of one crossing go: on every such gap, and evenly between them (and the banks) where the open water runs longer than SPAN.
+export const SPAN = 30, RIVER_BED = -8;
+const GAP_MAX = 8, WATERS = DATA.water.map(ccw), WBOX = WATERS.map(polyBox), WH = new Hash<number>(OUTER.x0, OUTER.z0, OUTER.x1, OUTER.z1, 32), WQ: number[] = [];
+WATERS.forEach((p, i) => WH.add(WBOX[i], i));
+const wet = (x: number, z: number) => { for (const i of WH.query(x, z, x, z, WQ)) { const b = WBOX[i]; if (x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3] && pointInPoly(WATERS[i], x, z)) return true; } return false; };
+interface Crossing { s0: number; s1: number; gaps: [number, number][] }
+function crossings(P: number[], cum: number[], L: number): Crossing[] {
+  const out: Crossing[] = [], at: At = { x: 0, z: 0, hx: 1, hz: 0, k: 0 }; let cur: Crossing | null = null, dry0 = -1;
+  for (let s = 0.25; s < L; s += 0.5) {
+    polylineAt(P, cum, s, at);
+    if (wet(at.x, at.z)) {
+      if (cur && dry0 >= 0) { if (s - dry0 <= GAP_MAX) cur.gaps.push([dry0, s]); else { out.push(cur); cur = null; } }
+      if (!cur) cur = { s0: s, s1: s, gaps: [] };
+      cur.s1 = s; dry0 = -1;
+    } else if (cur && dry0 < 0) dry0 = s;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+function pierSpots(c: Crossing): number[] {
+  const fixed = c.gaps.map(g => (g[0] + g[1]) / 2), stops = [c.s0, ...fixed, c.s1], o: number[] = [];
+  for (let k = 0; k + 1 < stops.length; k++) {
+    const a = stops[k], b = stops[k + 1], n = Math.ceil((b - a) / SPAN);
+    if (k > 0) o.push(a);
+    for (let j = 1; j < n; j++) o.push(a + (b - a) * j / n);
+  }
+  return o;
+}
 // The viaduct (rail parts marked bridge): its deck as a slab from deck - 1 to deck, in pieces of at most 12 units (small boxes for the
 // hashes), and piers every PIER_STEP from the ground (the river bed in the river) to the deck's underside, except where a street
 // passes: there it is an arch a tank drives through. Railway on the ground (bridge 0) is drawn, not solid.
 for (const r of DATA.rail) {
   if (!r.bridge) continue;
-  const P = r.pts, cum = polylineCum(P), L = cum[cum.length - 1];
+  const P = r.pts, cum = polylineCum(P), L = cum[cum.length - 1], X = crossings(P, cum, L);   // X: over the Vltava (issue #20)
   for (let k = 0; k + 3 < P.length; k += 2) {
     const ax = P[k], az = P[k + 1], bx = P[k + 2], bz = P[k + 3], sl = cum[(k >> 1) + 1] - cum[k >> 1], n = Math.max(1, Math.ceil(sl / 12));
     for (let j = 0; j < n; j++) {
@@ -275,6 +307,7 @@ for (const r of DATA.rail) {
   }
   const at: At = { x: 0, z: 0, hx: 1, hz: 0, k: 0 };
   for (let s = PIER_STEP / 2; s < L; s += PIER_STEP) {
+    if (X.some(c => s > c.s0 - 1 && s < c.s1 + 1)) continue;          // over the river: its own piers, below
     polylineAt(P, cum, s, at);
     const hx = at.hx * PIER_L / 2, hz = at.hz * PIER_L / 2, ax = at.x - hx, az = at.z - hz, bx = at.x + hx, bz = at.z + hz;
     // the full width first, then narrower (Prvního pluku runs right beside the viaduct: a full pier would stand in it, a slim one
@@ -285,6 +318,11 @@ for (const r of DATA.rail) {
       if (gap < (w === VIADUCT_W ? 1 : 0.6)) continue;
       addSolid(q, Math.min(0, terrainH(at.x, at.z)), r.deck - 1, { kind: 'pier' }); break;
     }
+  }
+  for (const c of X) for (const s of pierSpots(c)) {                  // issue #20: in the river every SPAN at most, the full width
+    polylineAt(P, cum, s, at);
+    const hx = at.hx * PIER_L / 2, hz = at.hz * PIER_L / 2;
+    addSolid(strip(at.x - hx, at.z - hz, at.x + hx, at.z + hz, VIADUCT_W), RIVER_BED, r.deck - 1, { kind: 'pier' });
   }
 }
 // the empty lots: the biggest is kept for the construction site, the depot takes the next that fits its hall
@@ -320,6 +358,29 @@ export const DEPOT: Depot = (() => {
   }
   return { x: 0, z: 0, rot: 0, fx: 0, fz: 1, w: 0, d: 0, h: 0, p: null, park: { x: 0, z: 0, h: 0 } };   // no lot: placed on a spawn below
 })();
+
+// World of DODO, issue #20: the road bridges over the Vltava (DATA.farRoads pieces with a deck height y that cross the river; the
+// generator keeps their decks at least 3.5, the underside 2 over the water): the deck as a slab from y - 1 to y in pieces of at most
+// 12 (kind 'roaddeck': shells and planes hit it; out of the tanks' reach, never in the low hash) and piers in the river as the
+// railway's, ROAD_PIER_L long along the road and a unit wider than it.
+export const ROAD_PIER_L = 2.2;
+for (const r of DATA.farRoads || []) {
+  if (r.y === undefined) continue;
+  const P = r.pts, cum = polylineCum(P), L = cum[cum.length - 1], X = crossings(P, cum, L); if (!X.length) continue;
+  for (let k = 0; k + 3 < P.length; k += 2) {
+    const ax = P[k], az = P[k + 1], bx = P[k + 2], bz = P[k + 3], sl = cum[(k >> 1) + 1] - cum[k >> 1], n = Math.max(1, Math.ceil(sl / 12));
+    for (let j = 0; j < n; j++) {
+      const t0 = j / n, t1 = (j + 1) / n;
+      addSolid(strip(ax + (bx - ax) * t0, az + (bz - az) * t0, ax + (bx - ax) * t1, az + (bz - az) * t1, r.w), r.y - 1, r.y, { kind: 'roaddeck' });
+    }
+  }
+  const at: At = { x: 0, z: 0, hx: 1, hz: 0, k: 0 };
+  for (const c of X) for (const s of pierSpots(c)) {
+    polylineAt(P, cum, s, at);
+    const hx = at.hx * ROAD_PIER_L / 2, hz = at.hz * ROAD_PIER_L / 2;
+    addSolid(strip(at.x - hx, at.z - hz, at.x + hx, at.z + hz, r.w + 1), RIVER_BED, r.y - 1, { kind: 'pier', road: true });
+  }
+}
 
 // the two hashes: every solid (rays, planes, parcels), and the low ones (tanks, cars, free ground)
 const HALL = new Hash<Solid>(OUTER.x0, OUTER.z0, OUTER.x1, OUTER.z1, 16), HLOW = new Hash<Solid>(OUTER.x0, OUTER.z0, OUTER.x1, OUTER.z1, 16);

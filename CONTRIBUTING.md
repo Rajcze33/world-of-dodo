@@ -61,7 +61,14 @@ Zerops right away, so run the checks before you ask for a merge.
     the parcel's gravity, bounce and ground, `SLOW_T`, `DEAD_T`, the bot's wall circles `BOT_C`/`BOT_CR`
     against `TANK_C`/`TANK_CR` in `client/src/game/tank.ts`);
   - what a hit weighs and scores (issue #14): `HIT_W` in `server/server.js` and in
-    `client/src/game/tank.ts`, the bullet's share in `server/bots.js` (`BULLET_W`);
+    `client/src/game/tank.ts`, the bullet's share in `server/bots.js` (`BULLET_W`); issue #20 added the
+    ship as a victim and the shell and the torpedo as kinds (and the ship's 20 s window, `HIT_WIN` in
+    tank.ts; the server keeps no window for the players);
+  - the ships (issue #20): a shell's gravity, `SHELL_G` in `client/src/game/shells.ts` and `server/bots.js`
+    (which flies the shells at the bots); how long a hit can score, `SCORE_TTL_MS` in `server/server.js`,
+    longer than a shell flies and a torpedo runs (`TORP_RUN` / `TORP_V` in shells.ts); the speed caps in
+    `server/server.js` (`SHIP_V`, `SHELL_V_MAX`, `TORP_V_MAX`) above the ship's top speed (`V_MAX` in
+    `client/src/game/ship.ts`), `SHELL_V` and `TORP_V`;
   - how far a plane may go: `WORLD` in `server/server.js` (`AIR_LIM + 70`) must stay above the plane's
     turn-back margin in `client/src/game/plane.ts` (`AIR_LIM + 60`);
   - the shared city's counts and row sizes (cars, pedestrians) are also at the top of `tools/smoke.js`

@@ -23,17 +23,24 @@
 // Planes (issue #14): a bot does not hunt them, but one flying low and close (AA_R, below AA_TOP) gets bursts of bullets, led by the
 // plane's speed and with some aim error; the plane's player decides the hits, as for any parcel. A person's bullets that hit a bot are
 // reported by the shooter (server.js shot); they do a quarter of a parcel's damage and do not slow the bot.
+//
+// Ships (issue #20): a bot stays a tank. It fires parcels at a ship in range with a clear line as at a tank (the parcel takes longer to
+// come down to a deck below the embankment: LEAD_SHIP), and the ships' shells aimed at the bots are flown here like the parcels: their
+// own gravity (SHELL_G, the same as client/src/game/shells.ts), no bounce, they burst at the ground, the water or a building. A shell
+// weighs a parcel.
 'use strict';
 
 const {
   NODES, EDGES, SPAWNS, DEPOT, route, nearestNode, nearestEdge, edgeBetween, edgePos, inArena, solidAt, solidPush, groundH, clearLine, clearRay,
 } = require('./city');
+const { surfaceY } = require('../client/shared/naval.ts');
 
 const SPEED = 11;                     // units/s; a player's tank tops out at 24
 const HUNT_R = 150, FIRE_MIN = 10, FIRE_MAX = 50;
 const AIM_ERR = 0.2, FIRE_CD = [2.5, 4.5];   // radians of random aim error, seconds between parcels: worth 1 point, they should not dominate
 const AHEAD = 7, BLOCK_W = 2.6, BLOCK_T = 1.5;   // a tank this close in front stops the bot; after BLOCK_T s it turns back
 const SHOT_G = 14, SHOT_UP = 4, SHOT_E = 0.4, LEAD_T = 0.79;
+const LEAD_SHIP = 1.05, SHELL_G = 38, SHELL_LIFE = 8;  // issue #20: a parcel's flight down to a ship's deck; a ship's shell
 const TANK_L = 2.4, TANK_W = 1.15, TANK_H = 2.1;
 const SLOW_T = 2.4, DEAD_T = 3.2, SPAWN_IMMUNE_T = 3, HIT_WINDOW_MS = 8000;   // the same numbers as the players' tanks
 const BULLET_W = 0.25;                // a bullet's share of a hit (HIT_W in server.js and client/src/game/tank.ts)
@@ -103,7 +110,7 @@ function placeFar(bot, others) {
   let best = SPAWNS[0] || DEPOT.park, bs = -1;
   for (const p of SPAWNS) {
     let d = 800;
-    for (const o of others) if (o !== bot && o.st && o.st[8] !== 1) d = Math.min(d, Math.hypot(o.st[1] - p.x, o.st[2] - p.z));
+    for (const o of others) if (o !== bot && o.st && !o.st[8]) d = Math.min(d, Math.hypot(o.st[1] - p.x, o.st[2] - p.z));   // the tanks
     const sc = d + Math.random() * 60;
     if (sc > bs) { bs = sc; best = p; }
   }
@@ -148,7 +155,7 @@ function stepBot(bot, dt, humans, tanks) {
 
   let target = null, td = HUNT_R;
   for (const h of humans) {
-    if (!h.st || h.st[6] || h.st[8] === 1) continue;                      // not a player who has just (re)spawned, nor a plane
+    if (!h.st || h.st[6] || h.st[8] === 1) continue;                      // not a player who has just (re)spawned, nor a plane (a ship, issue #20, is fair game)
     const d = Math.hypot(h.st[1] - bot.x, h.st[2] - bot.z);
     if (d < td) { td = d; target = h; }
   }
@@ -186,10 +193,10 @@ function stepBot(bot, dt, humans, tanks) {
   if (flak) return flak;
   if (bot.fireCd > 0 || !target || td < FIRE_MIN || td > FIRE_MAX) return null;
   if (!clearLine(bot.x, bot.z, target.st[1], target.st[2])) return null;
-  const [, px, pz, ph, pv] = target.st;
-  const ax = px + Math.sin(ph) * pv * LEAD_T, az = pz + Math.cos(ph) * pv * LEAD_T;
+  const [, px, pz, ph, pv] = target.st, lead = target.st[8] === 2 ? LEAD_SHIP : LEAD_T;
+  const ax = px + Math.sin(ph) * pv * lead, az = pz + Math.cos(ph) * pv * lead;
   const yaw = Math.atan2(ax - bot.x, az - bot.z) + (Math.random() - 0.5) * AIM_ERR;
-  const sp = Math.max(14, Math.min(65, (Math.hypot(ax - bot.x, az - bot.z) - 3.1) / LEAD_T)) * rand(0.96, 1.04);
+  const sp = Math.max(14, Math.min(65, (Math.hypot(ax - bot.x, az - bot.z) - 3.1) / lead)) * rand(0.96, 1.04);
   const fx = Math.sin(yaw), fz = Math.cos(yaw);
   bot.fireCd = rand(...FIRE_CD);
   return { sid: ++bot.sid, x: r2(bot.x + fx * 3.1), y: 1.5, z: r2(bot.z + fz * 3.1), vx: r2(fx * sp), vy: SHOT_UP, vz: r2(fz * sp) };
@@ -240,18 +247,23 @@ function onTank(p, x, y, z) {
 }
 
 // Fly the players' parcels one step; onHit(bot, parcel) for each one that reaches a bot. s.lag: how many ms behind the
-// server the shooter saw the city.
+// server the shooter saw the city. Issue #20: a ship's shell (s.k 2) falls faster and bursts where it lands (the ground or the river).
 function flyParcels(parcels, bots, dt, onHit) {
   const now = Date.now();
   for (let i = parcels.length - 1; i >= 0; i--) {
-    const s = parcels[i];
+    const s = parcels[i], shell = s.k === 2;
     const past = bots.map(b => ({ b, p: botAt(b, now - (s.lag ?? 200)) }));
     s.age += dt;
-    let alive = s.age < 6;
+    let alive = s.age < (shell ? SHELL_LIFE : 6);
     const n = Math.max(1, Math.ceil(Math.hypot(s.vx, s.vy, s.vz) * dt / 0.4)), h = dt / n;
     for (let k = 0; k < n && alive; k++) {
-      s.vy -= SHOT_G * h; s.x += s.vx * h; s.y += s.vy * h; s.z += s.vz * h;
+      s.vy -= (shell ? SHELL_G : SHOT_G) * h; s.x += s.vx * h; s.y += s.vy * h; s.z += s.vz * h;
       if (solidAt(s.x, s.y, s.z)) { alive = false; break; }               // a building stops it (in the game it bounces off)
+      if (shell) {
+        for (const { b, p } of past) if (onTank(p, s.x, s.y, s.z)) { onHit(b, s); alive = false; break; }
+        if (alive && s.y < surfaceY(s.x, s.z)) alive = false;             // it bursts on the ground or in the river
+        continue;
+      }
       // the ground as in the game (client/src/game/shots.ts): the street, the pavement, the terrain outside the arena (issue #16)
       const g0 = groundH(s.x, s.z), gy = (g0 > 0 ? g0 : g0 + 0.04) + 0.25;
       if (s.y < gy) {
@@ -269,7 +281,7 @@ function flyParcels(parcels, bots, dt, onHit) {
 }
 
 // A parcel (k 0) or a bullet (k 1) reached the bot: false if it did not take effect (destroyed already, or just back and immune),
-// 'kill' if the hits within 8 s add up to three parcels' worth, otherwise true.
+// 'kill' if the hits within 8 s add up to three parcels' worth, otherwise true. Issue #20: a ship's shell (k 2) counts as a parcel.
 function hitBot(bot, k = 0) {
   if (bot.deadT > 0 || bot.immT > 0) return false;
   const t = Date.now();

@@ -2,11 +2,11 @@
 // The original always draws at up to 2× pixel ratio with 2048 px soft shadows: too much for a weak (integrated) GPU, where the whole
 // picture stutters. The quality level drops by itself when the game keeps missing frames while driving (below Q_MIN_FPS for two
 // seconds in a row, not in the first seconds after a change), never rises by itself, and is remembered in this browser. Q cycles the
-// level by hand (auto then stops for this visit). F, a tap on the speed card or ?stats shows FPS, the slowest frame, ping and the level.
+// level by hand (auto then stops for this visit; not in a ship, where Q launches the torpedoes). F, a tap on the speed card or ?stats shows FPS, the slowest frame, ping and the level.
 import { setPixelRatio, setShadowSize, resize } from '../core/engine';
 import { $, COARSE } from '../core/dom';
 import { T } from '../texts';
-import { G } from './state';
+import { G, car } from './state';
 import { flash } from '../ui/hud';
 import { sizeMini } from '../ui/minimap';
 import { snow } from './fx';
@@ -43,7 +43,8 @@ export function initQuality() {
   addEventListener('keydown', e => {
     if (e.target instanceof HTMLInputElement || e.repeat) return;
     if (e.code === 'KeyF') { PERF.show = !PERF.show; renderStats(); }
-    else if (e.code === 'KeyQ') { PERF.auto = false; setQuality((PERF.level + 1) % QUALITY.length); }
+    // (World of DODO, issue #20: in a ship Q launches the torpedoes, game/ship.ts)
+    else if (e.code === 'KeyQ' && !(G.state === 'drive' && car.k === 2)) { PERF.auto = false; setQuality((PERF.level + 1) % QUALITY.length); }
   });
   document.querySelector('.gauge')!.addEventListener('click', () => { PERF.show = !PERF.show; renderStats(); });
 }

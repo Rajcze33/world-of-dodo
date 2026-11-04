@@ -15,6 +15,10 @@
 // bullets hit (there the others are drawn a little in the past, and a fast plane would be out of reach otherwise), the server passes
 // the hit on to the victim, who applies it unless immune and answers like a parcel hit. A bot fires bullets at low planes.
 //
+// Issue #20: or a player sails a warship on the Vltava (k 2), which fires shells (fire k 2) and torpedoes (fire k 3). Both are slow: the
+// victim decides them as it decides parcels, and the server flies the shells against the bots as it flies the parcels. A ship's row
+// counts only on the river (client/shared/naval.ts), and only a ship may fire shells and torpedoes.
+//
 // Timing, as in the usual snapshot interpolation of network games: every row of a snapshot carries the moment it
 // describes on this server's clock (ms since the start). A player's row gets the moment the player's browser
 // took it, mapped onto the server's clock (see state()), so the pace of their tank survives the network and
@@ -31,6 +35,7 @@ const { WebSocketServer } = require('ws');
 const { initBot, stepBot, flyParcels, hitBot } = require('./bots');
 const world = require('./world');
 const { AIR_LIM } = require('./city');
+const N = require('../client/shared/naval.ts');      // issue #20: the Vltava for the ships (the same file the page runs)
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS) || 24;     // people; the bots come on top
@@ -51,14 +56,29 @@ const NAME_MAX = 16;
 const WORLD = AIR_LIM + 70;
 const BULLET_TTL_MS = 3000;        // a bullet can score this long after it was fired (it flies 1.6 s in the game)
 const BULLET_RANGE = 400;          // a bullet hit claimed by a shooter farther than this from the victim is ignored
-const PLANE = 1;                   // the vehicle kind of a state row (k): 0 or nothing a tank, 1 a plane
+const PLANE = 1;                   // the vehicle kind of a state row (k): 0 or nothing a tank, 1 a plane, 2 a ship (issue #20)
+const SHIP = 2;
+// issue #20: what was fired (fire k): 0 a parcel, 1 a bullet, 2 a ship's shell, 3 a torpedo; how long each can score after it was fired
+// (a parcel lives 14 s, a bullet flies 1.6 s, a shell at most 5, a torpedo runs 16: client/src/game/shells.ts)
+const SHELL = 2, TORP = 3;
+const SCORE_TTL_MS = [15000, 3000, 10000, 20000];
+// a ship's speed cap (13 at full), how far over a bank its row may be (its circles keep it off: rounding, a bridge pier's corner), the
+// fastest shell (110 from the muzzle) and torpedo (22) the server passes on
+const SHIP_V = 15, SHIP_LAND = 2, SHELL_V_MAX = 125, TORP_V_MAX = 25;
 
 // Points for a hit that takes effect: its share of what destroys the vehicle (HIT_W, the same numbers as in client/src/game/tank.ts),
 // times 10 for a person. Three parcels or twelve bullets destroy a tank, one parcel or six bullets a plane: a person is worth 10 a parcel
 // and 3 a bullet in a tank, 30 and 5 in a plane. A bot (always a tank) is worth 1 a parcel, and 1 for the bullet that destroys it.
+// Issue #20: a shell weighs a parcel in a tank and in a plane; a ship takes 0.35 a shell, 1.5 a torpedo, 0.75 a parcel and 0.08 a bullet
+// (4, 15, 8 and 1 points; its hits add up over 20 s in the browser, a tank's and a plane's over 8); a shell in a bot is worth 1.
 const POINTS_PLAYER = 10;
 const POINTS_BOT = 1;
-const HIT_W = { tank: { parcel: 1, bullet: 0.25 }, plane: { parcel: 3, bullet: 0.5 } };
+const HIT_W = {
+  tank: { parcel: 1, bullet: 0.25, shell: 1, torp: 0 },
+  plane: { parcel: 3, bullet: 0.5, shell: 3, torp: 0 },
+  ship: { parcel: 0.75, bullet: 0.08, shell: 0.35, torp: 1.5 },
+};
+const VEHICLE = ['tank', 'plane', 'ship'], KIND = ['parcel', 'bullet', 'shell', 'torp'];
 
 // The tank colours a player can pick when joining; client/index.html offers the same list (TANK_COLORS).
 // Grey is the bots' and red is REDLINE's, so neither is on it.
@@ -261,11 +281,14 @@ function leave(ws) {
 // A player's tank or plane (and the cars a tank pushes, field c). ct is the moment the browser took it, on the browser's own clock. Its offset
 // to the server's clock is the smallest arrival delay seen so far (a report that came faster shows the true offset better; the
 // estimate creeps up slowly in case the route got longer), so the stamp keeps the browser's pace whatever the network does.
-// A plane (k 1) also has its altitude y and pitch p; they go at the end of its row.
+// A plane (k 1) also has its altitude y and pitch p; they go at the end of its row. Issue #20: a ship (k 2) its heave and sinking y
+// (0 afloat, down to -12), pitch p and its turrets' yaw a [fore, aft]; it counts only on the river, give or take SHIP_LAND.
 function state(p, m) {
-  const plane = m.k === PLANE;
-  if (!num(m.x, WORLD) || !num(m.z, WORLD) || !num(m.h, 100) || !num(m.v, plane ? 90 : 40) || !num(m.r, 4)) return;
-  if (plane && (!num(m.y, 400) || m.y < 0 || !num(m.p, 2))) return;
+  const k = m.k === PLANE || m.k === SHIP ? m.k : 0;
+  if (!num(m.x, WORLD) || !num(m.z, WORLD) || !num(m.h, 100) || !num(m.v, k === PLANE ? 90 : k === SHIP ? SHIP_V : 40) || !num(m.r, 4)) return;
+  if (k === PLANE && (!num(m.y, 400) || m.y < 0 || !num(m.p, 2))) return;
+  if (k === SHIP && (!num(m.y, 12) || m.y > 1 || !num(m.p, 1) || !Array.isArray(m.a) || m.a.length !== 2 || !num(m.a[0], 7) || !num(m.a[1], 7)
+    || N.bankDist(m.x, m.z) < -SHIP_LAND)) return;
   const now = clock();
   let ts = now;
   if (num(m.ct, 1e12)) {
@@ -275,40 +298,46 @@ function state(p, m) {
   }
   if (p.st && ts <= p.st[7]) ts = p.st[7] + 1;
   p.st = [p.id, m.x, m.z, m.h, m.v, m.r, m.s === 1 || m.s === 2 ? m.s : 0, ts];  // s: 1 just (re)spawned and immune (the others draw it blinking), 2 destroyed
-  if (plane) p.st.push(PLANE, m.y, m.p);
+  if (k === PLANE) p.st.push(PLANE, m.y, m.p);
+  else if (k === SHIP) p.st.push(SHIP, m.y, m.p, m.a[0], m.a[1]);
   else if (Array.isArray(m.c)) world.carsFrom(p.id, { x: m.x, z: m.z }, m.c, ts);
 }
 
-// k: what was fired, 0 a parcel, 1 a bullet
+// k: what was fired, 0 a parcel, 1 a bullet, 2 a shell, 3 a torpedo
 function remember(p, sid, k = 0) {
   const now = Date.now();
   p.shots.set(sid, { t: now, scored: false, k });
-  if (p.shots.size > 120) for (const [s, v] of p.shots) if (now - v.t > SHOT_TTL_MS) p.shots.delete(s);
+  if (p.shots.size > 120) for (const [s, v] of p.shots) if (now - v.t > Math.max(SHOT_TTL_MS, SCORE_TTL_MS[TORP])) p.shots.delete(s);
 }
 
-// A parcel (from a tank's gun or dropped from a plane) or, with k 1, a bullet.
+// A parcel (from a tank's gun or dropped from a plane) or, with k 1, a bullet. Issue #20: with k 2 a ship's shell, with k 3 a torpedo,
+// only from a player whose row is a ship; a torpedo runs on the water (y at the surface, no vy) at its speed, a shell no faster than
+// from the muzzle.
 function fire(p, m) {
   if (!Number.isInteger(m.sid) || m.sid < 1) return;
   if (!num(m.x, WORLD) || !num(m.y, 400) || !num(m.z, WORLD) || !num(m.vx, 300) || !num(m.vy, 300) || !num(m.vz, 300)) return;
-  const k = m.k === 1 ? 1 : 0;
+  const k = m.k === 1 || m.k === SHELL || m.k === TORP ? m.k : 0;
+  if (k >= SHELL && !(p.st && p.st[8] === SHIP)) return;
+  if (k === SHELL && Math.hypot(m.vx, m.vy, m.vz) > SHELL_V_MAX) return;
+  if (k === TORP && (Math.abs(m.y - N.WATER_Y) > 1 || m.vy !== 0 || Math.hypot(m.vx, m.vz) > TORP_V_MAX)) return;
   remember(p, m.sid, k);
   const shot = { t: 'fire', id: p.id, sid: m.sid, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz };
-  if (k) shot.k = 1;
+  if (k) shot.k = k;
   broadcast(shot, p);
-  if (k) return;                                        // a bullet's hits are reported by the shooter (shot)
+  if (k === 1 || k === TORP) return;                    // a bullet's hits are reported by the shooter (shot); a torpedo hits ships only
   // rt: the moment of the city the shooter saw when firing (server clock); the bots are tested where they were then
   const lag = num(m.rt, 1e12) ? Math.max(0, Math.min(REWIND_MAX_MS, clock() - m.rt)) : 200;
   if (players.size > humans().length && parcels.length < 300) parcels.push({ ...shot, by: p.id, age: 0, lag });
 }
 
-// A scoring hit: once per parcel or bullet, only for one the shooter really fired and only while it can still fly. The points
-// follow from what hit what (HIT_W): the victim's vehicle is in its state row.
+// A scoring hit: once per parcel or bullet (or shell, torpedo), only for one the shooter really fired and only while it can still fly. The
+// points follow from what hit what (HIT_W): the victim's vehicle is in its state row.
 function score(shooter, victim, sid, kill) {
   const shot = shooter && shooter !== victim && shooter.shots.get(sid);
-  if (!shot || shot.scored || Date.now() - shot.t > (shot.k ? BULLET_TTL_MS : SHOT_TTL_MS)) return;
+  if (!shot || shot.scored || Date.now() - shot.t > (shot.k === 1 ? BULLET_TTL_MS : SCORE_TTL_MS[shot.k])) return;
   shot.scored = true;
-  const gain = victim.bot ? (shot.k ? (kill ? POINTS_BOT : 0) : POINTS_BOT)
-    : Math.round(POINTS_PLAYER * HIT_W[victim.st && victim.st[8] === PLANE ? 'plane' : 'tank'][shot.k ? 'bullet' : 'parcel']);
+  const gain = victim.bot ? (shot.k === 1 ? (kill ? POINTS_BOT : 0) : POINTS_BOT)
+    : Math.round(POINTS_PLAYER * HIT_W[VEHICLE[(victim.st && victim.st[8]) || 0]][KIND[shot.k]]);
   shooter.pts += gain;
   broadcast({ t: 'hit', by: shooter.id, v: victim.id, pts: shooter.pts, gain, kill: !!kill });
 }
@@ -356,18 +385,19 @@ function removeBots() {
   parcels.length = 0;
 }
 
-// people: everyone the bots can shoot at (tanks get parcels, low planes bullets); the tanks block a bot's way, the planes do not
+// people: everyone the bots can shoot at (tanks and ships get parcels, low planes bullets); the tanks block a bot's way, the planes and
+// the ships do not
 function stepBots(dt) {
   const people = humans(), list = bots();
   if (!list.length) return;
   for (const b of list) {
-    const shot = stepBot(b, dt, people, [...players.values()].filter(o => o !== b && o.st && o.st[8] !== PLANE));
+    const shot = stepBot(b, dt, people, [...players.values()].filter(o => o !== b && o.st && !o.st[8]));
     if (!shot) continue;
     remember(b, shot.sid, shot.k || 0);
     broadcast({ t: 'fire', id: b.id, ...shot });
   }
   flyParcels(parcels, list, dt, (b, s) => {
-    const fx = hitBot(b, 0);
+    const fx = hitBot(b, s.k || 0);                     // a parcel or (issue #20) a shell
     if (fx) score(players.get(s.by), b, s.sid, fx === 'kill');
   });
 }
@@ -409,8 +439,8 @@ wss.on('connection', ws => {
 });
 
 // Each tick: the bots drive and fire, the city moves on (in two half steps: its code was written for browser frames),
-// then one snapshot goes to everyone: every tank and plane, the cars and the tram; every second tick also the pedestrians. The cars and the
-// tram stop for the tanks only.
+// then one snapshot goes to everyone: every tank, plane and ship, the cars and the tram; every second tick also the pedestrians. The cars
+// and the tram stop for the tanks only.
 // ts: the server's clock now, the moment of the bots, the traffic and the tram; n: the tick (the same for everyone).
 let lastTick = Date.now(), tick = 0;
 setInterval(() => {
@@ -423,7 +453,7 @@ setInterval(() => {
     if (!pl.st) continue;
     if (pl.bot) pl.st[7] = ts;
     p.push(pl.st);
-    if (pl.st[8] !== PLANE) tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] });
+    if (!pl.st[8]) tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] });   // (the cars stop for the tanks only)
   }
   for (let k = 0; k < 2; k++) for (const i of world.step(dt / 2, tanks)) broadcast({ t: 'prop', i, up: 1 });
   tick++;

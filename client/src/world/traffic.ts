@@ -57,7 +57,7 @@ const free = (x: number, z: number, m: number) => freeAt(x, z, m) && propsClear(
 export const TRAFFIC: TrafficCar[] = [];
 // this browser's tank as the shared simulation sees one (the intro's city gives way to it as the server's gives way to every tank)
 const SELF: Tank = { x: 0, z: 0, h: 0, v: 0 }, TANKS: Tank[] = [];
-function selfTank() { TANKS.length = 0; if (car.k !== 1) { SELF.x = car.x; SELF.z = car.z; SELF.h = car.h; SELF.v = car.v; TANKS.push(SELF); } }
+function selfTank() { TANKS.length = 0; if (car.k === 0) { SELF.x = car.x; SELF.z = car.z; SELF.h = car.h; SELF.v = car.v; TANKS.push(SELF); } }
 // one merged wheel (tyre + hub) shared by all moving cars: one mesh, drawn as an instance under every car
 let wheelSrc: Mesh | null = null;
 // each car = 1 body mesh + 1 lights mesh + 4 wheels (few draw calls, so there can be more cars)

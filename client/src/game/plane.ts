@@ -20,9 +20,11 @@ import { $, COARSE } from '../core/dom';
 import { clamp, angLerp } from '../core/util';
 import { T } from '../texts';
 import { G, car, K, HELD, input, view } from './state';
-import { solidNear, solidsIn, groundH, terrainH, AIR_LIM, AIR_TOP, UNIT_M, type Solid } from '../world/grid';
+import { solidNear, solidsIn, terrainH, AIR_LIM, AIR_TOP, UNIT_M, type Solid } from '../world/grid';
 import { propsNear } from '../world/props';
-import { landHit, WATER_Y } from '../world/land';
+import { landHit } from '../world/land';
+import { surfaceY } from '../../shared/naval.ts';
+import { shipBox } from './shells';
 import { NET } from '../net/net';
 import { flash } from '../ui/hud';
 import { carStatus, toppleCar, camLook, vanOwnMat, SPAWN_IMMUNE } from './tank';
@@ -131,7 +133,8 @@ const fwd = (h: number, p: number) => [Math.sin(h) * Math.cos(p), Math.sin(p), M
 // city (the woods' trees, a landmark's towers), or too close to another vehicle?
 // World of DODO, issue #16: the buildings are Karlín's footprint polygons with the viaduct and the site (map.ts solidNear: 0.9 aside,
 // 0.6 over the top, the old box test's margins), the land round the city is the real terrain (groundH outside the arena).
-const floorH = (x: number, z: number) => Math.max(groundH(x, z), WATER_Y);   // the ground, or the river's ice over its bed
+// the ground, or the river's ice over its bed (issue #20: its water, client/shared/naval.ts surfaceY)
+const floorH = (x: number, z: number) => surfaceY(x, z);
 function crashed(x: number, y: number, z: number): boolean {
   if (y < floorH(x, z) + 0.8) return true;
   if (solidNear(x, y, z, 0.9, 0.6)) return true;
@@ -139,7 +142,7 @@ function crashed(x: number, y: number, z: number): boolean {
   if (landHit(x, y, z)) return true;
   for (const o of NET.others.values()) {
     if (!o.on || o.s === 2) continue;
-    if (o.k === 1 ? Math.hypot(o.x - x, o.y - y, o.z - z) < PLANE_R * 1.1 : y < 3.2 && Math.hypot(o.x - x, o.z - z) < 3) return true;
+    if (o.k === 1 ? Math.hypot(o.x - x, o.y - y, o.z - z) < PLANE_R * 1.1 : o.k === 2 ? shipBox(x, y, z, o.x, o.y, o.z, o.h) : y < 3.2 && Math.hypot(o.x - x, o.z - z) < 3) return true;
   }
   return false;
 }

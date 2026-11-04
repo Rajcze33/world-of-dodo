@@ -70,7 +70,7 @@ interface KarlinData {
   tram: { loop: number[]; stops: number[]; tracks: number[][] };
   rail: { pts: number[]; deck: number; bridge: 0 | 1 }[];
   farRoads: { pts: number[]; w: number; y?: number }[];   // the car roads of the outer square outside the arena, drawn only (no graph,
-                                                       // no traffic); y: a bridge's deck height
+                                                       // no traffic); y: a bridge's deck height (see "rail" for those over the river)
   water: number[][];
   parks: number[][];
   trees: number[];             // [x, z, size, ...]
@@ -160,9 +160,22 @@ height of the track bed in units: the **Negrelli viaduct** (and any bridge in or
 bridges the terrain at their ends but at least 4.8 u. `bridge: 0` lines have `deck: 0`: they lie on the terrain
 (`terrainH`). The line at the foot of Vítkov is the `bridge: 0` line along z ≈ 215.
 
+**Bridges over the Vltava** (issue #20, warships: a ship's superstructure must pass under them; the water is at -4.5): a rail
+deck over the river is at least 3 u (map.ts makes the deck slab `deck - 1` .. `deck`, so its underside is at least 2 u, 6.5 over
+the water), a `farRoads` piece with `y` that crosses the river at least 3.5 u (its slab `y - 1` .. `y`). Both are met by the
+Negrelli viaduct (6.4) as it was; six pieces of Hlávkův most (0.3 to 2.5 before, their ends' terrain) are raised to 3.5. The
+ends' terrain of every bridge is read from the terrain as it was before the river got its deep bed (see "terrain"), so no other
+bridge changes. The piers in the river are not data: `client/shared/map.ts` stands them where a bridge crosses the water (on every
+small dry gap the data has there, the Negrelli viaduct's piers and the locks' walls, and evenly between them where the open water
+runs longer than 30 u).
+
 ### water, parks, trees
 
-- `water`: natural=water / riverbank polygons (the Vltava, with Štvanice as land) clipped to the outer square.
+- `water`: natural=water / riverbank polygons (the Vltava, with Štvanice as land) clipped to the outer square. **The Vltava**
+  (issue #20) is the water connected to the biggest piece (15 of the 18 pieces; touching within 0.5 u, as the pieces of one
+  polygon share their cut edges): its bank is every piece edge with no river on its other side. The other three are small
+  ponds (one of them a 20 × 8 u pool in the arena's north, at x 3..23, z -190..-182). `client/shared/naval.ts` reads the river
+  the same way.
 - `parks`: parks, gardens, grass, forest, meadows, recreation grounds (not paved ones), cemeteries, woods, scrub.
 - Polygons with holes (a courtyard, an island) are cut into simple pieces along vertical lines through the holes.
 - `trees`: OSM trees and tree rows (one every 6 u) inside the arena, on a block and outside houses; a street tree that
@@ -190,8 +203,15 @@ far building on the hill). `x, z` the middle of the building's minimum bounding 
 A heightmap over the outer zone, row-major (rows of constant z): `x0 = z0 = -700`, `step = 10`, `nx = nz = 141`.
 Heights in units relative to Karlín's own level (the median of DMR 5G inside the arena, 186.4 m above sea level), × 1.2.
 **Exactly 0 inside the arena and 15 u around it** (the rectangle grown by 15), then blended to the real terrain over 45 u.
-Under water (outside the flat zone) -2, the river bed; the water surface should be drawn above it (about -1). Land never
-goes below -0.6, so it stays above the water. Vítkov rises to about 60 u under the memorial (≈ 75 m above Karlín), the
+Land never goes below -0.6. **Under the Vltava** (issue #20, outside the flat zone) the river bed, -8, under the water's
+surface at -4.5 (`naval.ts` `WATER_Y`; Prague's embankments stand 5-7 m over the river). The grid is read bilinearly, so a grid
+point just inside the bank at -8 would drag the land beside it far down: the bed rises towards the bank over its last units,
+`max(-8, -0.6 - 1.6 d)` with `d` the grid point's distance to the bank (sampled up to 6 u). Near a bank the grid is therefore
+neither the land's height nor the bed's for a few units; the game asks `naval.ts` (`inRiver`, `landY`: the grid with its river
+points taking their land neighbours' height) and draws the bank as an embankment wall. Under a pond (not the Vltava) -2 as
+before, the pond drawn frozen above it. The far buildings' bases and the bridges' ends are taken from the terrain as it was
+before the deep bed (-2 under all water), so that a house on the bank keeps its footing: the buildings are byte for byte the
+same. Vítkov rises to about 60 u under the memorial (≈ 75 m above Karlín), the
 highest point of the zone is 71.8 u.
 
 ## What the generator simplifies
@@ -206,7 +226,8 @@ highest point of the zone is 71.8 u.
 - Kerbs follow the carriageway widths above, not the real kerb lines; the arena's edge closes the blocks along it.
 - The tram is one line on one street with game-made turning loops; the real lines turn off to Florenc and Palmovka.
 - Trees from OSM only (IPR's street-tree layer is not used).
-- Terrain at 15 m resolution, flattened in and around the arena, the river bed at one depth.
+- Terrain at 15 m resolution, flattened in and around the arena, the river bed at one depth (and the water's surface at one
+  level: no weirs, the lock chambers at the river's level).
 
 ## Known data problems
 

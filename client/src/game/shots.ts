@@ -1,7 +1,8 @@
 // ---------- parcel cannon: Space fires delivery parcels from the tank ----------
 // Parcels fly on a ballistic arc and collide with: the buildings (issue #16: Karlín's, with the Negrelli viaduct and the depot hall),
 // the construction site, parked cars, moving cars, the tram, people, the tanks and the ground. They bounce, then come to rest and
-// fade out after a while.
+// fade out after a while. World of DODO, issue #20: they hit the ships too, and the river is water now: a parcel that comes down on it
+// splashes and sinks (client/shared/naval.ts surfaceY, world/water.ts splash).
 // (The original also delivered a stop with a parcel that landed in its ring; World of DODO has no deliveries.)
 import { Bucket, Inst, Dummy, addGeo, boxGeo } from '../core/geo';
 import { VC_MAT } from '../core/mat';
@@ -10,7 +11,8 @@ import { T } from '../texts';
 import { car } from './state';
 import type { Car, Ped } from './types';
 import { solidHit, groundH, AIR_LIM } from '../world/grid';
-import { WATER_Y } from '../world/land';
+import { WATER_Y, surfaceY } from '../../shared/naval.ts';
+import { splash } from '../world/water';
 import { ALLCARS, TRAM, TRAM_L, TRAM_W, PARCEL_M, carBody, putBody, impulse, toDyn } from '../world/traffic';
 import { PEDS, knockPed } from '../world/peds';
 import { NET, netFire, netHit, netName } from '../net/net';
@@ -18,6 +20,7 @@ import { WORLD, netPed } from '../net/world';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
 import { PLANE_R } from './bullets';
+import { shipBox, SHIP_HH } from './shells';
 
 export const SHOT_MAX = 64, SHOT_G = 14;
 const SHOT_SPEED = 45, SHOT_UP = 4, SHOT_CD = 0.28, SHOT_LIFE = 14, SHOT_E = 0.4;
@@ -77,17 +80,26 @@ export function shotHit(x: number, y: number, z: number, px: number, py: number,
     const g0 = groundH(p.x, p.z); if (y < g0 || y > g0 + 2.1 || Math.hypot(x - p.x, z - p.z) >= 0.55) continue;
     const dx = px - p.x, dz = pz - p.z, l = Math.hypot(dx, dz) || 1; return { n: [dx / l, 0, dz / l], ped: p };
   }
-  if (owner === 'r' && car.topT <= 0) {                                                              // other players' parcels hit YOUR tank or plane
-    const h = car.k === 1 ? sphereHit(x, y, z, px, py, pz, car.x, car.y, car.z) : obbHit(x, y, z, px, py, pz, car, Math.sin(car.h), Math.cos(car.h), 2.4, 1.15, 2.1 + car.gy);
+  if (owner === 'r' && car.topT <= 0) {                                                              // other players' parcels hit YOUR tank, plane or ship
+    const h = car.k === 1 ? sphereHit(x, y, z, px, py, pz, car.x, car.y, car.z) : car.k === 2 ? shipHit(x, y, z, px, py, pz, car.x, car.y, car.z, car.h)
+      : obbHit(x, y, z, px, py, pz, car, Math.sin(car.h), Math.cos(car.h), 2.4, 1.15, 2.1 + car.gy);
     if (h) { h.car = null; h.player = true; return h; }
   }
-  // other players' tanks and planes: every parcel bounces off them here; whether it hit is decided on that player's screen
+  // other players' tanks, planes and ships: every parcel bounces off them here; whether it hit is decided on that player's screen
   for (const o of NET.others.values()) {
-    if (!o.on || o.s === 2 && o.k === 1 || Math.abs(o.x - x) > 4 || Math.abs(o.z - z) > 4) continue;
-    const h = o.k === 1 ? sphereHit(x, y, z, px, py, pz, o.x, o.y, o.z) : obbHit(x, y, z, px, py, pz, o, o.hx, o.hz, 2.4, 1.15, 2.1 + groundH(o.x, o.z));
+    const R = o.k === 2 ? 12 : 4;
+    if (!o.on || o.s === 2 && o.k !== 0 || Math.abs(o.x - x) > R || Math.abs(o.z - z) > R) continue;
+    const h = o.k === 1 ? sphereHit(x, y, z, px, py, pz, o.x, o.y, o.z) : o.k === 2 ? shipHit(x, y, z, px, py, pz, o.x, o.y, o.z, o.h)
+      : obbHit(x, y, z, px, py, pz, o, o.hx, o.hz, 2.4, 1.15, 2.1 + groundH(o.x, o.z));
     if (h) { h.car = null; return h; }
   }
   return null;
+}
+// World of DODO, issue #20: a ship's hit box (game/shells.ts shipBox); from above a parcel bounces off its top, else off its side
+function shipHit(x: number, y: number, z: number, px: number, py: number, pz: number, sx: number, sy: number, sz: number, h: number): ShotHit | null {
+  if (!shipBox(x, y, z, sx, sy, sz, h)) return null;
+  if (py >= WATER_Y + sy + SHIP_HH) return { n: [0, 1, 0] };
+  const hx = Math.sin(h), hz = Math.cos(h), s = Math.sign((px - sx) * hz - (pz - sz) * hx) || 1; return { n: [hz * s, 0, -hx * s] };
 }
 // World of DODO, issue #14: a plane is a sphere for the parcels (as for the bullets, game/bullets.ts); the normal points from its centre
 function sphereHit(x: number, y: number, z: number, px: number, py: number, pz: number, cx: number, cy: number, cz: number): ShotHit | null {
@@ -147,7 +159,7 @@ export function updateShots(dt: number) {
         }
         else if (hit.player) {                                                   // another player's parcel hits you
           const sg = Math.random() < 0.5 ? 1 : -1;
-          if (!s.scored && hitPlayer('shot', sg, T.hitBy(netName(s.by)))) {    // a hit that took effect scores for the shooter
+          if (!s.scored && hitPlayer('shot', sg, (car.k === 2 ? T.shipHitBy : T.hitBy)(netName(s.by)))) {    // a hit that took effect scores for the shooter
             s.scored = true; const kill = car.topT > 0;
             if (kill) flash(T.killedBy(netName(s.by))); netHit(s, kill);
           }
@@ -160,10 +172,11 @@ export function updateShots(dt: number) {
         else if (vn < 0) { s.vx -= (1 + SHOT_E) * vn * nx; s.vy -= (1 + SHOT_E) * vn * ny; s.vz -= (1 + SHOT_E) * vn * nz; s.vx *= 0.85; s.vz *= 0.85; }
         s.wx = -s.wx * 0.6 + (Math.random() - 0.5) * 4; s.wy = -s.wy * 0.6 + (Math.random() - 0.5) * 4;
       }
-      // the street (as the original, a hair above it), the pavement (0.3); issue #16: outside the arena the terrain and the frozen
-      // river's ice (world/land.ts WATER_Y). server/bots.js flies the parcels aimed at the bots on the same ground (the bots stay in
-      // the arena, so it does without the ice)
-      const g0 = Math.max(groundH(s.x, s.z), WATER_Y), gy = g0 > 0 ? g0 : g0 + 0.04;
+      // the street (as the original, a hair above it), the pavement (0.3); issue #16: outside the arena the terrain. Issue #20: the
+      // river is water (client/shared/naval.ts surfaceY): the parcel splashes and sinks. server/bots.js flies the parcels aimed at the
+      // bots on the same ground (the bots stay in the arena, so it does without the river)
+      const g0 = surfaceY(s.x, s.z), gy = g0 > 0 ? g0 : g0 + 0.04;
+      if (g0 === WATER_Y && s.y < g0) { splash(s.x, s.z, 0.45); s.on = false; s.vis = false; break; }
       if (s.y < gy + 0.25) {
         s.y = gy + 0.25;
         if (s.vy < 0) { s.vy = -s.vy * SHOT_E; s.vx *= 0.78; s.vz *= 0.78; s.wx *= 0.6; s.wy *= 0.6; if (s.vy < 1.8) s.vy = 0; }
