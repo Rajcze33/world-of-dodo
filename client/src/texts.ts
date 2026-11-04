@@ -78,6 +78,9 @@ const CS = {
   vehLbl: "Vozidlo",
   vehPlane: "Letadlo",
   vehTank: "Tank",
+  // World of DODO, issue #16: the real Karlín and its sources (the three lines are what the licences ask for)
+  attrib: "© OpenStreetMap contributors (ODbL)\ndatový podklad © IPR Praha (CC BY 4.0)\nvýškopis © ČÚZK (CC BY 4.0)",
+  mapSrc: "Mapa: skutečný pražský Karlín z otevřených dat\n© OpenStreetMap contributors (ODbL) · datový podklad © IPR Praha (CC BY 4.0) · výškopis © ČÚZK (CC BY 4.0)",
 };
 
 const EN: typeof CS = {
@@ -157,6 +160,8 @@ const EN: typeof CS = {
   vehLbl: "Vehicle",
   vehPlane: "Plane",
   vehTank: "Tank",
+  attrib: "© OpenStreetMap contributors (ODbL)\nmap data © IPR Praha (CC BY 4.0)\nelevation © ČÚZK (CC BY 4.0)",
+  mapSrc: "Map: the real Karlín in Prague, from open data\n© OpenStreetMap contributors (ODbL) · map data © IPR Praha (CC BY 4.0) · elevation © ČÚZK (CC BY 4.0)",
 };
 
 export const LANG: 'cs' | 'en' = new URLSearchParams(location.search).get('lang') === 'en' ? 'en' : 'cs';

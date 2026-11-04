@@ -1,16 +1,23 @@
 // World of DODO bots: tanks the server drives, so every player sees the same ones (BOT1, BOT2, ...).
 //
-// A bot drives the street grid from junction to junction. Once a player is within HUNT_R it picks the turns
-// that bring it closer, and when the player is in range with no building in between it fires a parcel with
+// A bot drives the streets from junction to junction. Once a player is within HUNT_R it takes the turns that
+// bring it closer, and when the player is in range with no building in between it fires a parcel with
 // some lead and some aim error, so a moving target can dodge. The players' clients fly the bot's parcels
 // and report the hits like any other player's.
+//
+// World of DODO, issue #16: the streets are the real Karlín's street graph (client/shared/map.ts through server/city.js: NODES,
+// EDGES, route), no longer the 7 × 7 grid's junctions. A bot follows a street's centre line from node to node; at a junction it picks
+// the next street (towards its target along the shortest way, route(), most of the time; else straight on or at random, never back
+// the way it came), turns back short of a dead end or the arena's edge (a third of Karlín's nodes are such ends), slows down to turn
+// round a sharp corner, and is pushed off a wall that juts into its street like a player's tank (map.ts solidPush). It starts at the
+// map's spawn point farthest from the others (SPAWNS).
 //
 // Parcels fired AT a bot are flown here, because the bot lives here: the game's ballistics, the ground and
 // the buildings (server/city.js); the cars, the tram and the people of each client are not known here. The
 // shooter saw the bot late (the browser draws everything a little behind the server's clock, plus the network),
 // so a parcel is tested against where the bot was then: the parcel's lag, from the moment of the city the
 // shooter's browser showed when firing (lag compensation, in favour of the shooter). A hit follows the game's rules for a tank: slowed for a moment,
-// three hits within 8 s destroy it (it lies on its side, then comes back at a junction far from the players,
+// three hits within 8 s destroy it (it lies on its side, then comes back at a spawn point far from the players,
 // immune for a few seconds), and only a hit that takes effect scores.
 //
 // Planes (issue #14): a bot does not hunt them, but one flying low and close (AA_R, below AA_TOP) gets bursts of bullets, led by the
@@ -18,7 +25,9 @@
 // reported by the shooter (server.js shot); they do a quarter of a parcel's damage and do not slow the bot.
 'use strict';
 
-const { roadC, solidAt, clearLine, clearRay } = require('./city');
+const {
+  NODES, EDGES, SPAWNS, DEPOT, route, nearestNode, nearestEdge, edgeBetween, edgePos, inArena, solidAt, solidPush, groundH, clearLine, clearRay,
+} = require('./city');
 
 const SPEED = 11;                     // units/s; a player's tank tops out at 24
 const HUNT_R = 150, FIRE_MIN = 10, FIRE_MAX = 50;
@@ -31,48 +40,94 @@ const BULLET_W = 0.25;                // a bullet's share of a hit (HIT_W in ser
 // anti-aircraft: reach, the highest plane, seconds between bullets, a burst and the pause after it, aim error (radians), bullet speed.
 // A nuisance for a plane that stays low near a bot, not a threat to one that keeps moving (a bot is worth 1 point).
 const AA_R = 60, AA_TOP = 60, AA_RATE = 0.2, AA_BURST = [0.4, 0.8], AA_PAUSE = [3, 5], AA_ERR = 0.16, BUL_V = 170, AA_Y = 2.3;
+// issue #16: a bot turns back this far before a dead end or the arena's edge (its nose stays out of the house at the end of a cul-de-sac
+// and inside the arena); its circles against the walls, as a player's tank (TANK_C, TANK_CR in client/src/game/tank.ts); a turn sharper
+// than TURN_SLOW (radians off its heading) slows it, from TURN_STOP on it turns on the spot (4 rad/s)
+const END_M = 4, BOT_C = [-1.55, 0, 1.55], BOT_CR = 1.0, TURN_SLOW = 0.5, TURN_STOP = 1.5;
 
-const nbrs = (i, j) => [[i + 1, j], [i - 1, j], [i, j + 1], [i, j - 1]].filter(([a, b]) => a >= 0 && a <= 6 && b >= 0 && b <= 6);
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 const r2 = v => Math.round(v * 100) / 100;
 const rand = (a, b) => a + Math.random() * (b - a);
 
-// Turn a player record into a bot.
-function initBot(bot, humans) {
-  bot.sid = 0;
-  placeFar(bot, humans);
+// ---------- the street graph (issue #16) ----------
+// A bot is on edge bot.e (an index into EDGES) at bot.s along it from node a, driving towards node b (dir 1) or node a (dir -1), as far
+// as bot.send: the node, or END_M short of it at a dead end (a node with one street, or one on the arena's edge).
+const deadEnd = n => NODES[n].e.length < 2 || !inArena(NODES[n].x, NODES[n].z, 3);
+function sEnd(e, dir) {
+  const n = dir > 0 ? e.b : e.a;
+  if (!deadEnd(n)) return dir > 0 ? e.len : 0;
+  return dir > 0 ? Math.max(e.len / 2, e.len - END_M) : Math.min(e.len / 2, END_M);
+}
+// the way along edge e in direction dir at s, as a heading
+function dirAt(e, s, dir) { const p = edgePos(e, s, 0); return Math.atan2(p.hx * dir, p.hz * dir); }
+// onto edge e from its end at node n
+function enter(bot, e, n) {
+  bot.e = e.i; bot.dir = e.a === n ? 1 : -1; bot.s = bot.dir > 0 ? 0 : e.len; bot.send = sEnd(e, bot.dir);
+}
+// turn back along the street it is on
+function turnBack(bot) { bot.dir = -bot.dir; bot.send = sEnd(EDGES[bot.e], bot.dir); }
+// the heading a bot leaves node n with along edge e
+const leave = (e, n) => dirAt(e, e.a === n ? 0 : e.len, e.a === n ? 1 : -1);
+
+// at the end of its edge: the next street. Towards the target most of the time (the first street of the shortest way to the node
+// nearest to it, or else the one leading nearest to it), otherwise straight on more often than not, otherwise at random; never back
+// the way it came, except at a dead end
+function arrive(bot, target) {
+  const e = EDGES[bot.e], n = bot.dir > 0 ? e.b : e.a;
+  if (deadEnd(n)) return turnBack(bot);
+  const opts = NODES[n].e.filter(k => k !== e.i).map(k => EDGES[k]);
+  if (!opts.length) return turnBack(bot);
+  const far = o => NODES[o.a === n ? o.b : o.a];
+  let next;
+  if (target && Math.random() < 0.75) {
+    const tx = target.st[1], tz = target.st[2], way = route(n, nearestNode(tx, tz));
+    const first = way.length > 1 ? edgeBetween(n, way[1]) : null;
+    next = first && first.i !== e.i ? first
+      : opts.reduce((a, b) => Math.hypot(far(a).x - tx, far(a).z - tz) <= Math.hypot(far(b).x - tx, far(b).z - tz) ? a : b);
+  } else if (Math.random() < 0.5) {                                       // straight on: the street leaving closest to its heading
+    const h = dirAt(e, bot.s, bot.dir);
+    next = opts.reduce((a, b) => Math.abs(wrapA(leave(a, n) - h)) <= Math.abs(wrapA(leave(b, n) - h)) ? a : b);
+  } else next = opts[Math.random() * opts.length | 0];
+  enter(bot, next, n);
 }
 
-// (Re)start at a junction far from the players (with some chance in it), heading down a street.
-function placeFar(bot, humans) {
-  let best = [3, 3], bs = -1;
-  for (let i = 0; i <= 6; i++) for (let j = 0; j <= 6; j++) {
-    let d = 400;
-    for (const h of humans) if (h.st) d = Math.min(d, Math.hypot(h.st[1] - roadC(i), h.st[2] - roadC(j)));
+// Turn a player record into a bot. others: everyone already in (people and bots)
+function initBot(bot, others) {
+  bot.sid = 0;
+  placeFar(bot, others);
+}
+
+// (Re)start at the map's spawn point farthest from the other tanks (with some chance in it), heading along its street the way the
+// spawn point faces (towards the middle of the city)
+function placeFar(bot, others) {
+  let best = SPAWNS[0] || DEPOT.park, bs = -1;
+  for (const p of SPAWNS) {
+    let d = 800;
+    for (const o of others) if (o !== bot && o.st && o.st[8] !== 1) d = Math.min(d, Math.hypot(o.st[1] - p.x, o.st[2] - p.z));
     const sc = d + Math.random() * 60;
-    if (sc > bs) { bs = sc; best = [i, j]; }
+    if (sc > bs) { bs = sc; best = p; }
   }
+  const ne = nearestEdge(best.x, best.z), e = ne.e, at = edgePos(e, ne.s, 0);
+  const dir = Math.sin(best.h) * at.hx + Math.cos(best.h) * at.hz >= 0 ? 1 : -1;
   Object.assign(bot, {
-    x: roadC(best[0]), z: roadC(best[1]), h: 0, v: 0, roll: 0, prev: null, from: best, to: null,
+    e: e.i, s: ne.s, dir, send: sEnd(e, dir), x: at.x, z: at.z, h: Math.atan2(at.hx * dir, at.hz * dir), v: 0, roll: 0, blockT: 0,
     slowT: 0, deadT: 0, immT: bot.st ? SPAWN_IMMUNE_T : 0, hitLog: [], fireCd: rand(2, 4), hist: [], aaCd: 0, aaLeft: 0,
   });
-  bot.to = nextJunction(bot, null);
-  bot.h = Math.atan2(roadC(bot.to[0]) - bot.x, roadC(bot.to[1]) - bot.z);
   bot.st = state(bot);
 }
 
-// the next junction: towards the target most of the time, otherwise at random (straight on more often); never back
-function nextJunction(bot, target) {
-  const [i, j] = bot.from, opts = nbrs(i, j).filter(n => !bot.prev || n[0] !== bot.prev[0] || n[1] !== bot.prev[1]);
-  if (target && Math.random() < 0.75) {
-    return opts.reduce((a, b) => Math.hypot(roadC(a[0]) - target.st[1], roadC(a[1]) - target.st[2])
-      <= Math.hypot(roadC(b[0]) - target.st[1], roadC(b[1]) - target.st[2]) ? a : b);
+// where the bot stands: its place on the street, pushed out of a wall that juts into it (as a player's tank: its three circles, the
+// deepest overlap first, a few rounds)
+function standAt(bot) {
+  const at = edgePos(EDGES[bot.e], bot.s, 0), fx = Math.sin(bot.h), fz = Math.cos(bot.h);
+  let x = at.x, z = at.z;
+  for (let it = 0; it < 3; it++) {
+    let best = null;
+    for (const j of BOT_C) { const w = solidPush(x + fx * j, z + fz * j, BOT_CR); if (w && (!best || w.pen > best.pen)) best = w; }
+    if (!best) break;
+    x += best.nx * best.pen; z += best.nz * best.pen;
   }
-  if (bot.prev && Math.random() < 0.5) {
-    const s = [2 * i - bot.prev[0], 2 * j - bot.prev[1]];
-    if (opts.some(n => n[0] === s[0] && n[1] === s[1])) return s;
-  }
-  return opts[Math.random() * opts.length | 0];
+  bot.x = x; bot.z = z;
 }
 
 // the snapshot row, as the clients send theirs: id, x, z, heading, speed, roll, 1 immune after a respawn or 2 destroyed (the server adds the time)
@@ -87,7 +142,7 @@ function stepBot(bot, dt, humans, tanks) {
     bot.roll = Math.min(1, (DEAD_T - bot.deadT) / 0.5) * 1.45;
     bot.v = 0;
     bot.st = state(bot);
-    if (bot.deadT <= 0) placeFar(bot, humans);
+    if (bot.deadT <= 0) placeFar(bot, tanks);
     return null;
   }
 
@@ -98,28 +153,27 @@ function stepBot(bot, dt, humans, tanks) {
     if (d < td) { td = d; target = h; }
   }
 
-  // drive along the street towards the next junction; stop for a tank in the way, turn back if it stays there
+  // drive along the street towards the end of its edge; stop for a tank in the way, turn back if it stays there
   let speed = SPEED * (bot.slowT > 0 ? 0.55 : 1);
   if (target && td < 25) speed *= 0.5;                                   // close to a player: slow down to aim
-  let tx = roadC(bot.to[0]), tz = roadC(bot.to[1]), dx = tx - bot.x, dz = tz - bot.z, d = Math.hypot(dx, dz);
-  if (d > 0 && tanks.some(o => {
-    const ox = o.st[1] - bot.x, oz = o.st[2] - bot.z, a = (ox * dx + oz * dz) / d;
-    return a > 0 && a < AHEAD && Math.abs(ox * dz - oz * dx) / d < BLOCK_W;
+  let want = dirAt(EDGES[bot.e], bot.s, bot.dir);
+  const dx = Math.sin(want), dz = Math.cos(want);
+  if (tanks.some(o => {
+    const ox = o.st[1] - bot.x, oz = o.st[2] - bot.z, a = ox * dx + oz * dz;
+    return a > 0 && a < AHEAD && Math.abs(ox * dz - oz * dx) < BLOCK_W;
   })) {
     speed = 0;
     bot.blockT = (bot.blockT || 0) + dt;
-    if (bot.blockT > BLOCK_T) {
-      [bot.from, bot.to, bot.prev, bot.blockT] = [bot.to, bot.from, null, 0];
-      tx = roadC(bot.to[0]); tz = roadC(bot.to[1]); dx = tx - bot.x; dz = tz - bot.z; d = Math.hypot(dx, dz);
-    }
+    if (bot.blockT > BLOCK_T) { turnBack(bot); bot.blockT = 0; want = dirAt(EDGES[bot.e], bot.s, bot.dir); }
   } else bot.blockT = 0;
-  if (speed * dt >= d) {
-    bot.x = tx; bot.z = tz; bot.prev = bot.from; bot.from = bot.to; bot.to = nextJunction(bot, target);
-  } else if (d > 0) {
-    bot.x += dx / d * speed * dt; bot.z += dz / d * speed * dt;
-  }
-  const want = Math.atan2(roadC(bot.to[0]) - bot.x, roadC(bot.to[1]) - bot.z);
+  // round a sharp corner (and at a dead end) it slows down, and turns on the spot before it drives on
+  const off = Math.abs(wrapA(want - bot.h));
+  if (off > TURN_SLOW) speed *= Math.max(0, 1 - (off - TURN_SLOW) / (TURN_STOP - TURN_SLOW));
+  if (speed * dt >= (bot.send - bot.s) * bot.dir) { bot.s = bot.send; arrive(bot, target); }
+  else bot.s += bot.dir * speed * dt;
+  want = dirAt(EDGES[bot.e], bot.s, bot.dir);
   bot.h = wrapA(bot.h + Math.max(-4 * dt, Math.min(4 * dt, wrapA(want - bot.h))));
+  standAt(bot);
   bot.v = speed;
   bot.st = state(bot);
   const now = Date.now();
@@ -198,8 +252,10 @@ function flyParcels(parcels, bots, dt, onHit) {
     for (let k = 0; k < n && alive; k++) {
       s.vy -= SHOT_G * h; s.x += s.vx * h; s.y += s.vy * h; s.z += s.vz * h;
       if (solidAt(s.x, s.y, s.z)) { alive = false; break; }               // a building stops it (in the game it bounces off)
-      if (s.y < 0.29) {
-        s.y = 0.29;
+      // the ground as in the game (client/src/game/shots.ts): the street, the pavement, the terrain outside the arena (issue #16)
+      const g0 = groundH(s.x, s.z), gy = (g0 > 0 ? g0 : g0 + 0.04) + 0.25;
+      if (s.y < gy) {
+        s.y = gy;
         if (s.vy < 0) { s.vy = -s.vy * SHOT_E; s.vx *= 0.78; s.vz *= 0.78; if (s.vy < 1.8) s.vy = 0; }
         if (s.vy === 0) {
           const f = Math.max(0, 1 - 4 * h); s.vx *= f; s.vz *= f;

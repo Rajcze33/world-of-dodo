@@ -16,7 +16,7 @@ export const G = {
 // (worth three parcels within 8 s destroy it, game/tank.ts HIT_W)
 export const car = {
   k: 0 as 0 | 1, next: 0 as 0 | 1, swT: 0,
-  x: -107.5, z: -130, h: Math.PI, v: 0, steer: 0, gy: 0, y: 0, p: 0,
+  x: 0, z: 0, h: Math.PI, v: 0, steer: 0, gy: 0, y: 0, p: 0,   // (game/tank.ts reset puts it at the depot before the first frame)
   slowT: 0, topT: 0, roll: 0, rollDir: 1, immT: 0, hitLog: [] as [number, number][],
 };
 export type Tank = typeof car;

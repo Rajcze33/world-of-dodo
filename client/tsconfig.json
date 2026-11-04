@@ -10,8 +10,10 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
     "noEmit": true,
     "types": []
   },
-  "include": ["src"]
+  "include": ["src", "shared"]
 }

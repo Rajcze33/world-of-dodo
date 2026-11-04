@@ -10,7 +10,7 @@ import { $, COARSE } from './core/dom';
 import { hexCss } from './core/util';
 import { T } from './texts';
 import { G, car, K, HELD, input, view } from './game/state';
-import { groundH, segHit, AIR_LIM } from './world/grid';
+import { groundH, segHit, free, AIR_LIM, DATA } from './world/grid';
 import { drawMap, sizeMini, mini, mctx } from './ui/minimap';
 import { initInput, lockMouse, releaseMouse, mouseLocked } from './game/input';
 import { PERF, setQuality, initQuality, perfTick } from './game/quality';
@@ -32,6 +32,9 @@ import { WORLD, worldUpdate, worldAt, BODIES, buildNet } from './net/world';
 // ---------- loop ----------
 // camLook (game/tank.ts): the point the camera looks at, eased like the camera itself; reset and respawn put it on the tank
 let last = performance.now(), orbit = 0, paused = false;
+// World of DODO, issue #16: the intro circles Karlínské náměstí with the church of sv. Cyril a Metoděj (the map's landmark), the middle
+// of the real Karlín as people know it; the old invented city was simply centred on 0, 0
+const INTRO = DATA.landmarks.church || { x: 0, z: 0 };
 // three's v.lerp(target, a), without a new vector every frame
 function lerpTo(v: Vector3, x: number, y: number, z: number, a: number) { v.x += (x - v.x) * a; v.y += (y - v.y) * a; v.z += (z - v.z) * a; }
 // the window's size: the 3D view (and its lens, wider on a portrait screen) and the minimap's canvas
@@ -55,9 +58,9 @@ function frame() {
 
   // camera
   const k = 1 - Math.exp(-dt * 4);
-  if (G.state === 'intro') {                                       // the intro orbits the city
+  if (G.state === 'intro') {                                       // the intro orbits the city (round its square, issue #16)
     orbit += dt * 0.05; const r = 210;
-    lerpTo(camera.position, Math.cos(orbit) * r, 95, Math.sin(orbit) * r, Math.min(1, k * 0.5)); lerpTo(camLook, 0, 0, 0, Math.min(1, k * 0.5));
+    lerpTo(camera.position, INTRO.x + Math.cos(orbit) * r, 95, INTRO.z + Math.sin(orbit) * r, Math.min(1, k * 0.5)); lerpTo(camLook, INTRO.x, 0, INTRO.z, Math.min(1, k * 0.5));
   } else if (car.k === 1) planeCam(dt);                             // World of DODO, issue #14: behind the plane, along the mouse's aim
   else {                                                         // behind the tank, or high above it (camMode); farther and higher on a portrait screen
     const pt = aspect() < 1, back = G.camMode ? (pt ? 30 : 24) : (pt ? 14 : 11.5), up = G.camMode ? (pt ? 36 : 28) : (pt ? 7.8 : 5.4), ah = pt ? 7 : 4;
@@ -72,7 +75,7 @@ function frame() {
   // light follows the action: the shadow box around the tank (wider under a plane, the light above it), or around the whole city in the
   // intro; the fog farther in the air
   const wide = G.state === 'intro', air = !wide && car.k === 1;
-  moonAt(wide ? 0 : car.x, wide ? 0 : car.z, wide ? 190 : air ? 110 : 80, air ? Math.max(110, car.y + 40) : 110);
+  moonAt(wide ? INTRO.x : car.x, wide ? INTRO.z : car.z, wide ? 190 : air ? 110 : 80, air ? Math.max(110, car.y + 40) : 110);
   setFog(air);
 
   // snow
@@ -154,18 +157,19 @@ function joinForm() {
 // game cannot run in this browser: the start button says so instead of loading forever.
 function boot(): boolean {
   try {
-    // the city is built in two parts around the traffic: the parked cars draw from R() between the city blocks and the forest, as in
-    // the original, so every client gets the same city (and the snow, in buildFx, after the forest)
+    // the city is built from the map data in a fixed order, so every client registers the same trees and lamps (the server knows
+    // them by index); the parked cars come from the map's kerb spots with their own seed (client/shared/traffic.ts)
     // buildNet: what the server shares (BODIES), filled once the traffic and the parked cars exist, before anyone can join
     buildCity(); buildTraffic(); finishCity(); buildNet(); buildTank(); buildPlane(); buildShots(); buildBullets(); buildPeds(); buildFx();
     buildLand();                                                   // the land around the city (planes, #14): its own random numbers, after everything
     initInput();
     joinForm();
     // automated tests (tools/browser-test.js) open the page with ?test and reach the game through this; nothing else uses it.
-    // scene and engine stand where three's renderer was.
+    // scene and engine stand where three's renderer was. free (issue #16): the test asks it whether a spot by a real wall is clear of
+    // trees and lamps (only the page knows them).
     if (new URLSearchParams(location.search).has('test')) {
       window.WOD = { car, NET, get state() { return G.state; }, K, PERF, setQuality, scene, engine, WORLD, TRAFFIC, PARKED, BODIES, PEDS, worldAt, serverNow, moveTank,
-        HELD, input, pl, view, switchVehicle };
+        HELD, input, pl, view, switchVehicle, free };
     }
     addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', () => { paused = document.hidden; last = performance.now(); });

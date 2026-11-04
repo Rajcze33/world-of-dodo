@@ -8,8 +8,10 @@
 // falls here at once and is reported; the server knocks them over for everyone (if it does not, because someone else was first,
 // they stand up again here). A tree or a lamp you knock down falls here at once and is passed on to the others. Before you join,
 // the intro shows the browser's own city as before.
+// World of DODO, issue #16: the server moves the city with the same code the intro runs here (client/shared/traffic.ts, tram.ts,
+// peds.ts), so the rows are the same N_CARS cars, the same tram track and the same PED_N pedestrians as this browser's.
 import { lerp, angLerp, now, r2 } from '../core/util';
-import { groundH } from '../world/grid';
+import { groundH } from '../../shared/map.ts';
 import type { Car, Ped, Prop } from '../game/types';
 import { TRAFFIC, N_CARS, PARKED, TRAM, TRAM_PATH, placeTram, updateDyn, towHome, placeParked, resetParked } from '../world/traffic';
 import { PEDS, placePed, pedDirty, pedEase } from '../world/peds';

@@ -1,6 +1,7 @@
 // ---------- parcel cannon: Space fires delivery parcels from the tank ----------
-// Parcels fly on a ballistic arc and collide with: building blocks, the depot hall, the church, the construction site,
-// parked cars, moving cars, the tram, people, the tanks and the ground. They bounce, then come to rest and fade out after a while.
+// Parcels fly on a ballistic arc and collide with: the buildings (issue #16: Karlín's, with the Negrelli viaduct and the depot hall),
+// the construction site, parked cars, moving cars, the tram, people, the tanks and the ground. They bounce, then come to rest and
+// fade out after a while.
 // (The original also delivered a stop with a parcel that landed in its ring; World of DODO has no deliveries.)
 import { Bucket, Inst, Dummy, addGeo, boxGeo } from '../core/geo';
 import { VC_MAT } from '../core/mat';
@@ -8,7 +9,8 @@ import { COL } from '../core/colors';
 import { T } from '../texts';
 import { car } from './state';
 import type { Car, Ped } from './types';
-import { SOLIDS, groundH } from '../world/grid';
+import { solidHit, groundH, AIR_LIM } from '../world/grid';
+import { WATER_Y } from '../world/land';
 import { ALLCARS, TRAM, TRAM_L, TRAM_W, PARCEL_M, carBody, putBody, impulse, toDyn } from '../world/traffic';
 import { PEDS, knockPed } from '../world/peds';
 import { NET, netFire, netHit, netName } from '../net/net';
@@ -48,7 +50,6 @@ export function showShot(s: Shot, yaw: number) {
   drawShot(s); parcels?.update();
 }
 
-// solid things (axis-aligned boxes, world/grid.ts SOLIDS): block buildings, depot hall, REDLINE hall, church nave + towers, the site
 type N3 = [number, number, number];
 // what a parcel touched: n the normal, top the height of a roof it lands on, car the vehicle (a car, a tram wagon; null for a tank),
 // player: my tank, ped: a person
@@ -65,12 +66,10 @@ export function obbHit(x: number, y: number, z: number, px: number, py: number, 
 }
 // does a parcel now at (x,y,z) — it was at (px,py,pz) a moment ago — touch anything solid? returns {n:normal, top?:surface height, car?:vehicle}
 export function shotHit(x: number, y: number, z: number, px: number, py: number, pz: number, owner?: string): ShotHit | null {
-  for (const b of SOLIDS) {
-    if (!(x > b.x0 && x < b.x1 && z > b.z0 && z < b.z1 && y < b.h)) continue;
-    if (py >= b.h) return { n: [0, 1, 0], top: b.h };
-    if (px <= b.x0) return { n: [-1, 0, 0] }; if (px >= b.x1) return { n: [1, 0, 0] }; if (pz <= b.z0) return { n: [0, 0, -1] }; if (pz >= b.z1) return { n: [0, 0, 1] };
-    return { n: [0, 1, 0], top: b.h };
-  }
+  // World of DODO, issue #16: the solids are footprint polygons (map.ts solidHit): from above it lands on the roof (top), else it
+  // bounces off the nearest wall (or the underside of the viaduct's deck). They were axis-aligned boxes.
+  const sh = solidHit(x, y, z, px, py, pz);
+  if (sh) return sh.top !== undefined ? { n: sh.n, top: sh.top } : { n: sh.n };
   for (const c of ALLCARS) { if (Math.abs(c.x - x) > 4 || Math.abs(c.z - z) > 4) continue; const h = obbHit(x, y, z, px, py, pz, c, c.hx, c.hz, c.hl || 2.1, c.hw || 0.95, c.hh || 1.8); if (h) return h; }
   for (const v of TRAM.vag) { if (Math.abs(v.x - x) > 6 || Math.abs(v.z - z) > 6) continue; const h = obbHit(x, y, z, px, py, pz, v, v.hx, v.hz, TRAM_L / 2, TRAM_W / 2, 3.4); if (h) return h; }
   for (const p of PEDS) {
@@ -126,7 +125,7 @@ export function updateShots(dt: number) {
   shotCd = Math.max(0, shotCd - dt);
   for (const s of shots) {
     if (!s.on) continue; s.age += dt;
-    if (s.age > SHOT_LIFE || Math.abs(s.x) > 600 || Math.abs(s.z) > 600) { s.on = false; s.vis = false; continue; }
+    if (s.age > SHOT_LIFE || Math.abs(s.x) > AIR_LIM + 80 || Math.abs(s.z) > AIR_LIM + 80) { s.on = false; s.vis = false; continue; }
     if (s.age > SHOT_LIFE - 1) s.g.scale.setAll(Math.max(0.01, SHOT_LIFE - s.age));
     if (s.rest) continue;
     const sp = Math.hypot(s.vx, s.vy, s.vz), n = Math.max(1, Math.ceil(sp * dt / 0.4)), h = dt / n;
@@ -161,7 +160,10 @@ export function updateShots(dt: number) {
         else if (vn < 0) { s.vx -= (1 + SHOT_E) * vn * nx; s.vy -= (1 + SHOT_E) * vn * ny; s.vz -= (1 + SHOT_E) * vn * nz; s.vx *= 0.85; s.vz *= 0.85; }
         s.wx = -s.wx * 0.6 + (Math.random() - 0.5) * 4; s.wy = -s.wy * 0.6 + (Math.random() - 0.5) * 4;
       }
-      const gy = groundH(s.x, s.z) > 0 ? 0.3 : 0.04;
+      // the street (as the original, a hair above it), the pavement (0.3); issue #16: outside the arena the terrain and the frozen
+      // river's ice (world/land.ts WATER_Y). server/bots.js flies the parcels aimed at the bots on the same ground (the bots stay in
+      // the arena, so it does without the ice)
+      const g0 = Math.max(groundH(s.x, s.z), WATER_Y), gy = g0 > 0 ? g0 : g0 + 0.04;
       if (s.y < gy + 0.25) {
         s.y = gy + 0.25;
         if (s.vy < 0) { s.vy = -s.vy * SHOT_E; s.vx *= 0.78; s.vz *= 0.78; s.wx *= 0.6; s.wy *= 0.6; if (s.vy < 1.8) s.vy = 0; }

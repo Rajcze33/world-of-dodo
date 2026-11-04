@@ -30,13 +30,15 @@ const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const { initBot, stepBot, flyParcels, hitBot } = require('./bots');
 const world = require('./world');
+const { AIR_LIM } = require('./city');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_PLAYERS = Number(process.env.MAX_PLAYERS) || 24;     // people; the bots come on top
 const BOTS = Math.max(0, Math.min(8, Number(process.env.BOTS ?? 3)));
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
-const DIST_DIR = path.join(CLIENT_DIR, 'dist');         // the built game page (npm run build: Vite, TypeScript, Babylon.js)
-const SHARED_DIR = path.join(CLIENT_DIR, 'shared');     // data the server uses too (the construction site), loaded by the page as it is
+let DIST_DIR = path.join(CLIENT_DIR, 'dist');         // the built game page (npm run build: Vite, TypeScript, Babylon.js)
+// (DIST_DIR in the environment points it at another build, so that several test builds can run side by side)
+if (process.env.DIST_DIR) DIST_DIR = path.resolve(process.env.DIST_DIR);
 const TICK_MS = 50;                // snapshot rate, 20 Hz (the clients send at the same rate)
 const REWIND_MAX_MS = 400;         // a parcel aimed at a bot is tested against where the bot was up to this long ago
 const SHOT_TTL_MS = 15000;         // a parcel can score this long after it was fired (it lives 14 s in the game)
@@ -44,7 +46,9 @@ const REJOIN_MS = 60000;           // a player who lost the connection and comes
 const HEARTBEAT_MS = 15000;        // ping every socket; one that has not answered since the last ping is dropped
 const MSG_PER_SEC = 90;            // a client sends 20 states, a ping, at most ~4 parcels and a few hits a second
 const NAME_MAX = 16;
-const WORLD = 520;                 // the tanks' world ends at 250 units from the centre, the planes' airspace at 450
+// World of DODO, issue #16: a row or a parcel farther than WORLD from the middle is ignored. The planes fly within ±AIR_LIM (about 650,
+// client/shared/map.ts) and are turned back up to 60 past it (client/src/game/plane.ts); the tanks stay in the arena, well inside.
+const WORLD = AIR_LIM + 70;
 const BULLET_TTL_MS = 3000;        // a bullet can score this long after it was fired (it flies 1.6 s in the game)
 const BULLET_RANGE = 400;          // a bullet hit claimed by a shooter farther than this from the victim is ignored
 const PLANE = 1;                   // the vehicle kind of a state row (k): 0 or nothing a tank, 1 a plane
@@ -62,7 +66,7 @@ const COLORS = [0x00a99a, 0xf9aa8f, 0x4d8dff, 0xf2c94c, 0x9b6bff, 0xff7eb6, 0x5a
 const BOT_COLOR = 0x8f9997;
 
 // ---------- static files ----------
-// Only the page and the three folders it loads from; anything else is a 404.
+// Only the page and the folders it loads from; anything else is a 404.
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -72,9 +76,10 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',          // the font licenses next to the fonts
 };
-// The built page's folders (app: the scripts Vite built, named by their content, so they never change under the same name)
-// and the shared data. Anything else is a 404.
-const STATIC_DIRS = { app: DIST_DIR, fonts: DIST_DIR, assets: DIST_DIR, licenses: DIST_DIR, shared: CLIENT_DIR };
+// The built page's folders (app: the scripts Vite built, named by their content, so they never change under the same name).
+// Anything else is a 404. World of DODO, issue #16: client/shared is no longer served: the page has the map and the construction site
+// in its built script (Vite bundles client/shared), the server requires the same files (server/city.js).
+const STATIC_DIRS = { app: DIST_DIR, fonts: DIST_DIR, assets: DIST_DIR, licenses: DIST_DIR };
 // The page loads its scripts from this host, keeps its styles inline and connects only to this host's /ws.
 const PAGE_CSP = [
   "default-src 'self'",
@@ -340,7 +345,7 @@ function prop(p, m) {
 function addBots() {
   for (let i = 1; i <= BOTS; i++) {
     const b = { id: nextId++, bot: true, ws: null, key: null, name: 'BOT' + i, color: BOT_COLOR, pts: 0, shots: new Map() };
-    initBot(b, humans());
+    initBot(b, [...players.values()]);                  // it starts far from the players and the bots already out
     players.set(b.id, b);
     broadcast({ t: 'join', p: pub(b) });
   }

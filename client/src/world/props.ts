@@ -1,4 +1,6 @@
-// Props the tank can knock down: trees and street lamps (world/city.ts builds them and registers them here).
+// Props the tank can knock down: trees and street lamps (the city's builders in world/ register them here). The server knows them by
+// their index (registerProp's order): World of DODO, issue #16, the builders register them in an order that follows from the map data
+// alone (client/shared/karlin.json), so that every client numbers them alike.
 // A prop is a solid circle (r) while it stands. A vehicle that hits it with enough impact speed (>= breakV; trees also need a heavy
 // vehicle) topples it: it falls away from the impact and then lies there as scenery. Slower than that, it acts like a wall.
 // grid.ts's free() asks propsNear() for the standing ones; the player's tank knocks them over in game/tank.ts (breakProps).
@@ -7,7 +9,7 @@ import type { Prop } from '../game/types';
 
 export const PROPS: Prop[] = [];
 export const FALLING: Prop[] = [];
-const PGRID = new Map<number, Prop[]>(), PCELL = 16;
+const PGRID = new Map<number, Prop[]>(), PCELL = 16;   // cell i, j as key i * 1000 + j (unique while |j| < 500 cells: ±8000 units)
 
 // what a builder hands to registerProp (it fills in the index and the standing state). minMass: the lightest vehicle that topples
 // it; lift: how far its base rises as it tips (so it does not sink into the ground); y0: the height of its base.
@@ -29,6 +31,16 @@ export function propsNear(x: number, z: number): Prop[] {
   const ci = Math.floor(x / PCELL), cj = Math.floor(z / PCELL), out: Prop[] = [];
   for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const l = PGRID.get((ci + a) * 1000 + cj + b); if (l) for (const p of l) out.push(p); }
   return out;
+}
+// World of DODO, issue #16: is (x,z) at least m away from every standing prop? (what the browser adds to the shared map's freeAt for
+// the bodies it moves itself: the pushed cars, a pedestrian sliding after a hit; world/traffic.ts, world/peds.ts)
+export function propsClear(x: number, z: number, m: number): boolean {
+  const ci = Math.floor(x / PCELL), cj = Math.floor(z / PCELL);
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+    const l = PGRID.get((ci + a) * 1000 + cj + b);
+    if (l) for (const p of l) if (p.state === 'up' && Math.hypot(x - p.x, z - p.z) < p.r + m) return false;
+  }
+  return true;
 }
 // a prop that is a group of meshes (the city tree on the plaza): tilt it about its base. p.g is its TransformNode, p.q0 its upright turn.
 const PQ1 = new Quaternion(), PAX = new Vector3();

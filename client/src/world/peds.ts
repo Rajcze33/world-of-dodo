@@ -5,33 +5,31 @@
 // bare waist, a short skirt or shorts, coloured tights, a big cartoon bust and bottom. The men wear a loud top and coloured trousers.
 // (The original's people wore the DODO palette.) The looks come from their own seed (PED_RNG), so every player sees the same people in
 // the same clothes; where they walk comes from the server (net/world.ts places them then; updatePeds walks them only in the intro's city).
+// World of DODO, issue #16: they walk the real blocks' pavement loops (client/shared/map.ts BLOCKS[i].ped), and the walk, the fall and
+// getting up are client/shared/peds.ts, the very code the server runs for the shared city.
 import { Quaternion, Vector3 } from '@babylonjs/core';
 import { Inst, boxGeo, sphereGeo, cylGeo, compose, type Geo } from '../core/geo';
 import { lambert } from '../core/mat';
 import { rng } from '../core/util';
-import { blockC, free, groundH } from './grid';
+import { freeAt, groundH } from '../../shared/map.ts';
+import { PED_N, PED_GETUP_T, newPed, resetPed, stepPeds, knockPed as knockSim, pedEase, type SimPed } from '../../shared/peds.ts';
+import { propsClear } from './props';
 import { car } from '../game/state';
 import type { Ped } from '../game/types';
 import { WORLD, netPed } from '../net/world';
 
-// a pedestrian as this module keeps it: the shared fields (game/types.ts), the walk around its block, the fall and the looks
-export interface Walker extends Ped {
+export { PED_N, pedEase };
+// a pedestrian as this module keeps it: the shared fields (game/types.ts), the walk round its loop and the fall (shared/peds.ts), the looks
+export interface Walker extends Ped, SimPed {
   coat: number; ci: number;              // coat colour, and its index among the instances of that colour
-  bx: number; bz: number;                // centre of the block it walks around
-  s: number; dsg: number; speed: number; // distance along the loop, direction (1 or -1), walking speed
-  t: number; timer: number;              // time in the current state, how long it stays down
-  ox: number; oz: number; vx: number; vz: number;   // shoved off its loop by this much, sliding at this speed
   leg: number; hair: number; skirt: boolean; bottom: number; woman: boolean;   // World of DODO: who and what they wear
 }
 
-export const PED_N = 50;
 export const PEDS: Walker[] = [];
 const PED_COATS = [0xff2fa0, 0x9dff00, 0x8a2be2, 0xffc400, 0x00e5d4, 0xff6a00, 0xd400ff, 0x2fa8ff];
 const PED_LEGS = [0xff2fa0, 0x2fa8ff, 0xffffff, 0x111111, 0xffc400, 0x9dff00, 0xd400ff, 0xd9b9a0, 0xd9b9a0],
   PED_HAIR = [0x2b2623, 0x6b4423, 0xe8c66a, 0xb5482a, 0x111111, 0xf2e7c9, 0xff6fb5],
   PED_BOTTOMS = [0x111111, 0x2fa8ff, 0xffffff, 0xff2fa0, 0x8a2be2, 0xffc400, 0x00e5d4], PED_RNG = rng(7717);
-const PED_HW = 17.2, PED_RC = 3.0, PED_L = 2 * (PED_HW - PED_RC), PED_A = Math.PI / 2 * PED_RC, PED_SEG = PED_L + PED_A;   // pavement loop around a block: rounded square
-
 // the instanced meshes, built in buildPeds (PCOAT: one per coat colour that someone wears, three instances each: top and two arms)
 const PCOAT: (Inst | undefined)[] = [];
 let PLEG: Inst, PHEAD: Inst, PHAIR: Inst, PBUST: Inst, PHAIRL: Inst, PSKIRT: Inst, PSHORT: Inst, PWAIST: Inst, PHIP: Inst, PBUTT: Inst;
@@ -47,20 +45,6 @@ function premultiply(m: number[], a: number[]) {
   for (let i = 0; i < 16; i++) m[i] = PMT[i];
 }
 
-// position and walking direction at distance s along the loop around block (bx,bz) (counter-clockwise on screen)
-function pedRing(bx: number, bz: number, s: number): [number, number, number, number] {
-  const P = 4 * PED_SEG; s = ((s % P) + P) % P;
-  const k = Math.floor(s / PED_SEG), u = s - k * PED_SEG, hw = PED_HW, rc = PED_RC, q = hw - rc;
-  let x: number, z: number, dx: number, dz: number;
-  if (u < PED_L) {
-    if (k === 0) { x = hw; z = -q + u; dx = 0; dz = 1; } else if (k === 1) { x = q - u; z = hw; dx = -1; dz = 0; }
-    else if (k === 2) { x = -hw; z = q - u; dx = 0; dz = -1; } else { x = -q + u; z = -hw; dx = 1; dz = 0; }
-  } else {
-    const ph = k * Math.PI / 2 + (u - PED_L) / rc, cx = (k === 0 || k === 3) ? q : -q, cz = (k === 0 || k === 1) ? q : -q;
-    x = cx + rc * Math.cos(ph); z = cz + rc * Math.sin(ph); dx = -Math.sin(ph); dz = Math.cos(ph);
-  }
-  return [bx + x, bz + z, dx, dz];
-}
 // box/ball with its pivot at (lx,ly,lz), swung by rx about x, centre 'off' below/above the pivot; placed in the body's frame (PB4)
 function pedPart(im: Inst, i: number, lx: number, ly: number, lz: number, sx: number, sy: number, sz: number, rx: number, off: number) {
   axisAngle(PQx, 1, 0, 0, rx); PPos.set(lx, ly + off * Math.cos(rx), lz + off * Math.sin(rx)); PScl.set(sx, sy, sz);
@@ -99,37 +83,22 @@ export function pedDirty() {
   PCOAT.forEach(m => { if (m) m.update(); });
   for (const m of [PLEG, PHEAD, PHAIR, PBUST, PHAIRL, PSKIRT, PSHORT, PWAIST, PHIP, PBUTT]) m.update();
 }
+// knocked over in the intro's own city: down for a few seconds, then up again where they fell
 export function knockPed(ped: Ped, vx: number, vz: number) {
-  const p = ped as Walker; if (p.state !== 'walk') return;
-  const l = Math.hypot(vx, vz) || 1, sp = Math.min(8, l * 0.5);
-  p.fx = vx / l; p.fz = vz / l; p.vx = p.fx * sp; p.vz = p.fz * sp; p.state = 'fall'; p.t = 0; p.th = 0.001; p.timer = 2.5 + Math.random() * 2;
+  knockSim(ped as Walker, vx, vz, PED_GETUP_T[0] + Math.random() * (PED_GETUP_T[1] - PED_GETUP_T[0]));
 }
-export const pedEase = (t: number) => t < 0 ? 0 : t > 1 ? 1 : t * t * (3 - 2 * t);
-// the intro's local city: walking, falling, lying, getting up (in the game net/world.ts places them from the server's rows)
+// the intro's local city: walking, falling, lying, getting up (in the game net/world.ts places them from the server's rows); a sliding
+// pedestrian stops at the buildings and at the standing trees and lamps
+const free = (x: number, z: number, m: number) => freeAt(x, z, m) && propsClear(x, z, m);
+const SELF = [{ x: 0, z: 0 }];
 export function updatePeds(dt: number) {
-  for (const p of PEDS) {
-    if (p.state === 'walk') {
-      p.s += p.dsg * p.speed * dt; p.phase += p.speed * dt * 3.2;
-      const r = pedRing(p.bx, p.bz, p.s); p.h = Math.atan2(r[2] * p.dsg, r[3] * p.dsg);
-      const f = Math.exp(-3 * dt); p.ox *= f; p.oz *= f; p.x = r[0] + p.ox; p.z = r[1] + p.oz;
-    } else {
-      p.t += dt;
-      const nx = p.ox + p.vx * dt, nz = p.oz + p.vz * dt, r = pedRing(p.bx, p.bz, p.s);
-      if (free(r[0] + nx, r[1] + nz, 0.3)) { p.ox = nx; p.oz = nz; } else p.vx = p.vz = 0;   // slides, but not into a building
-      const d = Math.exp(-4 * dt); p.vx *= d; p.vz *= d; p.x = r[0] + p.ox; p.z = r[1] + p.oz;
-      if (p.state === 'fall') { p.th = pedEase(p.t / 0.4) * 1.45; if (p.t >= 0.4) { p.state = 'down'; p.t = 0; } }
-      else if (p.state === 'down') { if (p.t >= p.timer) { p.state = 'rise'; p.t = 0; } }
-      else if (p.state === 'rise') { p.th = 1.45 * (1 - pedEase(p.t / 0.7)); if (p.t >= 0.7) { p.state = 'walk'; p.th = 0; } }
-    }
-    placePed(p);
-  }
+  SELF[0].x = car.x; SELF[0].z = car.z;
+  stepPeds(PEDS, dt, SELF, true, Math.random, free);
+  for (const p of PEDS) { if (p.state === 'walk') p.phase += p.speed * dt * 3.2; placePed(p); }
   pedDirty();
 }
 export function resetPeds() {
-  PEDS.forEach(p => {
-    p.state = 'walk'; p.th = 0; p.t = 0; p.ox = p.oz = p.vx = p.vz = 0; p.s = Math.random() * 4 * PED_SEG;
-    const r = pedRing(p.bx, p.bz, p.s); p.x = r[0]; p.z = r[1]; p.h = Math.atan2(r[2] * p.dsg, r[3] * p.dsg); placePed(p);
-  });
+  PEDS.forEach(p => { resetPed(p); placePed(p); });
   pedDirty();
 }
 // the player's tank walks into people on the pavement: they get shoved and fall over
@@ -151,14 +120,14 @@ export function hitPeds() {
 export function buildPeds() {
   const cnt = PED_COATS.map(() => 0);
   for (let k = 0; k < PED_N; k++) {
-    // one person per block for the first 36, the rest anywhere; PED_RNG draws coat, leg, hair, skirt, bottom, woman in this order
-    const i = (k < 36 ? k % 6 : (Math.random() * 6) | 0), j = (k < 36 ? (k / 6) | 0 : (Math.random() * 6) | 0), coat = (PED_RNG() * PED_COATS.length) | 0;
-    PEDS.push({
-      id: k, coat, ci: cnt[coat]++, bx: blockC(i), bz: blockC(j), s: 0, dsg: Math.random() < 0.5 ? 1 : -1, speed: 1.0 + Math.random() * 0.8, phase: Math.random() * 6,
-      state: 'walk', t: 0, th: 0, fx: 0, fz: 1, ox: 0, oz: 0, vx: 0, vz: 0, h: 0, x: 0, z: 0, timer: 3,
+    // where: the shared peds.ts (one each on the biggest loops for the first half, the rest by the loops' length); PED_RNG draws coat,
+    // leg, hair, skirt, bottom, woman in this order
+    const coat = (PED_RNG() * PED_COATS.length) | 0;
+    PEDS.push(Object.assign(newPed(k, Math.random), {
+      coat, ci: cnt[coat]++, phase: Math.random() * 6,
       pred: null,                                                         // knocked over here, ahead of the server (net/world.ts)
       leg: (PED_RNG() * PED_LEGS.length) | 0, hair: (PED_RNG() * PED_HAIR.length) | 0, skirt: PED_RNG() < 0.5, bottom: (PED_RNG() * PED_BOTTOMS.length) | 0, woman: PED_RNG() < 0.5,
-    });   // World of DODO: who and what they wear
+    }));   // World of DODO: who and what they wear
   }
   // cast shadows, receive none (three's default for the original's InstancedMesh); never culled (Inst)
   const box = boxGeo(1, 1, 1), ball = sphereGeo(1, 10, 8), cyl = cylGeo(0.75, 1, 1, 12),

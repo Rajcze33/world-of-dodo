@@ -1,85 +1,20 @@
-// The city of client/index.html as plain numbers, for the server's bots: the street grid and the solid
-// buildings. It must stay in step with the client (CELL, HALF, roadC, blockC, the *_B blocks and SOLIDS
-// there); if the city changes in the game, change it here too.
+// The city for the server: the real Karlín of the game, from the very same code the page runs (client/shared/map.ts; Node 24 loads
+// the TypeScript by stripping its types). Nothing here is kept in step by hand any more.
+//
+// World of DODO, issue #16: this file used to mirror the invented 7 × 7 street grid (CELL, HALF, roadC, blockC, TRAM_K, DEPOT_PARK)
+// and its buildings as boxes. Those names are gone: the bots and the city's traffic use the street graph (NODES, EDGES, route,
+// edgePos, nearestEdge), the spawn points (SPAWNS), the kerb spots (KERB_SPOTS), the tram's loop (TRAM_LOOP) and the depot (DEPOT).
 'use strict';
 
-const SITE = require('../client/shared/site.js');
+const M = require('../client/shared/map.ts');
 
-const CELL = 52, HALF = 156;
-const roadC = k => -HALF + CELL * k;          // street centre lines, k = 0..6 (junctions at roadC(i), roadC(j))
-const blockC = i => -130 + CELL * i;          // block centres, i = 0..5
-const DEPOT_B = [0, 0], PARK_B = [1, 2], PLAZA_B = [3, 3], RIVAL_B = [5, 5];
-const TRAM_K = 3;                             // the tram runs along the street z = roadC(3)
+// can a parcel get from (x0,z0) to (x1,z1) without an obstacle taller than a parcel flies low (1.5) in between? (the ground line
+// against every low solid: the site's thin walls and fence count, the viaduct's deck does not)
+function clearLine(x0, z0, x1, z1) { return M.lineHit(x0, z0, x1, z1, 1.5) >= 1; }
 
-// Axis-aligned boxes: block buildings, the two depot halls, the church in the park (same list as the client).
-const SOLIDS = (() => {
-  const s = [], open = [DEPOT_B, PLAZA_B, PARK_B, RIVAL_B].map(b => b.join(','));
-  for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) {
-    if (open.includes(i + ',' + j)) continue;
-    const bx = blockC(i), bz = blockC(j);
-    s.push({ x0: bx - 16, x1: bx + 16, z0: bz - 16, z1: bz + 16, h: 17 });
-  }
-  let bx = blockC(DEPOT_B[0]), bz = blockC(DEPOT_B[1]);
-  s.push({ x0: bx - 17, x1: bx + 5, z0: bz - 16, z1: bz + 16, h: 10.5 });
-  bx = blockC(RIVAL_B[0]); bz = blockC(RIVAL_B[1]);
-  s.push({ x0: bx - 5, x1: bx + 17, z0: bz - 16, z1: bz + 16, h: 10.5 });
-  bx = blockC(PARK_B[0]); bz = blockC(PARK_B[1]);
-  s.push({ x0: bx - 5, x1: bx + 5, z0: bz - 12, z1: bz + 8, h: 15 });
-  for (const sx of [-1, 1]) s.push({ x0: bx + sx * 5.6 - 2, x1: bx + sx * 5.6 + 2, z0: bz + 7.5, z1: bz + 11.5, h: 31 });
-  for (const b of SITE.solids) s.push(b);   // the construction site south of the city, the same file the page loads
-  return s;
-})();
+// can a bullet fly from a to b without a building in between? (the 3D segment, as segHit in the client)
+function clearRay(ax, ay, az, bx, by, bz) { return M.segHit(ax, ay, az, bx, by, bz) >= 1; }
 
-// the building a point is inside of, or null
-function solidAt(x, y, z) {
-  for (const b of SOLIDS) if (x > b.x0 && x < b.x1 && z > b.z0 && z < b.z1 && y < b.h) return b;
-  return null;
-}
-
-// can a parcel get from (x0,z0) to (x1,z1) without an obstacle taller than parcel height in between? (exact segment against
-// each box, so the site's thin walls and fence count too)
-function clearLine(x0, z0, x1, z1) {
-  const dx = x1 - x0, dz = z1 - z0;
-  for (const b of SOLIDS) {
-    if (b.h <= 1.5) continue;
-    let t0 = 0, t1 = 1, hit = true;
-    for (const [p, d, lo, hi] of [[x0, dx, b.x0, b.x1], [z0, dz, b.z0, b.z1]]) {
-      if (Math.abs(d) < 1e-9) { if (p < lo || p > hi) { hit = false; break; } continue; }
-      let u = (lo - p) / d, v = (hi - p) / d;
-      if (u > v) [u, v] = [v, u];
-      t0 = Math.max(t0, u); t1 = Math.min(t1, v);
-      if (t0 > t1) { hit = false; break; }
-    }
-    if (hit) return false;
-  }
-  return true;
-}
-
-// can a bullet fly from a to b without a building in between? (the segment against each box, in 3D, as segHit in the client)
-function clearRay(ax, ay, az, bx, by, bz) {
-  const a = [ax, ay, az], d = [bx - ax, by - ay, bz - az];
-  for (const b of SOLIDS) {
-    let t0 = 0, t1 = 1, hit = true;
-    for (const [i, lo, hi] of [[0, b.x0, b.x1], [1, 0, b.h], [2, b.z0, b.z1]]) {
-      if (Math.abs(d[i]) < 1e-9) { if (a[i] < lo || a[i] > hi) { hit = false; break; } continue; }
-      let u = (lo - a[i]) / d[i], v = (hi - a[i]) / d[i];
-      if (u > v) [u, v] = [v, u];
-      t0 = Math.max(t0, u); t1 = Math.min(t1, v);
-      if (t0 > t1) { hit = false; break; }
-    }
-    if (hit) return false;
-  }
-  return true;
-}
-
-// is (x,z) open ground, at least m from every building and inside the world? (the client's free(), without its trees and lamps)
-const WORLD_LIM = 250;
-function freeAt(x, z, m) {
-  if (Math.abs(x) > WORLD_LIM - m || Math.abs(z) > WORLD_LIM - m) return false;
-  for (const b of SOLIDS) if (x > b.x0 - m && x < b.x1 + m && z > b.z0 - m && z < b.z1 + m) return false;
-  return true;
-}
-
-const DEPOT_PARK = [-107.5, -130];            // where the original van started; no car is placed near it
-
-module.exports = { CELL, HALF, roadC, blockC, TRAM_K, SOLIDS, DEPOT_PARK, solidAt, clearLine, clearRay, freeAt };
+// everything map.ts exports (SOLIDS, solidAt, freeAt, solidPush, segHit, groundH, onRoad, ARENA, NODES, EDGES, route, edgePos,
+// nearestEdge, nearestNode, edgeBetween, BLOCKS, SPAWNS, KERB_SPOTS, TRAM_LOOP, SITE, DEPOT, ...) plus the two tests above
+module.exports = { ...M, clearLine, clearRay };

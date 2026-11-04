@@ -265,8 +265,8 @@ export function netUpdate(dt: number, tnow: number) {
   }
   placeTags();
 }
-// can the camera see the point (x,y,z)? no obstacle in between (segHit, world/grid.ts), within the fog's reach (230 of the tank's 300;
-// farther from a plane, whose fog is farther, core/engine.ts setFog)
+// can the camera see the point (x,y,z)? no obstacle in between (segHit: issue #16, Karlín's buildings as polygons, client/shared/map.ts),
+// within the fog's reach (230 of the tank's 300; farther from a plane, whose fog is farther, core/engine.ts setFog)
 export const SPOT_MS = 3000;                            // a spotted tank stays on the minimap this long after it went out of sight
 export function inSight(x: number, y: number, z: number) {
   const c = camera.position, max = scene.fogEnd * 0.77;

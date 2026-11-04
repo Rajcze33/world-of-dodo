@@ -38,23 +38,34 @@ Zerops right away, so run the checks before you ask for a merge.
   (a cylinder stands on y, a plane faces +z). Use `lambert`/`basic` from `core/mat.ts` for materials,
   `Inst` for many copies of one shape, and the buckets (`BK`, `bake`) to merge static geometry into
   few draw calls.
-- **The city is built from one seed** (`R` in `core/util.ts`): the order of the random calls decides
-  where the trees, parked cars and lit windows are, and the server knows the trees and lamps by their
-  index. Changing what draws from `R` (or the build order in `main.ts`) changes the city for everyone;
-  that is fine, as long as the server and all players run the same version.
-- **Some numbers live twice** and must stay in step:
+- **The world is written once, in `client/shared`** (issue #16): the map of Karlín (`map.ts`: the
+  solids and collisions, the ground, the street graph and routes, the spawn points, the kerb spots, the
+  depot; `geom.ts` its geometry), the construction site (`site.ts`) and the city's life (the traffic,
+  the tram and the pedestrians). Vite builds it into the page and the server `require()`s the very same
+  files (`server/city.js`, `server/world.js`; Node 24 strips the types). So it may use only erasable
+  TypeScript (no enums, no namespaces, no parameter properties), relative imports with the `.ts`
+  extension, no browser API, and only `+ - * /` and `Math.sqrt` where a result decides something (the
+  page and the server must derive the same city to the last bit; see the top of `geom.ts`).
+- **The map data is generated**: `client/shared/karlin.json` comes from `tools/karlin` (OpenStreetMap,
+  IPR Praha, ČÚZK). Never edit it by hand; change the generator and run it again
+  ([tools/karlin/README.md](tools/karlin/README.md)). Places in Karlín are not numbers in the code:
+  the game, the bots and the tests ask the map (`SPAWNS`, `DEPOT`, `SITE`, `DATA.landmarks`, ...).
+- **What is random in the city comes from one seed** (`R` in `core/util.ts`): the order of the random
+  calls decides which kerb spots get a parked car, which windows are lit and so on, and the server knows
+  the trees and lamps by their index, registered in an order that follows from the data alone.
+  Changing what draws from `R` (or the build order in `main.ts`) changes the city for everyone; that is
+  fine, as long as the server and all players run the same version.
+- **Some numbers still live twice** and must stay in step:
   - the tank colours: `COLORS` in `server/server.js` and `TANK_COLORS` in the client (same order);
-  - the city: `server/city.js` mirrors the street grid and the buildings of the client (the construction
-    site is one file both load, `client/shared/site.js`: move or change it there);
-  - tank size, parcel physics and the hit rules: `server/bots.js` mirrors the client;
+  - tank size, parcel physics and the hit rules: `server/bots.js` mirrors the client (`TANK_L/W/H`,
+    the parcel's gravity, bounce and ground, `SLOW_T`, `DEAD_T`, the bot's wall circles `BOT_C`/`BOT_CR`
+    against `TANK_C`/`TANK_CR` in `client/src/game/tank.ts`);
   - what a hit weighs and scores (issue #14): `HIT_W` in `server/server.js` and in
     `client/src/game/tank.ts`, the bullet's share in `server/bots.js` (`BULLET_W`);
-  - the traffic, tram and pedestrian code: `server/world.js` is a port of the client's
-    (`client/src/world/traffic.ts` and `peds.ts`, which still run it for the intro screen), and the
-    client must keep 33 cars and 50 pedestrians in that order; the tram's track is three.js r128's
-    curve on the server (`server/vendor`) and its exact port on the client (`client/src/world/catmull.ts`);
-    `rejoin` (a pushed car back into the lane) lives in both too, and the parked cars are numbered
-    after the cars (`33 + k`) in the client's order.
+  - how far a plane may go: `WORLD` in `server/server.js` (`AIR_LIM + 70`) must stay above the plane's
+    turn-back margin in `client/src/game/plane.ts` (`AIR_LIM + 60`);
+  - the shared city's counts and row sizes (cars, pedestrians) are also at the top of `tools/smoke.js`
+    (`CITY`).
 - **Protocol changes** go into [docs/PROTOCOL.md](docs/PROTOCOL.md) in the same pull request, and
   `tools/smoke.js` should test them.
 - **The server only relays.** Keep the players' physics in the browser; the server should stay cheap
