@@ -1,7 +1,8 @@
 // Browser test of World of DODO: two players in headless Chrome pick a name and a colour, start on a street of Karlín, see each
 // other and the bots and the same city, a tank slides along a wall instead of sticking to it, a car one of them shoves
 // is his for the other too, one shoots the other, the points show in both scoreboards, and a hit that destroys
-// the tank brings it back somewhere else, then he takes a plane, flies, and the other's anti-aircraft gun hits it.
+// the tank brings it back somewhere else, then he takes a plane, flies, and the other's anti-aircraft gun hits it; then both take
+// a ship on the Vltava (issue #20), one's shells hit the other's ship, and a hit 15 s old still counts towards sinking it.
 // Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
@@ -17,6 +18,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const puppeteer = require('puppeteer-core');
 const M = require('../server/city');               // issue #16: the map of the real Karlín (client/shared/map.ts), as the server loads it
+const NV = require('../client/shared/naval.ts');   // issue #20: the Vltava (where a ship may be, which way the river runs)
 
 // ---------- World of DODO, issue #16: real places in Karlín for the scenes below, found in the map ----------
 const r2 = v => Math.round(v * 100) / 100;
@@ -286,6 +288,71 @@ async function shoot(a, b, petrHits) {
     await a.evaluate(() => WOD.HELD.delete('KeyE'));
     check(flak, 'Rosta\'s anti-aircraft gun hits Petr\'s plane and scores');
     await a.screenshot({ path: path.join(OUT, '5c-rosta-flak.png') });
+
+    // issue #20: Petr takes a ship (3): it comes out at one of the river's spawn points, the telegraph (W three times: full ahead)
+    // sets it going and it stays on the water; Rosta sees the ship, its turrets turned as Petr turns them. Rosta takes a ship too, is
+    // put 90 down the river from Petr facing him, aims at him and fires salvoes (the reload skipped) until a shell hits: 4 points.
+    // Then Petr's ship has a pretend hit 15 s old worth 2.8 (a tank's 8 s window would have dropped it, a ship's 20 s keep it): the
+    // next shell sinks it, and it comes back at another spawn point.
+    await b.keyboard.press('Digit3');
+    await b.waitForFunction(() => WOD.car.k === 2 && WOD.car.topT === 0, SLOW);
+    const sea0 = await b.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z }));
+    check(NV.SHIP_SPAWNS.some(p => Math.hypot(p.x - sea0.x, p.z - sea0.z) < 0.5) && NV.inWater(sea0.x, sea0.z, 2), `3 puts Petr in a ship at one of the river's spawn points (${sea0.x}, ${sea0.z})`);
+    for (let i = 0; i < 3; i++) { await b.keyboard.down('KeyW'); await frames(b, 2); await b.keyboard.up('KeyW'); await frames(b, 1); }
+    await b.waitForFunction(() => WOD.car.v > 4, SLOW);
+    const sea1 = await b.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z, tel: WOD.sh.tel, wet: WOD.naval.inWater(WOD.car.x, WOD.car.z, 0) }));
+    check(sea1.tel === 4 && sea1.wet && Math.hypot(sea1.x - sea0.x, sea1.z - sea0.z) > 2, `full ahead, Petr's ship sails on the river (${Math.hypot(sea1.x - sea0.x, sea1.z - sea0.z).toFixed(1)} units)`);
+    await b.evaluate(() => { WOD.sh.tel = 1; WOD.car.v = 0; WOD.sh.aimY = WOD.car.h + 1.2; });
+    const petrShip = () => [...WOD.NET.others.values()].find(o => o.name === 'Petr' && o.on && o.k === 2 && o.sg && o.sg.isEnabled());
+    await a.waitForFunction(`!!(${petrShip})()`, SLOW);
+    check(true, 'Rosta sees Petr\'s ship on the river');
+    await b.waitForFunction(() => WOD.sh.tur[0].st !== 'turn', SLOW);
+    const yaw = await b.evaluate(() => WOD.sh.tur[0].c);
+    const yawSeen = await a.waitForFunction((y, f) => { const o = eval(f)(); return o && Math.abs(Math.atan2(Math.sin(o.a - y), Math.cos(o.a - y))) < 0.15; }, SLOW, yaw, `(${petrShip})`).then(() => true, () => false);
+    check(yawSeen, `Rosta sees Petr's fore turret turned as Petr turned it (${yaw.toFixed(2)} rad)`);
+    await a.keyboard.press('Digit3');
+    await a.waitForFunction(() => WOD.car.k === 2 && WOD.car.topT === 0, SLOW);
+    const pp = await b.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z }));
+    let spot = null;
+    for (const d of [90, -90, 75, -75, 60, -60]) {
+      const h = NV.riverDir(pp.x, pp.z), x = pp.x + Math.sin(h) * d, z = pp.z + Math.cos(h) * d;
+      if (NV.inWater(x, z, 10)) { spot = { x, z, h: Math.atan2(pp.x - x, pp.z - z) }; break; }
+    }
+    check(!!spot, 'a place on the river 60 to 90 from Petr\'s ship for Rosta\'s');
+    await a.evaluate(s => { Object.assign(WOD.car, { x: s.x, z: s.z, h: s.h, v: 0, immT: 0 }); WOD.sh.tel = 1; }, spot);
+    await seesAt(b, spot.x, spot.z);
+    await seesAt(a, pp.x, pp.z);
+    const aimAtPetr = () => a.evaluate(f => { const o = eval(f)(), c = WOD.car, d = Math.hypot(o.x - c.x, o.z - c.z); WOD.sh.aimY = Math.atan2(o.x - c.x, o.z - c.z); WOD.sh.aimP = -Math.atan2(5.4, d); }, `(${petrShip})`);
+    // one salvo at Petr's ship (both turrets loaded); true when Petr's ship registers a hit and Rosta scores at least `gain`
+    const salvo = async (pretend, gain) => {
+      await b.evaluate(p => Object.assign(WOD.car, { immT: 0, topT: 0, hitLog: p ? [[performance.now() - 15000, p]] : [] }), pretend);
+      await aimAtPetr();
+      await a.waitForFunction(() => WOD.sh.tur.every(t => t.st === 'ok' || t.st === 'block') && WOD.sh.tur.some(t => t.st === 'ok'), { timeout: 240000 });   // (the first time the turrets swing round: 4 s of game time)
+      const before = await a.evaluate(() => WOD.NET.pts), n = pretend ? 1 : 0;
+      await a.evaluate(() => { WOD.input.lmb = true; });
+      await a.waitForFunction(() => WOD.sh.tur.some(t => t.st === 'load'), SLOW);
+      await a.evaluate(() => { WOD.input.lmb = false; });
+      const hit = await b.waitForFunction(n => WOD.car.hitLog.length > n || WOD.car.topT > 0, { timeout: 30000 }, n).then(() => true, () => false)
+        && await a.waitForFunction((p, g) => WOD.NET.pts >= p + g, { timeout: 30000 }, before, gain).then(() => true, () => false);
+      await a.evaluate(() => WOD.sh.tur.forEach(t => { t.cd = 0; }));
+      return { hit, gain: (await a.evaluate(() => WOD.NET.pts)) - before };
+    };
+    let sh1 = { hit: false, gain: 0 };
+    for (let i = 0; i < 6 && !sh1.hit; i++) { sh1 = await salvo(0, 4); console.log(`     salvo ${i + 1}: ${sh1.hit ? 'hit Petr\'s ship' : 'missed'}`); }
+    check(sh1.hit && sh1.gain >= 4, `a shell in Petr's ship gives Rosta 4 points (+${sh1.gain})`);
+    await Promise.all([frames(a, 3), frames(b, 3)]);
+    await a.screenshot({ path: path.join(OUT, '5d-rosta-shells-petr.png') });
+    let sunk = false;
+    for (let i = 0; i < 6 && !sunk; i++) {
+      const r = await salvo(2.8, 4);
+      sunk = r.hit && await b.evaluate(() => WOD.car.topT > 0 || WOD.car.y < -1);
+      console.log(`     salvo ${i + 1}: ${sunk ? 'sank Petr\'s ship' : 'no kill yet'}`);
+    }
+    check(sunk, 'with a hit 15 s old still counted (a ship\'s window is 20 s), the next shell sinks Petr\'s ship');
+    await Promise.all([frames(a, 6), frames(b, 6)]);
+    await a.screenshot({ path: path.join(OUT, '5e-petr-sinks.png') });
+    await b.waitForFunction(p => WOD.car.k === 2 && WOD.car.topT === 0 && Math.hypot(WOD.car.x - p.x, WOD.car.z - p.z) > 20, SLOW, pp);
+    check(await b.evaluate(() => WOD.car.immT > 0 && WOD.naval.inWater(WOD.car.x, WOD.car.z, 0)), 'Petr\'s ship comes back elsewhere on the river, immune for a moment');
 
     // names: a taken one and a bot's one are refused under the form
     const c = await player(browser, null);

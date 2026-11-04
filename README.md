@@ -1,7 +1,7 @@
 # World of DODO
 
-A small multiplayer tank and plane game in the browser. One snowy city, everybody in their own DODO
-tank or plane, parcels for ammunition. The city is **Karlín, a real district of Prague**, built from open map data:
+A small multiplayer tank, plane and ship game in the browser. One snowy city, everybody in their own DODO
+tank, plane or warship, parcels for ammunition. The city is **Karlín, a real district of Prague**, built from open map data:
 its streets, houses, the tram on Sokolovská, the Negrelli viaduct and the hill of Vítkov. Built on *Poslední míle* (The
 Last Mile), the 3D delivery game DODO made for Christmas 2026, where the delivery van had already turned into a tank.
 
@@ -9,7 +9,7 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
 
 ![Two players and a bot in the city](docs/screenshot.png)
 
-- **Join with a name only.** Pick a name, a colour and a tank or a plane, and go. No account, no
+- **Join with a name only.** Pick a name, a colour and a tank, a plane or a ship, and go. No account, no
   password, nothing is stored: your score lasts as long as you stay connected.
 - **Shoot the others.** In a tank, Space (or the green button on a phone) fires a parcel and E the
   anti-aircraft gun, which aims itself at the nearest plane. A parcel in another player's tank is worth
@@ -20,12 +20,25 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
   the ground, a building or a tree end the flight; the airspace reaches far beyond Karlín, over the
   Vltava, Holešovice and Letná and up the hill of Vítkov (fly low and you hit it), and the plane turns
   back at its edge.
+- **Sail.** A ship is a small DODO destroyer on the Vltava, which is liquid now and runs under the
+  bridges north of the city. W and S move the engine telegraph a step (astern, stop, 1/3, 2/3, full) and
+  the ship gathers speed slowly; A and D put the rudder over, and it turns the faster the faster it goes.
+  Click into the game and the mouse turns the camera round the ship: its two twin turrets traverse
+  towards where the middle of the view points (the card at the bottom says which are on target), the
+  left button fires a salvo from every turret on target and loaded (the shells fly an arc, about 320 at
+  most, and the farther the wider they scatter), the right button or Shift looks through the
+  binoculars, Q launches three torpedoes from the side facing the aim, E fires the anti-aircraft guns.
+  The banks and the bridge piers stop it, so does another ship. Tanks on the embankment and planes
+  reach it too, and its guns reach the streets along the river.
 - **Damage adds up.** Three parcels or twelve bullets destroy a tank, one parcel or six bullets a plane,
-  and every hit scores its share: a bullet is 3 points in a tank, 5 in a plane. A destroyed vehicle
-  comes back somewhere else, blinking and immune for a few seconds; V switches between tank and plane
-  (while destroyed, 1 or 2 picks the next one).
+  nine shells or two torpedoes a ship (its hits add up over 20 s, a tank's and a plane's over 8),
+  and every hit scores its share: a bullet is 3 points in a tank, 5 in a plane; a shell is 10 in a
+  tank, 4 in a ship, a torpedo 15. A destroyed vehicle comes back somewhere else (a ship sinks first),
+  blinking and immune for a few seconds; V switches between tank, plane and ship (while destroyed, 1, 2
+  or 3 picks the next one).
 - **The bots** are driven by the server: they roam Karlín's real streets, chase the nearest tank and
-  shoot back, and fire short bursts at a plane that flies low over them.
+  shoot back, fire short bursts at a plane that flies low over them, and parcels at a ship close to
+  the embankment.
 - **A construction site** (off for now): sand piles, barriers, machines, a tower crane, a half-built
   house and a container yard, all of it cover. Karlín's empty lots are too small for it, so it waits
   for a real building site in Karlín (#17, `SITE_LOT` in client/shared/map.ts).
@@ -35,7 +48,7 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
 - **Names only in plain sight.** A tank's name glows above it only while nothing stands between you,
   and it shows on the minimap only once you have spotted it. The scoreboard lists everybody.
 - **Runs on modest hardware.** The quality drops by itself when the frames do not keep up; F shows
-  FPS, ping and the level, Q changes the level by hand.
+  FPS, ping and the level, Q changes the level by hand (not in a ship, where Q launches torpedoes).
 - Czech by default, English with `?lang=en`. Works on phones (touch controls).
 
 ## Našli jste chybu nebo máte nápad?
@@ -110,7 +123,7 @@ client/src/         the game in TypeScript on Babylon.js, built by Vite into cli
   core/             engine, scene, lights and shadows, geometry, materials, textures
   world/            drawing Karlín: buildings, streets, landmarks, props, traffic and tram, pedestrians, the land
                     around; grid.ts is the world as the game code asks for it
-  game/             the player's tank and plane, parcels, bullets, effects, input, quality levels
+  game/             the player's tank, plane and ship, parcels, bullets, shells and torpedoes, effects, input, quality levels
   net/              the other players and the shared city from the server
   ui/               HUD and minimap;  main.ts: the frame loop and the join form
 client/shared/      the world, written once and run by the page and the server alike: map.ts (the solids,
@@ -193,7 +206,9 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
 - **The clients are trusted.** A modified browser can lie about its own tank or plane or report hits.
   It is a game for fun, not a tournament.
 - A plane needs a mouse (or the arrow keys); on a phone it flies with the steering pad, which is
-  clumsier.
+  clumsier. A ship on a phone: the pad is the rudder, the arrows the telegraph, a finger dragged over the
+  game turns the camera, the green button fires and the one above it launches the torpedoes; its
+  anti-aircraft guns fire by themselves when a plane comes close.
 - What you see of the others is 150 ms old, plus the network's delay: a tank you ram is where it was a
   moment ago on its owner's screen. A car somebody else is pushing does not give way to you until they
   let go of it.

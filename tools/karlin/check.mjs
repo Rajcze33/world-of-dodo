@@ -150,6 +150,26 @@ polys(D.parks, 'parks');
   for (let j = 0; j < T.nz; j++) for (let i = 0; i < T.nx; i++) { const x = T.x0 + i * T.step, z = T.z0 + j * T.step; if (inA(x, z, 15) && T.h[j * T.nx + i] !== 0) nz++; }
   ok(nz === 0, 'terrain: exactly 0 in the arena and 15 u around it', nz + ' cells not 0');
   console.log('     terrain min', Math.min(...T.h), 'max', Math.max(...T.h));
+  // World of DODO, issue #20: the Vltava (the water connected to the biggest piece) has its bed under the water's surface (-4.5)
+  // away from the bank and never over the land's floor; the land (off every water piece, out of the flat zone) never under -0.6;
+  // the bridges over the river leave a ship 6.5 u under their decks (road slabs y - 1 .. y, rail slabs deck - 1 .. deck)
+  const W = D.water.map(ring), WB = W.map(G.box), touch = (a, b) => G.boxHit(WB[a], WB[b], 0.5) && [[a, b], [b, a]].some(([p, q]) => W[p].some(v => G.distPoly2(W[q], v[0], v[1], true) < 0.25));
+  let big = 0; W.forEach((r, i) => { if (G.area(r) > G.area(W[big])) big = i; });
+  const riv = new Set([big]), st = [big];
+  while (st.length) { const a = st.pop(); for (let b = 0; b < W.length; b++) if (!riv.has(b) && touch(a, b)) { riv.add(b); st.push(b); } }
+  const inRiv = (x, z) => [...riv].some(i => x >= WB[i][0] && x <= WB[i][2] && z >= WB[i][1] && z <= WB[i][3] && G.pip(W[i], x, z));
+  const wetAny = (x, z) => W.some((r, i) => x >= WB[i][0] && x <= WB[i][2] && z >= WB[i][1] && z <= WB[i][3] && G.pip(r, x, z));
+  const nearBank = (x, z, d) => { for (let k = 0; k < 16; k++) { const a = k * Math.PI / 8; if (!inRiv(x + Math.cos(a) * d, z + Math.sin(a) * d)) return true; } return false; };
+  let deep = 0, shallow = 0, bedHigh = 0, landLow = 0;
+  for (let j = 0; j < T.nz; j++) for (let i = 0; i < T.nx; i++) {
+    const x = T.x0 + i * T.step, z = T.z0 + j * T.step, h = T.h[j * T.nx + i]; if (inA(x, z, 15)) continue;
+    if (inRiv(x, z)) { if (h > -0.6) bedHigh++; if (!nearBank(x, z, 5) && !nearBank(x, z, 2.5)) { if (h <= -4.5) deep++; else shallow++; } }
+    else if (!wetAny(x, z) && h < -0.6) landLow++;
+  }
+  ok(riv.size > 1 && deep > 1000 && !shallow && !bedHigh && !landLow, `terrain: the Vltava (${riv.size} pieces) has its bed under the water, the land stays over -0.6`, `${deep} deep, ${shallow} shallow 5 u from the bank, ${bedHigh} bed over -0.6, ${landLow} land under -0.6`);
+  const over = pts => { const r = ring(pts); return G.resample(r, 1).some(q => inRiv(q[0], q[1])); };
+  const fr = (D.farRoads || []).filter(o => o.y !== undefined && over(o.pts)), rl = D.rail.filter(o => o.bridge && over(o.pts));
+  ok(fr.every(o => o.y - 1 >= 2) && rl.every(o => o.deck - 1 >= 2), `bridges over the Vltava: ${fr.length} road pieces, ${rl.length} rail lines, all 6.5 u over the water`, fr.filter(o => o.y - 1 < 2).map(o => o.y).join(' '));
 }
 const size = fs.statSync(path.join(HERE, '..', '..', 'client', 'shared', 'karlin.json')).size;
 ok(size < 1.5 * 1024 * 1024, `size ${(size / 1024).toFixed(0)} KB`);

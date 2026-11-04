@@ -4,12 +4,16 @@
 // streets, zebra crossings at the junctions, the tram's rails along the track it drives (client/shared/tram.ts) and its stops'
 // shelters, the other tram tracks round the city, and the railway: on the ground, on bridges (decks on piers, as map.ts's solids),
 // and the Negrelli viaduct's stone arches between its piers.
+// World of DODO, issue #20 (warships): the road bridges over the Vltava stand on their decks and piers (map.ts's 'roaddeck' and 'pier'
+// solids: high enough for a ship to pass under), the trams cross on them; the viaduct's arches span the river between its new piers;
+// whatever lies on the land out there never dips under it (the river's banks: client/shared/naval.ts LAND_MIN).
 // Replaces the original's 7 × 7 grid of roads and rounded blocks.
 import {
-  DATA, ARENA, NODES, EDGES, BLOCKS, SOLIDS, TRAM_LOOP, VIADUCT_W, PIER_STEP, PIER_L, groundH, terrainH, paved, inArena, edgePos,
+  DATA, ARENA, NODES, EDGES, BLOCKS, SOLIDS, TRAM_LOOP, VIADUCT_W, PIER_STEP, PIER_L, groundH, paved, inArena, edgePos,
   freeAt, solidsIn,
 } from '../../shared/map.ts';
-import { polylineCum, polylineAt, polyCentroid, distSeg2, type At } from '../../shared/geom.ts';
+import { polylineCum, polylineAt, polyCentroid, distSeg2, pointInPoly, closestOnPoly, type At } from '../../shared/geom.ts';
+import { inRiver, landY } from '../../shared/naval.ts';
 import { TRAM_PATH, TRAM_STOP_AT } from '../../shared/tram.ts';
 import { Bucket, quad, boxB, bake, geoMesh, rotateX, planeGeo, type P3 } from '../core/geo';
 import { lambert, M } from '../core/mat';
@@ -21,6 +25,19 @@ import { shade } from './buildings';
 const KERB = 0xb4b8b6, PAVE = 0xe4e7e6, PLAZA = 0xdcd8cf, PARK = 0xf7f9f8, MARK = COL.c20, RAIL = COL.grey, BED = 0x9a9893,
   STONE = 0xb8ad9a, STONE_D = 0x8f8778, STEEL = 0x5f6866, FAR_ROAD = 0x5b6260;
 const RAIL_HALF = 0.55;                                       // half the track gauge (a little wider than 1.435 m: cartoon)
+const CONCRETE = 0xa7aaa5, FASCIA = 0x7d827f;                  // the road bridges' decks (issue #20)
+// World of DODO, issue #20: out of the arena things lie on the land as it is drawn (naval.ts landY, world/land.ts): the coarse terrain
+// grid dips towards the river bed by the banks, a road or a track along the embankment must not
+// the top of a road bridge's deck over the river within r of (x, z), or NaN (map.ts 'roaddeck' solids)
+const DQ: typeof SOLIDS = [];
+function deckTop(x: number, z: number, r: number): number {
+  let top = NaN;
+  for (const s of solidsIn(x - r, z - r, x + r, z + r, DQ)) {
+    if (s.kind !== 'roaddeck') continue;
+    if (pointInPoly(s.p, x, z) || closestOnPoly(s.p, x, z).d2 < r * r) top = top === top ? Math.max(top, s.h) : s.h;
+  }
+  return top;
+}
 export const SHELTERS: { x: number; z: number; a: number }[] = [];   // the tram stops' shelters (city.ts keeps lamps and trees off them)
 
 // the buckets of this module (baked at the end of buildRoads)
@@ -71,9 +88,11 @@ export function buildRoads() {
   for (const q of DATA.parks) if (onBlocks(q)) capUp(DECO, orient(q), 0.33, PARK);
   // World of DODO, issue #16 (4. 11.): the streets of Prague round the arena, for the planes: strips lying on the terrain (or on a
   // bridge's deck), going on where the arena's streets leave it
+  // (issue #20: a bridge over the river lies on its deck slab, its top at y; the others float as before)
   for (const r of DATA.farRoads || []) {
-    const y = r.y, gy = y === undefined ? terrainH : () => y;
-    strip(MK, dense(r.pts, 5), -r.w / 2, r.w / 2, y === undefined ? 0.06 : 0.25, FAR_ROAD, gy);
+    const y = r.y, onDeck = y !== undefined && deckTop((r.pts[0] + r.pts[2]) / 2, (r.pts[1] + r.pts[3]) / 2, 0.1) === y;
+    const gy = y === undefined ? landY : () => y;
+    strip(MK, dense(r.pts, 5), -r.w / 2, r.w / 2, y === undefined ? 0.06 : onDeck ? 0.03 : 0.25, FAR_ROAD, gy);
   }
   laneDashes(); zebras(); tram(); railway();
   bake('pavements', PV, lambert(0xffffff), false);
@@ -134,10 +153,13 @@ function tram() {
   for (const c of out) if (c.length > 1) strip(MK, c, -1.5, 1.5, 0.02, BED);
   // the other tracks: segments at least 3.5 from the loop (TRAM_LOOP: the data's own Sokolovská tracks are near it)
   const L = TRAM_LOOP, near = (x: number, z: number) => { for (let i = 0; i < L.pts.length; i++) { const a = L.pts[i], b = L.pts[(i + 1) % L.pts.length]; if (distSeg2(x, z, a[0], a[1], b[0], b[1]) < 12.25) return true; } return false; };
+  // (issue #20: out of the arena on the land as drawn, over the river on a road bridge's deck; none under the water)
+  const trackY = (x: number, z: number) => { if (inArena(x, z)) return groundH(x, z); const d = deckTop(x, z, 2.5); return d === d ? d : landY(x, z); };
+  const wetTrack = (x: number, z: number) => !inArena(x, z) && inRiver(x, z) && deckTop(x, z, 2.5) !== deckTop(x, z, 2.5);
   for (const t of DATA.tram.tracks) {
     const d = dense(t, 3); let run: [number, number][] = [];
-    for (const q of d) { if (!near(q[0], q[1])) run.push(q); else { if (run.length > 1) rails(run, 0.06, false); run = []; } }
-    if (run.length > 1) rails(run, 0.06, false);
+    for (const q of d) { if (!near(q[0], q[1]) && !wetTrack(q[0], q[1])) run.push(q); else { if (run.length > 1) rails(run, 0.06, false, trackY); run = []; } }
+    if (run.length > 1) rails(run, 0.06, false, trackY);
   }
   // the shelters: on the pavement beyond the kerb to the right of the stop (tram.ts TRAM_STOP_AT), facing the track, moved along it
   // a little where a house or a lamp's corner is in the way
@@ -171,12 +193,13 @@ function shelter(x: number, z: number, a: number) {
 function railway() {
   for (const r of DATA.rail) {
     const d = r.bridge ? dense(r.pts, 1e9) : dense(r.pts, 8);                         // on a bridge it is level: no need to follow the ground
-    if (r.bridge) rails(d, 0.02, false, () => r.deck); else rails(d, 0.08, true, (x, z) => inArena(x, z) ? groundH(x, z) : terrainH(x, z) + 0.06);
+    if (r.bridge) rails(d, 0.02, false, () => r.deck); else rails(d, 0.08, true, (x, z) => inArena(x, z) ? groundH(x, z) : landY(x, z) + 0.06);
   }
   for (const s of SOLIDS) {
-    if (s.kind !== 'deck' && s.kind !== 'pier') continue;
+    if (s.kind !== 'deck' && s.kind !== 'pier' && s.kind !== 'roaddeck') continue;
     const [cx, cz] = polyCentroid(s.p), VC = tileB('vc', cx, cz), stone = s.h <= 6.41 && s.h >= 5.39 || s.kind === 'pier';
     if (s.kind === 'pier') { prism(VC, s.p, s.y0, s.h, STONE); continue; }
+    if (s.kind === 'roaddeck') { roadDeck(VC, s.p, s.y0, s.h); continue; }
     // the slab (the two tracks of a viaduct are two overlapping decks: their tops a hair apart, so they do not flicker)
     const top = s.h + (s.i % 3) * 0.012;
     prism(VC, s.p, s.y0, top, stone ? shade(STONE, 1.08) : STEEL, BED, true);
@@ -190,19 +213,37 @@ function railway() {
       if (stone) { const ox = -nx * 0.06, oz = -nz * 0.06; wall(VC, ax + ox, az + oz, bx + ox, bz + oz, s.y0 - 1.1, s.y0 + 0.15, STONE_D); }
     }
   }
-  // the arches: between two piers of the same line at most three steps apart (wider where a street passes and a pier was left out)
+  // the arches: between two piers of the same line at most three steps apart (wider where a street passes and a pier was left out).
+  // World of DODO, issue #20: the piers found where they stand on the line (over the river they keep the river's spans, not the land's
+  // step), each pier's middle within 0.4 of it
   const at: At = { x: 0, z: 0, hx: 1, hz: 0, k: 0 }, tmp: typeof SOLIDS = [];
   for (const r of DATA.rail) {
     if (!r.bridge || Math.abs(r.deck - 6.4) > 0.01) continue;
-    const P = r.pts, cum = polylineCum(P), L = cum[cum.length - 1], piers: number[] = [];
-    for (let s = PIER_STEP / 2; s < L; s += PIER_STEP) {
+    const P = r.pts, cum = polylineCum(P), L = cum[cum.length - 1], piers: number[] = [], seen = new Set<number>();
+    for (let s = 0; s < L; s += 2) {
       polylineAt(P, cum, s, at);
-      if (solidsIn(at.x - 0.4, at.z - 0.4, at.x + 0.4, at.z + 0.4, tmp).some(o => o.kind === 'pier' && Math.hypot(polyCentroid(o.p)[0] - at.x, polyCentroid(o.p)[1] - at.z) < 0.4)) piers.push(s);
+      for (const o of solidsIn(at.x - 2, at.z - 2, at.x + 2, at.z + 2, tmp)) {
+        if (o.kind !== 'pier' || o.road || seen.has(o.i)) continue;
+        const [px, pz] = polyCentroid(o.p), u = (px - at.x) * at.hx + (pz - at.z) * at.hz, v = -(px - at.x) * at.hz + (pz - at.z) * at.hx;
+        if (Math.abs(v) < 0.4 && u >= -1 && u < 1) { seen.add(o.i); piers.push(s + u); }
+      }
     }
+    piers.sort((a, b) => a - b);
     for (let k = 0; k + 1 < piers.length; k++) {
       const s0 = piers[k] + PIER_L / 2, s1 = piers[k + 1] - PIER_L / 2; if (s1 - s0 > 3 * PIER_STEP) continue;
       arch(P, cum, s0, s1, r.deck - 1);
     }
+  }
+}
+// World of DODO, issue #20: a road bridge's deck over the river (a map.ts 'roaddeck' strip, its long sides edges 0→1 and 2→3): a
+// concrete slab with a darker fascia, and a parapet along both sides
+function roadDeck(VC: ReturnType<typeof tileB>, p: number[], y0: number, y1: number) {
+  prism(VC, p, y0, y1, CONCRETE, CONCRETE, true);
+  for (const i of [0, 4]) {
+    const j = (i + 2) % 8, ax = p[i], az = p[i + 1], bx = p[j], bz = p[j + 1], l = Math.hypot(bx - ax, bz - az); if (l < 0.3) continue;
+    const nx = -(bz - az) / l * 0.3, nz = (bx - ax) / l * 0.3, ox = -nx * 0.05, oz = -nz * 0.05;   // inwards; a hair outwards
+    prism(VC, [ax, az, bx, bz, bx + nx, bz + nz, ax + nx, az + nz], y1, y1 + 0.8, CONCRETE, shade(CONCRETE, 1.12));
+    wall(VC, ax + ox, az + oz, bx + ox, bz + oz, y0 - 0.02, y1 - 0.25, FASCIA);
   }
 }
 // one arch from s0 to s1 along the line: the curved underside and the two faces up to the deck's underside yd

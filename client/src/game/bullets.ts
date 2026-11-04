@@ -5,21 +5,23 @@
 //   if the victim decided, as for the slow parcels, a fast plane would be out of reach of any gun. The server passes the hit on
 //   (netShotHit, then dmg to the victim, who applies it unless immune and answers like a parcel hit).
 // - a bot's bullet: the player it hits, as for a parcel (the bot aims at where the server has the plane, server/bots.js).
-// Other people's bullets that reach your vehicle on your screen only stop there.
+// Other people's bullets that reach your vehicle on your screen only stop there. World of DODO, issue #20: they hit the ships too (a
+// ship is three spheres along its axis), and on the river they raise a little splash.
 import { Quaternion } from '@babylonjs/core';
 import { Bucket, Inst, Dummy, addGeo, boxGeo } from '../core/geo';
 import { basic } from '../core/mat';
 import { T } from '../texts';
 import { car } from './state';
 import { segHit, groundH } from '../world/grid';
-import { WATER_Y } from '../world/land';
+import { WATER_Y, surfaceY } from '../../shared/naval.ts';
+import { splash } from '../world/water';
 import { NET, netFire, netHit, netName, netShotHit, type NetOther } from '../net/net';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
 
 export const BUL_V = 170, BUL_LIFE = 1.6;                  // speed (units/s, plus the shooter's own), seconds in flight
 const BUL_MAX = 192;
-export const PLANE_R = 2.4, TANK_R = 1.35;                 // what a bullet hits: a sphere round a plane, two round a tank (front and back)
+export const PLANE_R = 2.4, TANK_R = 1.35, SHIP_R = 3;     // what a bullet hits: a sphere round a plane, two round a tank (front and back), three along a ship
 
 interface Bullet {
   i: number; on: boolean; mine: boolean; bot: boolean; by: number; sid: number;
@@ -52,10 +54,16 @@ function segSphere(ax: number, ay: number, az: number, dx: number, dy: number, d
   const disc = b * b - a * c; if (disc < 0 || a < 1e-9) return 2;
   const t = (-b - Math.sqrt(disc)) / a; return t >= 0 && t <= 1 ? t : 2;
 }
-// the same for a vehicle: a plane (k 1) at x, y, z, or a tank at x, z on the ground gy, heading h
+// the same for a vehicle: a plane (k 1) at x, y, z, or a tank at x, z on the ground gy, heading h; issue #20: a ship (k 2) at x, z,
+// heading h, y its heave and sinking (its spheres round the collision circles' centres, game/ship.ts SHIP_C)
 export function vehicleT(ax: number, ay: number, az: number, dx: number, dy: number, dz: number,
   k: number, x: number, y: number, z: number, h: number, gy: number) {
   if (k === 1) return segSphere(ax, ay, az, dx, dy, dz, x, y, z, PLANE_R);
+  if (k === 2) {
+    const hx = Math.sin(h), hz = Math.cos(h), cy = WATER_Y + y + 1.6; let t = 2;
+    for (const j of [-7, 0, 7]) t = Math.min(t, segSphere(ax, ay, az, dx, dy, dz, x + hx * j, cy, z + hz * j, SHIP_R));
+    return t;
+  }
   const hx = Math.sin(h) * 1.2, hz = Math.cos(h) * 1.2;
   return Math.min(segSphere(ax, ay, az, dx, dy, dz, x + hx, gy + 1.1, z + hz, TANK_R), segSphere(ax, ay, az, dx, dy, dz, x - hx, gy + 1.1, z - hz, TANK_R));
 }
@@ -66,22 +74,25 @@ export function updateBullets(dt: number) {
     b.age += dt; if (b.age > BUL_LIFE) { b.on = false; continue; }
     const dx = b.vx * dt, dy = b.vy * dt, dz = b.vz * dt;
     // the first solid (issue #16: map.ts segHit, the footprint polygons, the viaduct, the houses out on the hills), then the ground:
-    // the street, or outside the arena the terrain (the river at its ice, WATER_Y) where the step ends (a step is about the
-    // terrain grid's 10 units; a bullet that would end inside a hill stops where it is)
-    let t = segHit(b.x, b.y, b.z, b.x + dx, b.y + dy, b.z + dz), who: NetOther | 'me' | null = null;
-    const ge = Math.max(WATER_Y, groundH(b.x + dx, b.z + dz)) + 0.05;
-    if (b.y + dy < ge) t = Math.min(t, dy < 0 ? Math.max(0, (b.y - ge) / -dy) : 0);
+    // the street, or outside the arena the terrain (issue #20: the river's surface, client/shared/naval.ts surfaceY) where the step
+    // ends (a step is about the terrain grid's 10 units; a bullet that would end inside a hill stops where it is)
+    let t = segHit(b.x, b.y, b.z, b.x + dx, b.y + dy, b.z + dz), who: NetOther | 'me' | null = null, wet = false;
+    const se = surfaceY(b.x + dx, b.z + dz), ge = se + 0.05;
+    if (b.y + dy < ge) { const u = dy < 0 ? Math.max(0, (b.y - ge) / -dy) : 0; if (u < t) { t = u; wet = se === WATER_Y; } }
     const ex = b.x + dx * 0.5, ez = b.z + dz * 0.5, reach = Math.hypot(dx, dz) * 0.5 + 6;
     for (const o of NET.others.values()) {
-      if (!o.on || (o.s === 2 && o.k === 1) || o.id === b.by || Math.abs(o.x - ex) > reach || Math.abs(o.z - ez) > reach) continue;
-      const u = vehicleT(b.x, b.y, b.z, dx, dy, dz, o.k, o.x, o.y, o.z, o.h, groundH(o.x, o.z)); if (u < t) { t = u; who = o; }
+      const r = o.k === 2 ? reach + 8 : reach;
+      if (!o.on || (o.s === 2 && o.k !== 0) || o.id === b.by || Math.abs(o.x - ex) > r || Math.abs(o.z - ez) > r) continue;
+      const u = vehicleT(b.x, b.y, b.z, dx, dy, dz, o.k, o.x, o.y, o.z, o.h, groundH(o.x, o.z)); if (u < t) { t = u; who = o; wet = false; }
     }
-    if (!b.mine && car.topT <= 0 && Math.abs(car.x - ex) < reach && Math.abs(car.z - ez) < reach) {
-      const u = vehicleT(b.x, b.y, b.z, dx, dy, dz, car.k, car.x, car.y, car.z, car.h, car.gy); if (u < t) { t = u; who = 'me'; }
+    const rm = car.k === 2 ? reach + 8 : reach;
+    if (!b.mine && car.topT <= 0 && Math.abs(car.x - ex) < rm && Math.abs(car.z - ez) < rm) {
+      const u = vehicleT(b.x, b.y, b.z, dx, dy, dz, car.k, car.x, car.y, car.z, car.h, car.gy); if (u < t) { t = u; who = 'me'; wet = false; }
     }
     b.x += dx * Math.min(1, t); b.y += dy * Math.min(1, t); b.z += dz * Math.min(1, t);
     if (t >= 1) continue;
     b.on = false;
+    if (wet) splash(b.x, b.z, 0.15);
     if (who === 'me' && b.bot && hitPlayer('bullet', 1, T.gunBy(netName(b.by)))) {    // a bot's bullet that took effect: scores for the bot
       const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(b.by))); netHit(b, kill);
     }

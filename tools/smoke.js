@@ -2,10 +2,12 @@
 // and the bots. Expects the default of 3 bots (BOTS=3).
 // Usage: node tools/smoke.js [http://localhost:3400]
 // World of DODO, issue #16: the places come from the map of the real Karlín (client/shared/map.ts, loaded the way the server loads
-// it, server/city.js; Node 24 runs the TypeScript), so run it against a server of the same version.
+// it, server/city.js; Node 24 runs the TypeScript), so run it against a server of the same version. Issue #20: the ships' places come
+// from the river (client/shared/naval.ts).
 'use strict';
 
 const M = require('../server/city');
+const NV = require('../client/shared/naval.ts');
 
 const BASE = (process.argv[2] || 'http://localhost:3400').replace(/\/$/, '');
 const WS_URL = BASE.replace(/^http/, 'ws') + '/ws';
@@ -290,6 +292,73 @@ async function refused(hello) {
   }
   check(!!flak, 'a bot fires at a low plane above it');
 
+  // issue #20: ships. A ship's row (k 2) carries its heave and sinking, its pitch and its turrets' yaw, and counts only on the river;
+  // only a ship fires shells (k 2) and torpedoes (k 3); the victim reports their hits as for a parcel: a shell scores 10 in a tank and
+  // 4 in a ship, a torpedo 15; a shell dropped on a bot is flown by the server (1 point). The ships go to the river's spawn points
+  // farthest from the arena, out of the bots' hunting range (150).
+  const outside = p => Math.hypot(Math.max(M.ARENA.x0 - p.x, 0, p.x - M.ARENA.x1), Math.max(M.ARENA.z0 - p.z, 0, p.z - M.ARENA.z1));
+  const [SEA, SEA2] = [...NV.SHIP_SPAWNS].sort((p, q) => outside(q) - outside(p));
+  let shipPts = null;
+  const ptsNow = m => { if (m && m.by === wa.id) shipPts = m.pts; return m; };
+  while (await a.next(m => m.t === 'hit', 200));                     // (hits A heard earlier and no check took: not these)
+  a.send({ t: 'st', ct: t0 + 600, x: SEA.x, z: SEA.z, h: SEA.h, v: 8, r: -0.05, s: 0, k: 2, y: 0.03, p: 0.01, a: [0.4, 3] });
+  const ss = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[8] === 2));
+  const rs = ss && ss.p.find(s => s[0] === wa.id);
+  check(rs && rs.length === 13 && rs[1] === SEA.x && rs[2] === SEA.z && rs[9] === 0.03 && rs[10] === 0.01 && rs[11] === 0.4 && rs[12] === 3,
+    `a ship's row on the river carries its kind, heave, pitch and turrets (${SEA.x}, ${SEA.z}, ${outside(SEA).toFixed(0)} from the arena)`);
+  a.send({ t: 'st', ct: t0 + 610, x: HOME.x, z: HOME.z, h: 0, v: 5, r: 0, s: 0, k: 2, y: 0, p: 0, a: [0, 3] });
+  a.send({ t: 'st', ct: t0 + 620, x: SEA.x, z: SEA.z, h: SEA.h, v: 20, r: 0, s: 0, k: 2, y: 0, p: 0, a: [0, 3] });
+  check(!(await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[8] === 2 && (s[1] === HOME.x || s[4] === 20)), 500)),
+    'a ship\'s row on land (a street of Karlín), or faster than a ship sails, is ignored');
+  a.send({ t: 'st', ct: t0 + 630, x: SEA.x, z: SEA.z, h: SEA.h, v: 8, r: 0, s: 0, k: 2, y: 0, p: 0, a: [0, 3] });
+  b.send({ t: 'fire', k: 2, sid: 30, x: rb[1], y: 2, z: rb[2], vx: 0, vy: 30, vz: 90 });
+  check(!(await a.next(m => m.t === 'fire' && m.id === wb.id && m.sid === 30, 500)), 'a tank cannot fire a ship\'s shell');
+  await sleep(100);
+  a.send({ t: 'fire', k: 2, sid: 40, x: SEA.x, y: NV.WATER_Y + 3, z: SEA.z, vx: 70, vy: 30, vz: 70 });
+  const fs = await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 40);
+  check(fs && fs.k === 2 && fs.vy === 30, 'B gets A\'s shell');
+  b.send({ t: 'hit', by: wa.id, sid: 40 });
+  const hst = ptsNow(await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id));
+  check(hst && hst.gain === 10, `a shell in a tank scores 10 (+${hst && hst.gain})`);
+  b.send({ t: 'st', ct: 3, x: SEA2.x, z: SEA2.z, h: SEA2.h, v: 0, r: 0, s: 0, k: 2, y: 0, p: 0, a: [0, 3.14] });
+  await a.next(m => m.t === 'snap' && m.p.some(s => s[0] === wb.id && s[8] === 2));
+  a.send({ t: 'fire', k: 2, sid: 41, x: SEA.x, y: NV.WATER_Y + 3, z: SEA.z, vx: 70, vy: 30, vz: 70 });
+  await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 41);
+  b.send({ t: 'hit', by: wa.id, sid: 41 });
+  const hss = ptsNow(await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id));
+  check(hss && hss.gain === 4, `a shell in a ship scores 4 (+${hss && hss.gain})`);
+  a.send({ t: 'fire', k: 3, sid: 42, x: SEA.x, y: NV.WATER_Y, z: SEA.z, vx: 22, vy: 0, vz: 0 });
+  const ft = await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 42);
+  check(ft && ft.k === 3 && ft.vx === 22, 'B gets A\'s torpedo');
+  b.send({ t: 'hit', by: wa.id, sid: 42, kill: true });
+  const htp = ptsNow(await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id));
+  check(htp && htp.gain === 15 && htp.kill === true, `a torpedo in a ship scores 15, and its kill is passed on (+${htp && htp.gain})`);
+  a.send({ t: 'fire', k: 3, sid: 43, x: SEA.x, y: 10, z: SEA.z, vx: 22, vy: 0, vz: 0 });
+  a.send({ t: 'fire', k: 3, sid: 44, x: SEA.x, y: NV.WATER_Y, z: SEA.z, vx: 60, vy: 0, vz: 0 });
+  a.send({ t: 'fire', k: 2, sid: 45, x: SEA.x, y: NV.WATER_Y + 3, z: SEA.z, vx: 150, vy: 60, vz: 0 });
+  check(!(await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid >= 43 && m.sid <= 45, 500)), 'a torpedo off the water or too fast, or a shell too fast, is ignored');
+  // a shell dropped on a bot (A is a ship): the server flies it as it flies the parcels, 1 point
+  let sbot = null;
+  for (let i = 0; i < 4 && !sbot; i++) {
+    const s = a.last.get(bot1.id);
+    if (!s) { await sleep(200); continue; }
+    const [, x, z, h, v] = s, back = v * 0.15;
+    a.send({ t: 'fire', k: 2, sid: 50 + i, x: x - Math.sin(h) * back, y: 1.0, z: z - Math.cos(h) * back, vx: 0, vy: 0, vz: 0 });
+    sbot = ptsNow(await a.next(m => m.t === 'hit' && m.v === bot1.id && m.by === wa.id, 1000));
+  }
+  check(sbot && sbot.gain === 1, 'a ship\'s shell on a bot scores 1 point for A');
+  // how long they can score: a torpedo runs 16 s and scores for 20 after its launch, a shell for 10 (both are reported 11 s later)
+  a.send({ t: 'fire', k: 3, sid: 60, x: SEA.x, y: NV.WATER_Y, z: SEA.z, vx: 0, vy: 0, vz: 22 });
+  a.send({ t: 'fire', k: 2, sid: 61, x: SEA.x, y: NV.WATER_Y + 3, z: SEA.z, vx: 70, vy: 30, vz: 70 });
+  await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 61);
+  await sleep(11000);
+  b.send({ t: 'hit', by: wa.id, sid: 61 });
+  check(!(await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id, 500)), 'a shell no longer scores 11 s after it was fired');
+  b.send({ t: 'hit', by: wa.id, sid: 60 });
+  const hlate = ptsNow(await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id));
+  check(hlate && hlate.gain === 15, 'a torpedo still scores 11 s after its launch (its run is 16 s)');
+  b.send({ t: 'st', ct: 4, x: rb[1], z: rb[2], h: 0, v: 0, r: 0, s: 0 });   // B is a tank again
+
   // issue #16: the bots have been driving Karlín's street graph all along (B has watched them since they came in): for 30 s none of
   // them left the streets or stood still (at least 10 units in every 8 s: a dead end, the arena's edge or a tank in the way only turns
   // it back), and each got around (its places span 30 units or more)
@@ -311,7 +380,7 @@ async function refused(hello) {
   check(!stuck.length, 'every bot follows the street graph for 30 s without getting stuck' + (stuck.length ? ' (' + stuck.join('; ') + ')' : ''));
 
   // A drops (pushing a car) and comes back from the same page (same key): the car goes back to the traffic, the points are still there
-  const ptsA = hg ? hg.pts : hbot ? hbot.pts : 20;
+  const ptsA = shipPts ?? (hg ? hg.pts : hbot ? hbot.pts : 20);
   const [dx, dz, dh] = carAt(b.snap, 2);
   a.send({ t: 'st', ct: t0 + 900, x: dx, z: dz, h: 0, v: 0, r: 0, s: 0, c: [[2, dx, dz, dh, 1, 0]] });
   const held = await b.next(m => m.t === 'snap' && ownerOf(m, 2) === wa.id);

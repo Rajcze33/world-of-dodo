@@ -23,9 +23,10 @@ Options of `gen.mjs`:
 
 ## Files
 
-- `gen.mjs`: the generator, in order: water, terrain, IPR, buildings, streets, blocks, plazas, tram, railways, parks,
-  trees, landmarks, lots; it prints what it did and writes `cache/report.json` (counts, height sources, the edges it
-  narrowed, the buildings the tram loops removed, the tram stops, ...).
+- `gen.mjs`: the generator, in order: water (which pieces are the Vltava), terrain (the river bed), IPR, buildings, streets,
+  blocks, plazas, tram, railways, parks, trees, landmarks, lots; it prints what it did and writes `cache/report.json` (counts,
+  height sources, the edges it narrowed, the buildings the tram loops removed, the tram stops, the river's bed and the bridges
+  raised over it, ...).
 - `lib/frame.mjs`: the frame (WGS84 → game units and back), the arena and the outer square from the brief.
 - `lib/fetch.mjs`: the three downloads, cached.
 - `lib/geom.mjs`: the 2D geometry (simplify, validity, clipping polygons with holes, kerb offsets, rasters, the biggest
