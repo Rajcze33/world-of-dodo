@@ -28,7 +28,7 @@ import { buildFx, updateImpactFx, updateSnow, fx } from './game/fx';
 import { buildLand } from './world/land';
 import { buildWater, updateWater } from './world/water';
 import { WATER_Y, SHIP_SPAWNS, inWater } from '../shared/naval.ts';
-import { NET, netUpdate, netConnect, cleanName, botName, joinErr, TANK_COLORS, serverNow } from './net/net';
+import { NET, netUpdate, netConnect, netLeave, cleanName, botName, joinErr, TANK_COLORS, serverNow } from './net/net';
 import { toast, flashMsg, flashUntil } from './ui/hud';
 import { now } from './core/util';
 import { WORLD, worldUpdate, worldAt, BODIES, buildNet } from './net/world';
@@ -144,6 +144,18 @@ export function start() {
   reset(); car.next = joinVeh; respawn(true);
   G.state = 'drive'; nameIn.blur(); $('intro').hidden = true; $('mini').classList.remove('big'); $('hud').hidden = false; $('touch').hidden = !COARSE;
   sizeMini(); last = performance.now();
+}
+// World of DODO, issue #22: Esc (or the menu button) leaves the game for the start screen and its choices; the tab stays open. The city
+// goes back to the browser's own, as before the first start, and the start button joins again.
+export function backToMenu() {
+  if (G.state !== 'drive') return;
+  if (document.pointerLockElement) document.exitPointerLock();
+  for (const k in K) K[k as keyof typeof K] = false;
+  HELD.clear(); input.lmb = input.rmb = false; input.steerAxis = input.pitchAxis = 0;
+  netLeave(); reset();
+  G.state = 'intro'; $('intro').hidden = false; $('hud').hidden = true; $('touch').hidden = true; $('pick').hidden = true;
+  $<HTMLButtonElement>('startBtn').disabled = false; $('startLbl').textContent = T.start; joinErr('');
+  if (!COARSE) nameIn.focus();
 }
 
 // the join form: a name and a tank colour, both remembered in this browser for the next time, nothing else

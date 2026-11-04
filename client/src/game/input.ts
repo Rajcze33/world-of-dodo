@@ -6,6 +6,7 @@ import { canvas } from '../core/engine';
 import { G, K, HELD, car, input } from './state';
 import { sizeMini } from '../ui/minimap';
 import { switchVehicle } from './tank';
+import { backToMenu } from '../main';
 
 type Key = keyof typeof K;
 // Space = fire parcels (was brake; Down/S still brakes and reverses); E = the second weapon (World of DODO, issue #14)
@@ -16,11 +17,15 @@ const flying = () => G.state === 'drive' && car.k === 1;
 // World of DODO, issue #20: the mouse aims a plane or a ship (the ship's camera orbits it)
 const aiming = () => G.state === 'drive' && car.k !== 0;
 const locked = () => document.pointerLockElement === canvas;
+let unlockedAt = 0;                                            // when the mouse was last let go (issue #22: that Esc was the browser's)
 
 // main.ts calls this once at boot
 export function initInput() {
   addEventListener('keydown', e => {
     if (G.state !== 'drive' || e.target instanceof HTMLInputElement) return;
+    // World of DODO, issue #22: Esc goes back to the menu. With the mouse locked (a plane, a ship) the browser takes the first Esc to let
+    // the mouse go: that one only unlocks (if it reaches the page at all), the next one leaves.
+    if (e.code === 'Escape') { if (!locked() && performance.now() - unlockedAt > 300) backToMenu(); return; }
     const k = KEYMAP[e.code];
     if (k) { K[k] = true; e.preventDefault(); }
     HELD.add(e.code);
@@ -79,6 +84,8 @@ export function initInput() {
   });
   $('camBtn').addEventListener('click', () => { G.camMode ^= 1; });
   $('vehBtn').addEventListener('click', () => switchVehicle());
+  $('menuBtn').addEventListener('click', () => backToMenu());                   // issue #22 (a phone has no Esc)
+  document.addEventListener('pointerlockchange', () => { if (!locked()) unlockedAt = performance.now(); });
   document.querySelectorAll<HTMLElement>('#pick button').forEach(b => b.addEventListener('click', () => switchVehicle(b.dataset.v === '2' ? 2 : b.dataset.v === '1' ? 1 : 0)));
   $('mini').addEventListener('click', () => { $('mini').classList.toggle('big'); sizeMini(); });
 }

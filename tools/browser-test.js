@@ -367,6 +367,17 @@ async function shoot(a, b, petrHits) {
     check(true, 'a bot\'s name gets an error under the form');
     await c.close();
 
+    // issue #22: Esc takes Rosta back to the menu: he leaves the game (Petr sees him go), the start screen is back with his name in it,
+    // and the start button brings him in again
+    await a.keyboard.press('Escape');
+    await a.waitForFunction(() => WOD.state === 'intro' && !document.getElementById('intro').hidden && !document.getElementById('startBtn').disabled, SLOW);
+    await b.waitForFunction(() => ![...WOD.NET.others.values()].some(o => o.name === 'Rosta'), SLOW);
+    check((await a.$eval('#nameIn', e => e.value)) === 'Rosta' && !(await a.evaluate(() => WOD.NET.live)), 'Esc takes Rosta back to the menu, his name still in the form, and Petr sees him leave');
+    await a.click('#startBtn');
+    await a.waitForFunction(() => WOD.state === 'drive' && WOD.NET.live, SLOW);
+    await b.waitForFunction(() => [...WOD.NET.others.values()].some(o => o.name === 'Rosta' && o.on), SLOW);
+    check(true, 'the start button brings Rosta back into the game, and Petr sees him again');
+
     // Petr leaves: Rosta's city and scoreboard lose him
     await b.close();
     await a.waitForFunction(() => ![...WOD.NET.others.values()].some(o => o.name === 'Petr'), SLOW);

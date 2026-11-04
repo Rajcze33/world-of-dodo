@@ -46,7 +46,7 @@ export type Tag = HTMLDivElement & { visible: boolean; px: number; py: number; p
 export interface NetOther extends Other { tag: Tag; mat: Material }
 
 export const NET = {
-  ws: null as WebSocket | null, id: 0, name: '', color: 0, pts: 0, want: false, live: false, inGame: false, err: '', retry: 0, sendT: 0, sid: 0, rr: 0,
+  ws: null as WebSocket | null, id: 0, name: '', color: 0, pts: 0, want: false, live: false, inGame: false, err: '', retry: 0, retryT: 0, sendT: 0, sid: 0, rr: 0,
   off: null as number | null, pingAt: 0, others: new Map<number, NetOther>(),
   key: Array.from(crypto.getRandomValues(new Uint8Array(24)), b => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[b & 63]).join(''),   // this page load: a reconnect keeps the score, a reload starts at 0
 };
@@ -102,7 +102,7 @@ export function netConnect() {
     if (!NET.inGame) { if (NET.want) netFail(NET.err || T.errConn); return; }                       // never got in: back to the name form
     NET.others.forEach(netDrop); NET.others.clear(); renderBoard();
     if (was) flash(T.lost);
-    NET.retry = Math.min(5000, (NET.retry || 500) * 2); setTimeout(netConnect, NET.retry);         // in the game: keep driving, keep trying
+    NET.retry = Math.min(5000, (NET.retry || 500) * 2); NET.retryT = setTimeout(netConnect, NET.retry);   // in the game: keep driving, keep trying
   };
 }
 // a message from the server (docs/PROTOCOL.md)
@@ -139,6 +139,15 @@ function netMsg(m: any) {
 }
 // never got in: back to the name form (and the mouse, locked for a plane at the start button, let go)
 function netFail(msg: string) { if (document.pointerLockElement) document.exitPointerLock(); NET.want = false; const b = $<HTMLButtonElement>('startBtn'); b.disabled = false; $('startLbl').textContent = T.start; joinErr(msg); }
+// World of DODO, issue #22: back to the menu (Esc): leave the game as a closed tab does (the server drops the player and tells the
+// others), for good: no reconnecting, and the next start joins anew. The city goes back to the browser's own (main.ts backToMenu).
+export function netLeave() {
+  const ws = NET.ws; clearTimeout(NET.retryT);
+  Object.assign(NET, { ws: null, live: false, inGame: false, want: false, retry: 0, err: '' });
+  if (ws) try { ws.close(); } catch (_) { /* already closing */ }
+  NET.others.forEach(netDrop); NET.others.clear(); renderBoard();
+  WORLD.on = false; worldClear();
+}
 // another player or a bot: the tank in their paint, the name glowing above it
 function netAdd(p: { id: number; name: string; color: number; pts?: number; bot?: boolean }) {
   if (p.id === NET.id || NET.others.has(p.id)) return;
