@@ -345,6 +345,21 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 /* World of DODO: the performance readout (F, or a tap on the speed card) */
 .stats{display:flex;flex-direction:column;align-items:flex-end;gap:2px;padding:var(--space-2) var(--space-3);color:var(--dodo-light-grey);white-space:nowrap}
 .gauge{pointer-events:auto;cursor:pointer}
+/* World of DODO, issue #14: the plane's aim circle and gun cross (placed over the canvas every frame), the vehicle pick while destroyed,
+   the vehicle choice in the join form, the second weapon's touch button */
+.ret{position:fixed;left:0;top:0;pointer-events:none;width:34px;height:34px;box-sizing:border-box;border:2px solid rgba(255,255,255,.85);border-radius:50%;filter:drop-shadow(0 0 3px rgba(0,0,0,.6))}
+.ret.x{width:22px;height:22px;border:0;border-radius:0;background:linear-gradient(var(--dodo-light-teal),var(--dodo-light-teal)) center/2px 100% no-repeat,linear-gradient(var(--dodo-light-teal),var(--dodo-light-teal)) center/100% 2px no-repeat}
+.pick{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-2) var(--space-2) var(--space-4);pointer-events:auto}
+.pick .camBtn.on{background:var(--dodo-white);color:var(--dodo-charcoal);border-color:var(--dodo-white)}
+.vehs{border:0;margin:0;padding:0;min-width:0}
+.vehs legend{padding:0;margin-bottom:var(--space-2);color:var(--dodo-light-teal)}
+.veh-row{display:flex;gap:var(--space-2)}
+.veh{position:relative;cursor:pointer}
+.veh input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.veh span{display:inline-block;padding:var(--space-2) var(--space-4);border-radius:var(--radius-pill);border:1px solid var(--dodo-grey);color:var(--dodo-white);font-size:var(--fs-body-sm)}
+.veh input:checked+span{background:var(--dodo-white);color:var(--dodo-charcoal);border-color:var(--dodo-white)}
+.veh input:focus-visible+span{outline:2px solid var(--dodo-light-teal);outline-offset:2px}
+.tbtn.alt{position:absolute;right:16px;bottom:calc(196px + env(safe-area-inset-bottom,0px));pointer-events:auto}
 @media (max-width:760px),(pointer:coarse) and (max-width:1024px){
   .board{gap:var(--space-1)}
   .board li{font-size:var(--fs-caption)}
@@ -353,6 +368,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 </style>
 
 <canvas id="gl" data-ta="glAria"></canvas>
+<div class="ret" id="aimC" hidden></div><div class="ret x" id="gunX" hidden></div>
 
 <div id="hud" hidden>
   <div class="tl">
@@ -369,12 +385,20 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
       <span data-t="camera"></span>
     </button>
+    <button class="camBtn" id="vehBtn" type="button" data-ta="vehAria">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>
+      <span id="vehLbl"></span>
+    </button>
     <div class="card stats meta" id="stats" hidden></div>
   </div>
   <div class="bc">
+    <div class="card pick" id="pick" hidden><span class="meta" data-t="pickLbl"></span><button class="camBtn" type="button" data-v="0">1 · <span data-t="vehTank"></span></button><button class="camBtn" type="button" data-v="1">2 · <span data-t="vehPlane"></span></button></div>
     <div id="toast" class="off"></div>
     <div class="card gauge">
       <div><b id="spd">0</b> <span class="meta" data-t="speedUnit"></span></div>
+      <div class="air" hidden><b id="alt">0</b> <span class="meta">m</span></div>
+      <div class="air" hidden><b id="thr">0</b> <span class="meta" data-t="thrUnit"></span></div>
+      <div class="air" hidden><b id="bombs">0</b> <span class="meta" data-t="bombsUnit"></span></div>
       <div><b id="myPts">0</b> <span class="meta" data-t="ptsUnit"></span></div>
     </div>
   </div>
@@ -389,6 +413,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   <div class="grp">
     <button class="tbtn" data-k="down" type="button" data-ta="brakeAria"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
     <button class="tbtn gas" data-k="up" type="button" data-ta="gasAria"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg></button>
+    <button class="tbtn alt" data-k="alt" type="button" data-ta="altAria"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
     <button class="tbtn fire" data-k="fire" type="button" data-ta="fireAria"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg></button>
   </div>
 </div>
@@ -402,6 +427,10 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
     <div class="keys meta" id="keysDesk">
       <span><kbd>↑ ↓ ← →</kbd><span data-t="kSteer"></span></span>
       <span><kbd data-t="kSpace"></kbd><span data-t="kBrake"></span></span>
+      <span><kbd>E</kbd><span data-t="kAlt"></span></span>
+      <span><kbd>V</kbd><span data-t="kVeh"></span></span>
+      <span><kbd data-t="kMouse"></kbd><span data-t="kAim"></span></span>
+      <span><kbd>W S</kbd><span data-t="kThr"></span></span>
       <span><kbd>C</kbd><span data-t="kCam"></span></span>
       <span><kbd>F</kbd><span data-t="kStats"></span></span>
     </div>
@@ -410,6 +439,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <label class="mono" for="nameIn" data-t="nameLbl"></label>
       <input id="nameIn" name="name" type="text" maxlength="16" autocomplete="nickname" autocapitalize="words" spellcheck="false" enterkeyhint="go" data-tp="namePh">
       <fieldset class="swatches"><legend class="mono" data-t="colorLbl"></legend><div class="sw-row" id="swatches"></div></fieldset>
+      <fieldset class="vehs"><legend class="mono" data-t="vehLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="veh" value="0" checked><span data-t="vehTank"></span></label><label class="veh"><input type="radio" name="veh" value="1"><span data-t="vehPlane"></span></label></div></fieldset>
       <button class="cta" id="startBtn" type="submit" disabled><span id="startLbl" data-t="loading"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
       <p class="err" id="joinErr" role="alert" hidden></p>
     </form>

@@ -47,6 +47,8 @@ Zerops right away, so run the checks before you ask for a merge.
   - the city: `server/city.js` mirrors the street grid and the buildings of the client (the construction
     site is one file both load, `client/shared/site.js`: move or change it there);
   - tank size, parcel physics and the hit rules: `server/bots.js` mirrors the client;
+  - what a hit weighs and scores (issue #14): `HIT_W` in `server/server.js` and in
+    `client/src/game/tank.ts`, the bullet's share in `server/bots.js` (`BULLET_W`);
   - the traffic, tram and pedestrian code: `server/world.js` is a port of the client's
     (`client/src/world/traffic.ts` and `peds.ts`, which still run it for the intro screen), and the
     client must keep 33 cars and 50 pedestrians in that order; the tram's track is three.js r128's
@@ -57,8 +59,7 @@ Zerops right away, so run the checks before you ask for a merge.
   `tools/smoke.js` should test them.
 - **The server only relays.** Keep the players' physics in the browser; the server should stay cheap
   enough to run on one small container.
-- **Texts** are in the `T` object at the top of the game script, Czech first, English in the
-  `LANG==='en'` blocks. Add both.
+- **Texts** are in `client/src/texts.ts`, Czech first (`CS`), English in `EN`. Add both.
 - **No secrets and no personal data** in the repository, ever. The game stores nothing about players
   and should keep it that way.
 

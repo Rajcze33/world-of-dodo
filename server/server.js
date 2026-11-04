@@ -11,6 +11,10 @@
 // the cars, the tram and the pedestrians move here and everyone gets the same picture of them. A car a player's
 // tank shoves is that player's until it comes to rest: their browser moves it and the server passes it on.
 //
+// A player flies a plane or drives a tank (issue #14; k in the state row). Planes fire bullets: the shooter's browser decides what its
+// bullets hit (there the others are drawn a little in the past, and a fast plane would be out of reach otherwise), the server passes
+// the hit on to the victim, who applies it unless immune and answers like a parcel hit. A bot fires bullets at low planes.
+//
 // Timing, as in the usual snapshot interpolation of network games: every row of a snapshot carries the moment it
 // describes on this server's clock (ms since the start). A player's row gets the moment the player's browser
 // took it, mapped onto the server's clock (see state()), so the pace of their tank survives the network and
@@ -40,11 +44,17 @@ const REJOIN_MS = 60000;           // a player who lost the connection and comes
 const HEARTBEAT_MS = 15000;        // ping every socket; one that has not answered since the last ping is dropped
 const MSG_PER_SEC = 90;            // a client sends 20 states, a ping, at most ~4 parcels and a few hits a second
 const NAME_MAX = 16;
-const WORLD = 300;                 // the game's world ends at 250 units from the centre
+const WORLD = 520;                 // the tanks' world ends at 250 units from the centre, the planes' airspace at 450
+const BULLET_TTL_MS = 3000;        // a bullet can score this long after it was fired (it flies 1.6 s in the game)
+const BULLET_RANGE = 400;          // a bullet hit claimed by a shooter farther than this from the victim is ignored
+const PLANE = 1;                   // the vehicle kind of a state row (k): 0 or nothing a tank, 1 a plane
 
-// Points for a hit that takes effect: a person is worth much more than a bot.
+// Points for a hit that takes effect: its share of what destroys the vehicle (HIT_W, the same numbers as in client/src/game/tank.ts),
+// times 10 for a person. Three parcels or twelve bullets destroy a tank, one parcel or six bullets a plane: a person is worth 10 a parcel
+// and 3 a bullet in a tank, 30 and 5 in a plane. A bot (always a tank) is worth 1 a parcel, and 1 for the bullet that destroys it.
 const POINTS_PLAYER = 10;
 const POINTS_BOT = 1;
+const HIT_W = { tank: { parcel: 1, bullet: 0.25 }, plane: { parcel: 3, bullet: 0.5 } };
 
 // The tank colours a player can pick when joining; client/index.html offers the same list (TANK_COLORS).
 // Grey is the bots' and red is REDLINE's, so neither is on it.
@@ -243,11 +253,14 @@ function leave(ws) {
   console.log(`leave #${p.id} (${humans().length} online)`);
 }
 
-// A player's tank (and the cars it pushes, field c). ct is the moment the browser took it, on the browser's own clock. Its offset
+// A player's tank or plane (and the cars a tank pushes, field c). ct is the moment the browser took it, on the browser's own clock. Its offset
 // to the server's clock is the smallest arrival delay seen so far (a report that came faster shows the true offset better; the
 // estimate creeps up slowly in case the route got longer), so the stamp keeps the browser's pace whatever the network does.
+// A plane (k 1) also has its altitude y and pitch p; they go at the end of its row.
 function state(p, m) {
-  if (!num(m.x, WORLD) || !num(m.z, WORLD) || !num(m.h, 100) || !num(m.v, 40) || !num(m.r, 4)) return;
+  const plane = m.k === PLANE;
+  if (!num(m.x, WORLD) || !num(m.z, WORLD) || !num(m.h, 100) || !num(m.v, plane ? 90 : 40) || !num(m.r, 4)) return;
+  if (plane && (!num(m.y, 400) || m.y < 0 || !num(m.p, 2))) return;
   const now = clock();
   let ts = now;
   if (num(m.ct, 1e12)) {
@@ -256,40 +269,59 @@ function state(p, m) {
     ts = Math.round(m.ct + p.off);
   }
   if (p.st && ts <= p.st[7]) ts = p.st[7] + 1;
-  p.st = [p.id, m.x, m.z, m.h, m.v, m.r, m.s === 1 ? 1 : 0, ts];  // s: just (re)spawned and immune, the others draw it blinking
-  if (Array.isArray(m.c)) world.carsFrom(p.id, { x: m.x, z: m.z }, m.c, ts);
+  p.st = [p.id, m.x, m.z, m.h, m.v, m.r, m.s === 1 || m.s === 2 ? m.s : 0, ts];  // s: 1 just (re)spawned and immune (the others draw it blinking), 2 destroyed
+  if (plane) p.st.push(PLANE, m.y, m.p);
+  else if (Array.isArray(m.c)) world.carsFrom(p.id, { x: m.x, z: m.z }, m.c, ts);
 }
 
-function remember(p, sid) {
+// k: what was fired, 0 a parcel, 1 a bullet
+function remember(p, sid, k = 0) {
   const now = Date.now();
-  p.shots.set(sid, { t: now, scored: false });
+  p.shots.set(sid, { t: now, scored: false, k });
   if (p.shots.size > 120) for (const [s, v] of p.shots) if (now - v.t > SHOT_TTL_MS) p.shots.delete(s);
 }
 
+// A parcel (from a tank's gun or dropped from a plane) or, with k 1, a bullet.
 function fire(p, m) {
   if (!Number.isInteger(m.sid) || m.sid < 1) return;
-  if (!num(m.x, WORLD) || !num(m.y, 100) || !num(m.z, WORLD) || !num(m.vx, 120) || !num(m.vy, 120) || !num(m.vz, 120)) return;
-  remember(p, m.sid);
+  if (!num(m.x, WORLD) || !num(m.y, 400) || !num(m.z, WORLD) || !num(m.vx, 300) || !num(m.vy, 300) || !num(m.vz, 300)) return;
+  const k = m.k === 1 ? 1 : 0;
+  remember(p, m.sid, k);
   const shot = { t: 'fire', id: p.id, sid: m.sid, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz };
+  if (k) shot.k = 1;
   broadcast(shot, p);
+  if (k) return;                                        // a bullet's hits are reported by the shooter (shot)
   // rt: the moment of the city the shooter saw when firing (server clock); the bots are tested where they were then
   const lag = num(m.rt, 1e12) ? Math.max(0, Math.min(REWIND_MAX_MS, clock() - m.rt)) : 200;
   if (players.size > humans().length && parcels.length < 300) parcels.push({ ...shot, by: p.id, age: 0, lag });
 }
 
-// A scoring hit: once per parcel, only for a parcel the shooter really fired and only while it can still fly.
-function score(shooter, victim, sid, gain, kill) {
+// A scoring hit: once per parcel or bullet, only for one the shooter really fired and only while it can still fly. The points
+// follow from what hit what (HIT_W): the victim's vehicle is in its state row.
+function score(shooter, victim, sid, kill) {
   const shot = shooter && shooter !== victim && shooter.shots.get(sid);
-  if (!shot || shot.scored || Date.now() - shot.t > SHOT_TTL_MS) return;
+  if (!shot || shot.scored || Date.now() - shot.t > (shot.k ? BULLET_TTL_MS : SHOT_TTL_MS)) return;
   shot.scored = true;
+  const gain = victim.bot ? (shot.k ? (kill ? POINTS_BOT : 0) : POINTS_BOT)
+    : Math.round(POINTS_PLAYER * HIT_W[victim.st && victim.st[8] === PLANE ? 'plane' : 'tank'][shot.k ? 'bullet' : 'parcel']);
   shooter.pts += gain;
   broadcast({ t: 'hit', by: shooter.id, v: victim.id, pts: shooter.pts, gain, kill: !!kill });
 }
 
-// A person reports that a parcel hit them (and whether that hit destroyed their tank).
+// A person reports that a parcel or a bullet hit them (and whether that hit destroyed their tank or plane).
 function hit(victim, m) {
   if (!Number.isInteger(m.sid)) return;
-  score(players.get(m.by), victim, m.sid, POINTS_PLAYER, m.kill === true);
+  score(players.get(m.by), victim, m.sid, m.kill === true);
+}
+
+// A person's bullet hit someone on their screen. A bot takes it here; a person gets it passed on (dmg) and answers with hit if it took effect.
+function shot(p, m) {
+  const v = players.get(m.v), s = Number.isInteger(m.sid) && p.shots.get(m.sid);
+  if (!v || v === p || !s || s.k !== 1 || s.scored || Date.now() - s.t > BULLET_TTL_MS || !p.st || !v.st) return;
+  if (Math.hypot(p.st[1] - v.st[1], p.st[2] - v.st[2]) > BULLET_RANGE) return;
+  if (!v.bot) return send(v.ws, { t: 'dmg', by: p.id, sid: m.sid });
+  const fx = hitBot(v, 1);
+  if (fx) score(p, v, m.sid, fx === 'kill'); else s.scored = true;
 }
 
 // A person's tank or parcel hit a pedestrian (index i, pushed along vx, vz): the fall happens in the shared world.
@@ -319,18 +351,19 @@ function removeBots() {
   parcels.length = 0;
 }
 
+// people: everyone the bots can shoot at (tanks get parcels, low planes bullets); the tanks block a bot's way, the planes do not
 function stepBots(dt) {
   const people = humans(), list = bots();
   if (!list.length) return;
   for (const b of list) {
-    const shot = stepBot(b, dt, people, [...players.values()].filter(o => o !== b && o.st));
+    const shot = stepBot(b, dt, people, [...players.values()].filter(o => o !== b && o.st && o.st[8] !== PLANE));
     if (!shot) continue;
-    remember(b, shot.sid);
+    remember(b, shot.sid, shot.k || 0);
     broadcast({ t: 'fire', id: b.id, ...shot });
   }
   flyParcels(parcels, list, dt, (b, s) => {
-    const fx = hitBot(b);
-    if (fx) score(players.get(s.by), b, s.sid, POINTS_BOT, fx === 'kill');
+    const fx = hitBot(b, 0);
+    if (fx) score(players.get(s.by), b, s.sid, fx === 'kill');
   });
 }
 
@@ -361,6 +394,7 @@ wss.on('connection', ws => {
     if (m.t === 'st') state(p, m);
     else if (m.t === 'fire') fire(p, m);
     else if (m.t === 'hit') hit(p, m);
+    else if (m.t === 'shot') shot(p, m);
     else if (m.t === 'ped') ped(p, m);
     else if (m.t === 'prop') prop(p, m);
     else if (m.t === 'ping' && num(m.c, 1e12)) send(ws, { t: 'pong', c: m.c });   // the client's ping readout
@@ -370,7 +404,8 @@ wss.on('connection', ws => {
 });
 
 // Each tick: the bots drive and fire, the city moves on (in two half steps: its code was written for browser frames),
-// then one snapshot goes to everyone: every tank, the cars and the tram; every second tick also the pedestrians.
+// then one snapshot goes to everyone: every tank and plane, the cars and the tram; every second tick also the pedestrians. The cars and the
+// tram stop for the tanks only.
 // ts: the server's clock now, the moment of the bots, the traffic and the tram; n: the tick (the same for everyone).
 let lastTick = Date.now(), tick = 0;
 setInterval(() => {
@@ -382,7 +417,8 @@ setInterval(() => {
   for (const pl of players.values()) {
     if (!pl.st) continue;
     if (pl.bot) pl.st[7] = ts;
-    p.push(pl.st); tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] });
+    p.push(pl.st);
+    if (pl.st[8] !== PLANE) tanks.push({ x: pl.st[1], z: pl.st[2], h: pl.st[3], v: pl.st[4] });
   }
   for (let k = 0; k < 2; k++) for (const i of world.step(dt / 2, tanks)) broadcast({ t: 'prop', i, up: 1 });
   tick++;

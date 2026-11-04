@@ -15,9 +15,10 @@ import { NET, netFire, netHit, netName } from '../net/net';
 import { WORLD, netPed } from '../net/world';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
+import { PLANE_R } from './bullets';
 
-export const SHOT_MAX = 64;
-const SHOT_G = 14, SHOT_SPEED = 45, SHOT_UP = 4, SHOT_CD = 0.28, SHOT_LIFE = 14, SHOT_E = 0.4;
+export const SHOT_MAX = 64, SHOT_G = 14;
+const SHOT_SPEED = 45, SHOT_UP = 4, SHOT_CD = 0.28, SHOT_LIFE = 14, SHOT_E = 0.4;
 let shotCd = 0;
 export let shotNext = 0;
 
@@ -77,10 +78,22 @@ export function shotHit(x: number, y: number, z: number, px: number, py: number,
     const g0 = groundH(p.x, p.z); if (y < g0 || y > g0 + 2.1 || Math.hypot(x - p.x, z - p.z) >= 0.55) continue;
     const dx = px - p.x, dz = pz - p.z, l = Math.hypot(dx, dz) || 1; return { n: [dx / l, 0, dz / l], ped: p };
   }
-  if (owner === 'r') { const h = obbHit(x, y, z, px, py, pz, car, Math.sin(car.h), Math.cos(car.h), 2.4, 1.15, 2.1 + car.gy); if (h) { h.car = null; h.player = true; return h; } }   // other players' parcels hit YOUR tank
-  // other players' tanks: every parcel bounces off them here; whether it hit is decided on that player's screen
-  for (const o of NET.others.values()) { if (!o.on || Math.abs(o.x - x) > 4 || Math.abs(o.z - z) > 4) continue; const h = obbHit(x, y, z, px, py, pz, o, o.hx, o.hz, 2.4, 1.15, 2.1 + groundH(o.x, o.z)); if (h) { h.car = null; return h; } }
+  if (owner === 'r' && car.topT <= 0) {                                                              // other players' parcels hit YOUR tank or plane
+    const h = car.k === 1 ? sphereHit(x, y, z, px, py, pz, car.x, car.y, car.z) : obbHit(x, y, z, px, py, pz, car, Math.sin(car.h), Math.cos(car.h), 2.4, 1.15, 2.1 + car.gy);
+    if (h) { h.car = null; h.player = true; return h; }
+  }
+  // other players' tanks and planes: every parcel bounces off them here; whether it hit is decided on that player's screen
+  for (const o of NET.others.values()) {
+    if (!o.on || o.s === 2 && o.k === 1 || Math.abs(o.x - x) > 4 || Math.abs(o.z - z) > 4) continue;
+    const h = o.k === 1 ? sphereHit(x, y, z, px, py, pz, o.x, o.y, o.z) : obbHit(x, y, z, px, py, pz, o, o.hx, o.hz, 2.4, 1.15, 2.1 + groundH(o.x, o.z));
+    if (h) { h.car = null; return h; }
+  }
   return null;
+}
+// World of DODO, issue #14: a plane is a sphere for the parcels (as for the bullets, game/bullets.ts); the normal points from its centre
+function sphereHit(x: number, y: number, z: number, px: number, py: number, pz: number, cx: number, cy: number, cz: number): ShotHit | null {
+  if (Math.hypot(x - cx, y - cy, z - cz) >= PLANE_R) return null;
+  const dx = px - cx, dy = py - cy, dz = pz - cz, l = Math.hypot(dx, dy, dz) || 1; return { n: [dx / l, dy / l, dz / l] };
 }
 export function fireShot() {
   if (shotCd > 0) return; shotCd = SHOT_CD;
@@ -91,6 +104,14 @@ export function fireShot() {
   // muzzle pushed into a wall or a parked car: drop the parcel at the tank instead of firing it through
   if (shotHit(s.x, s.y, s.z, car.x, 1.5 + car.gy, car.z)) { s.x = car.x; s.z = car.z; s.vx = s.vz = 0; }
   showShot(s, car.h);
+  netFire(s);
+}
+// World of DODO, issue #14: a parcel dropped from a plane at (x, y, z) with the plane's speed; flies and collides like the tank's
+export function dropShot(x: number, y: number, z: number, vx: number, vy: number, vz: number) {
+  const s = nextShot();
+  s.on = true; s.rest = false; s.touched = false; s.owner = 'p'; s.age = 0; s.ox = s.oz = 0; s.x = x; s.y = y; s.z = z; s.vx = vx; s.vy = vy; s.vz = vz;
+  s.wx = (Math.random() - 0.5) * 10; s.wy = (Math.random() - 0.5) * 10;
+  showShot(s, Math.atan2(vx, vz));
   netFire(s);
 }
 // a parcel fired from (x,z) along (fx,fz) at speed sp (the original's delivery and REDLINE tanks fired with this; nothing in World of

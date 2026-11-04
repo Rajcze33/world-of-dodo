@@ -4,24 +4,29 @@
 // core/engine.ts creates the 3D engine, which throws when the browser has no WebGL (see ui/hud.ts).
 import { noStart } from './ui/hud';
 import type { Vector3, TransformNode } from '@babylonjs/core';
-import { engine, scene, camera, lookAt, moonAt, resize, aspect } from './core/engine';
+import { engine, scene, camera, lookAt, moonAt, resize, aspect, setFog } from './core/engine';
 import { TEXREG } from './core/tex';
 import { $, COARSE } from './core/dom';
 import { hexCss } from './core/util';
 import { T } from './texts';
-import { G, car, K, view } from './game/state';
-import { groundH, segHit } from './world/grid';
+import { G, car, K, HELD, input, view } from './game/state';
+import { groundH, segHit, AIR_LIM } from './world/grid';
 import { drawMap, sizeMini, mini, mctx } from './ui/minimap';
-import { initInput } from './game/input';
+import { initInput, lockMouse, releaseMouse, mouseLocked } from './game/input';
 import { PERF, setQuality, initQuality, perfTick } from './game/quality';
 import { buildCity, finishCity, CRANE_TOP } from './world/city';
 import { updateProps } from './world/props';
 import { buildTraffic, updateTraffic, TRAFFIC, PARKED } from './world/traffic';
 import { buildPeds, updatePeds, PEDS } from './world/peds';
-import { buildTank, updateDrive, reset, respawn, moveTank, paintMat, vanOwnMat, camLook } from './game/tank';
+import { buildTank, updateDrive, reset, respawn, moveTank, paintMat, vanOwnMat, camLook, switchVehicle } from './game/tank';
 import { buildShots, updateShots } from './game/shots';
+import { buildBullets, updateBullets } from './game/bullets';
+import { buildPlane, updateFly, planeView, planeCam, drawReticle, pl, KMH, M_PER_U } from './game/plane';
 import { buildFx, updateImpactFx, updateSnow, fx } from './game/fx';
+import { buildLand } from './world/land';
 import { NET, netUpdate, netConnect, cleanName, botName, joinErr, TANK_COLORS, serverNow } from './net/net';
+import { toast, flashMsg, flashUntil } from './ui/hud';
+import { now } from './core/util';
 import { WORLD, worldUpdate, worldAt, BODIES, buildNet } from './net/world';
 
 // ---------- loop ----------
@@ -35,16 +40,16 @@ function onResize() { resize(); sizeMini(); }
 function frame() {
   if (paused) return;
   const tnow = performance.now(), raw = tnow - last, dt = Math.min(0.05, raw / 1000); last = tnow;
-  if (G.state === 'drive') updateDrive(dt);
-  if (G.state === 'drive') G.realSec += dt;
+  if (G.state === 'drive') { if (car.k === 1) updateFly(dt); else updateDrive(dt); G.realSec += dt; }   // World of DODO: a tank or a plane (#14)
   if (WORLD.on) worldUpdate(dt, tnow); else { updateTraffic(dt); updatePeds(dt); }   // World of DODO: once you play, the city comes from the server
-  updateShots(dt); updateProps(dt);
+  updateShots(dt); updateBullets(dt); updateProps(dt);
   // the player's tank (still called van, as in the original); makeTank keeps its wheels (none spin any more) and the body that rolls
   // with the steering in metadata (three's userData)
   const van = view.van!, parts = van.metadata as { wheels?: TransformNode[]; body?: TransformNode } | null;
-  car.gy += (groundH(car.x, car.z) - car.gy) * Math.min(1, dt * 14);
+  if (car.k === 0) car.gy += (groundH(car.x, car.z) - car.gy) * Math.min(1, dt * 14);
   van.position.set(car.x, car.gy + 0.9 * Math.abs(Math.sin(car.roll)), car.z); van.rotation.y = car.h; van.rotation.z = car.roll;
-  van.setEnabled(!(G.state === 'drive' && car.immT > 0 && Math.floor(tnow / 110) % 2));   // World of DODO: blinks while immune after a (re)spawn
+  van.setEnabled(car.k === 0 && !(G.state === 'drive' && car.immT > 0 && Math.floor(tnow / 110) % 2));   // World of DODO: blinks while immune after a (re)spawn
+  planeView(dt, tnow);
   parts?.wheels?.forEach(w => { w.rotation.x += car.v * dt / 0.46; });
   if (parts?.body) parts.body.rotation.z = -car.steer * Math.min(1, Math.abs(car.v) / 20) * 0.05;
 
@@ -53,7 +58,8 @@ function frame() {
   if (G.state === 'intro') {                                       // the intro orbits the city
     orbit += dt * 0.05; const r = 210;
     lerpTo(camera.position, Math.cos(orbit) * r, 95, Math.sin(orbit) * r, Math.min(1, k * 0.5)); lerpTo(camLook, 0, 0, 0, Math.min(1, k * 0.5));
-  } else {                                                         // behind the tank, or high above it (camMode); farther and higher on a portrait screen
+  } else if (car.k === 1) planeCam(dt);                             // World of DODO, issue #14: behind the plane, along the mouse's aim
+  else {                                                         // behind the tank, or high above it (camMode); farther and higher on a portrait screen
     const pt = aspect() < 1, back = G.camMode ? (pt ? 30 : 24) : (pt ? 14 : 11.5), up = G.camMode ? (pt ? 36 : 28) : (pt ? 7.8 : 5.4), ah = pt ? 7 : 4;
     const hx = Math.sin(car.h), hz = Math.cos(car.h);                 // the tank's heading
     // World of DODO: a wall or a container between the tank and the camera pulls the camera in front of it (and a little higher)
@@ -63,9 +69,11 @@ function frame() {
   }
   lookAt(camLook);
 
-  // light follows the action: the shadow box around the tank, or around the whole city in the intro
-  const wide = G.state === 'intro';
-  moonAt(wide ? 0 : car.x, wide ? 0 : car.z, wide ? 190 : 80);
+  // light follows the action: the shadow box around the tank (wider under a plane, the light above it), or around the whole city in the
+  // intro; the fog farther in the air
+  const wide = G.state === 'intro', air = !wide && car.k === 1;
+  moonAt(wide ? 0 : car.x, wide ? 0 : car.z, wide ? 190 : air ? 110 : 80, air ? Math.max(110, car.y + 40) : 110);
+  setFog(air);
 
   // snow
   updateSnow(dt, tnow);
@@ -73,9 +81,11 @@ function frame() {
 
   netUpdate(dt, tnow);
   if (G.state === 'drive') {
-    $('spd').textContent = String(Math.round(Math.abs(car.v) * 2.2));
-    drawMap(mctx, mini.width, { car, others: NET.others.values() });
+    $('spd').textContent = String(Math.round(Math.abs(car.v) * (air ? KMH : 2.2)));
+    drawMap(mctx, mini.width, { car, others: NET.others.values(), air });
+    airHud(air);
   }
+  drawReticle(G.state === 'drive');
   updateImpactFx(dt);
   // the screen shake of a blast: the camera moves for this one picture only
   let shx = 0, shy = 0;
@@ -84,10 +94,31 @@ function frame() {
   perfTick(raw);
 }
 
-// World of DODO: the server said welcome (net/net.ts calls this), drive out from a free spot on the streets (the original went
+// World of DODO, issue #14: what the HUD shows for a plane (height, throttle, parcels on board) and its hints in the toast line; the vehicle
+// button names the other vehicle; while destroyed the next vehicle can be picked. Elements change only when their content does.
+let hudAir: boolean | null = null, hudK = -1;
+function airHud(air: boolean) {
+  if (air !== hudAir) { hudAir = air; document.querySelectorAll<HTMLElement>('.gauge .air').forEach(e => { e.hidden = !air; }); }
+  if (car.next !== hudK) {
+    hudK = car.next; $('vehLbl').textContent = car.next ? T.vehTank : T.vehPlane;
+    document.querySelectorAll<HTMLElement>('#pick button').forEach(b => b.classList.toggle('on', Number(b.dataset.v) === car.next));
+  }
+  const dead = car.topT > 0; if ($('pick').hidden === dead) $('pick').hidden = !dead;
+  if (car.k === 0) { releaseMouse(); return; }                       // a tank: the hints come from updateDrive
+  $('alt').textContent = String(Math.max(0, Math.round(car.y * M_PER_U))); $('thr').textContent = String(Math.round(pl.thr * 100)); $('bombs').textContent = String(pl.bombs);
+  let msg = '';
+  if (pl.t < 7) msg = COARSE ? T.hintPlane : T.hintPlaneDesk;
+  if (!COARSE && !mouseLocked() && !dead) msg = T.hintLock;
+  if (Math.max(Math.abs(car.x), Math.abs(car.z)) > AIR_LIM - 40 && !dead) msg = T.edge;
+  if (now() < flashUntil) msg = flashMsg;
+  toast(msg);
+}
+
+// World of DODO: the server said welcome (net/net.ts calls this), drive out from a free spot on the streets, or fly in (the original went
 // intro → plan → drive)
+let joinVeh: 0 | 1 = 0;
 export function start() {
-  reset(); respawn(true);
+  reset(); car.next = joinVeh; respawn(true);
   G.state = 'drive'; nameIn.blur(); $('intro').hidden = true; $('mini').classList.remove('big'); $('hud').hidden = false; $('touch').hidden = !COARSE;
   sizeMini(); last = performance.now();
 }
@@ -104,10 +135,17 @@ function joinForm() {
     r.addEventListener('change', () => { NET.color = TANK_COLORS[Number(r.value)]; paintMat(vanOwnMat, NET.color); });
   });
   paintMat(vanOwnMat, NET.color);
+  // World of DODO, issue #14: the vehicle, a tank or a plane, remembered too
+  try { joinVeh = localStorage.getItem('wod-veh') === '1' ? 1 : 0; } catch (_) { /* storage blocked */ }
+  document.querySelectorAll<HTMLInputElement>('input[name=veh]').forEach(r => {
+    r.checked = Number(r.value) === joinVeh;
+    r.addEventListener('change', () => { joinVeh = r.value === '1' ? 1 : 0; });
+  });
   $('joinForm').addEventListener('submit', e => {
     e.preventDefault(); const b = $<HTMLButtonElement>('startBtn'); if (b.disabled) return;
     const name = cleanName(nameIn.value); if (!name || botName(name)) { joinErr(name ? T.errReserved : T.errName); nameIn.focus(); return; }
-    try { localStorage.setItem('wod-name', name); localStorage.setItem('wod-color', NET.color.toString(16)); } catch (_) { /* storage blocked: not remembered */ }
+    try { localStorage.setItem('wod-name', name); localStorage.setItem('wod-color', NET.color.toString(16)); localStorage.setItem('wod-veh', String(joinVeh)); } catch (_) { /* storage blocked: not remembered */ }
+    if (joinVeh === 1 && !COARSE) lockMouse();                       // a plane flies with the mouse: lock it now, while the browser allows it (a click)
     joinErr(''); b.disabled = true; $('startLbl').textContent = T.connecting; NET.name = name; NET.want = true; NET.err = ''; netConnect();
   });
 }
@@ -119,13 +157,15 @@ function boot(): boolean {
     // the city is built in two parts around the traffic: the parked cars draw from R() between the city blocks and the forest, as in
     // the original, so every client gets the same city (and the snow, in buildFx, after the forest)
     // buildNet: what the server shares (BODIES), filled once the traffic and the parked cars exist, before anyone can join
-    buildCity(); buildTraffic(); finishCity(); buildNet(); buildTank(); buildShots(); buildPeds(); buildFx();
+    buildCity(); buildTraffic(); finishCity(); buildNet(); buildTank(); buildPlane(); buildShots(); buildBullets(); buildPeds(); buildFx();
+    buildLand();                                                   // the land around the city (planes, #14): its own random numbers, after everything
     initInput();
     joinForm();
     // automated tests (tools/browser-test.js) open the page with ?test and reach the game through this; nothing else uses it.
     // scene and engine stand where three's renderer was.
     if (new URLSearchParams(location.search).has('test')) {
-      window.WOD = { car, NET, get state() { return G.state; }, K, PERF, setQuality, scene, engine, WORLD, TRAFFIC, PARKED, BODIES, PEDS, worldAt, serverNow, moveTank };
+      window.WOD = { car, NET, get state() { return G.state; }, K, PERF, setQuality, scene, engine, WORLD, TRAFFIC, PARKED, BODIES, PEDS, worldAt, serverNow, moveTank,
+        HELD, input, pl, view, switchVehicle };
     }
     addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', () => { paused = document.hidden; last = performance.now(); });

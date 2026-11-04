@@ -98,15 +98,16 @@ let puff!: Mesh, puffMat!: ShaderMaterial, shockRing!: Mesh, ringMat!: StandardM
 let puffT = 0, ringT = 0, ringS = 22;
 // shakeT: how long the camera still shakes (main.ts applies it to the camera while drawing and counts it down)
 export const fx = { shakeT: 0 };
-// s scales the blast (1 = the finale's big parcel; World of DODO uses a smaller one for a destroyed tank), shake = camera shake time
-export function startImpactFx(x: number, z: number, s = 1, shake = 0.9) {
+// s scales the blast (1 = the finale's big parcel; World of DODO uses a smaller one for a destroyed tank), shake = camera shake time,
+// y: the height of the blast (a plane blows up in the air, issue #14; its pieces fall to the ground)
+export function startImpactFx(x: number, z: number, s = 1, shake = 0.9, y = 0) {
   for (let i = 0; i < PUFF_N; i++) {
     const a = Math.random() * 6.283, sp = (4 + Math.random() * 15) * s;
-    puffPos[i * 3] = x + Math.cos(a) * 1.5; puffPos[i * 3 + 1] = 0.6 + Math.random() * 1.5; puffPos[i * 3 + 2] = z + Math.sin(a) * 1.5;
+    puffPos[i * 3] = x + Math.cos(a) * 1.5; puffPos[i * 3 + 1] = y + 0.6 + Math.random() * 1.5; puffPos[i * 3 + 2] = z + Math.sin(a) * 1.5;
     puffVel[i * 3] = Math.cos(a) * sp; puffVel[i * 3 + 1] = (3 + Math.random() * 10) * s; puffVel[i * 3 + 2] = Math.sin(a) * sp;
   }
   puff.setEnabled(true); puffT = 2.2; puff.updateVerticesData(VertexBuffer.PositionKind, puffPos);
-  shockRing.position.set(x, 0.5, z); shockRing.setEnabled(true); ringT = 0.7; ringS = 22 * s; fx.shakeT = Math.max(fx.shakeT, shake);
+  shockRing.position.set(x, y + 0.5, z); shockRing.setEnabled(true); ringT = 0.7; ringS = 22 * s; fx.shakeT = Math.max(fx.shakeT, shake);
 }
 export function updateImpactFx(dt: number) {
   if (puffT > 0) {

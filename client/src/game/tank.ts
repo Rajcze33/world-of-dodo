@@ -11,19 +11,21 @@ import { COL, c3 } from '../core/colors';
 import { COARSE } from '../core/dom';
 import { now } from '../core/util';
 import { T } from '../texts';
-import { G, car, K, input, view } from './state';
-import { depot, roadC, blockC, TRAM_K, free, solidPush, groundH } from '../world/grid';
+import { G, car, K, HELD, input, view } from './state';
+import { depot, roadC, blockC, TRAM_K, free, solidPush, groundH, segHit } from '../world/grid';
 import { propsNear, knockProp, resetProps } from '../world/props';
 import {
   TRAFFIC, ALLCARS, TRAM, TRAM_L, TRAM_W, TRAM_STOPS, seedTram, seedTraffic, tramNear, TANK_M, CAR_E, carBody, putBody, impulse, toDyn,
   dynBlocked, resetParked,
 } from '../world/traffic';
 import { resetPeds, hitPeds } from '../world/peds';
-import { NET } from '../net/net';
+import { NET, type NetOther } from '../net/net';
 import { WORLD, netProp } from '../net/world';
 import { flash, toast, flashMsg, flashUntil } from '../ui/hud';
 import { fireShot, clearShots } from './shots';
 import { startImpactFx, clearImpactFx } from './fx';
+import { fireBullet, clearBullets, BUL_V } from './bullets';
+import { spawnPlane } from './plane';
 
 // ---------- DODO colours ----------
 // the DODO teal of the delivery tanks; every player tank gets a clone in its own colour (three's Phong: a little shine)
@@ -123,27 +125,44 @@ export function buildTank() { view.van = makeTank(true, vanOwnMat); }
 // ---- what a hit does to your tank: slowed down; three hits within 8 s destroy it (in the original REDLINE toppled it,
 // it righted itself after a few seconds and was immune for 4 s; in World of DODO it blows up, lies on its side and
 // comes back at a free spot, see respawn)
+// World of DODO, issue #14: a hit has a weight (HIT_W, the same numbers as in server/server.js), and the vehicle is destroyed once the
+// hits within 8 s weigh 3: three parcels or twelve bullets destroy a tank, one parcel or six bullets a plane. A bullet does not slow a tank.
 export const TOPPLE_T = 3.2;
+export const HIT_W = { tank: { shot: 1, ram: 1, bullet: 0.25 }, plane: { shot: 3, ram: 3, bullet: 0.5 } };
 export function carStatus(dt: number) {
   car.slowT = Math.max(0, car.slowT - dt); car.immT = Math.max(0, car.immT - dt);
+  if (car.swT > 0 && car.topT <= 0 && (car.swT -= dt) <= 0) { car.swT = 0; respawn(); return; }    // switched vehicles (switchVehicle)
   if (car.topT > 0) {
     car.topT -= dt; const tt = TOPPLE_T - car.topT;
-    car.roll = Math.min(1, tt / 0.5) * car.rollDir * 1.45;
+    if (car.k === 0) car.roll = Math.min(1, tt / 0.5) * car.rollDir * 1.45;
     if (car.topT <= 0) respawn();
   }
 }
+// destroyed: a tank blows up and lies on its side, a plane blows up where it is (its pieces fall, game/fx.ts)
 export function toppleCar(sign: number) {
   if (car.immT > 0 || car.topT > 0) return;
-  car.topT = TOPPLE_T; car.rollDir = sign; car.v *= 0.4; car.hitLog.length = 0; flash(T.toppled); startImpactFx(car.x, car.z, 0.45, 0.6);
+  car.topT = TOPPLE_T; car.rollDir = sign; car.v *= 0.4; car.hitLog.length = 0; car.swT = 0; flash(T.toppled);
+  if (car.k === 1) { car.v = 0; startImpactFx(car.x, car.z, 0.5, 0.6, car.y); }
+  else startImpactFx(car.x, car.z, 0.45, 0.6);
 }
 // returns whether the hit took effect (not while toppled or immune right after): only such a hit scores for another player.
-// kind 'ram' was REDLINE's ramming (it slowed the tank more); msg: what the toast says (the original fell back to REDLINE's texts)
-export function hitPlayer(kind: 'shot' | 'ram', sign: number, msg: string): boolean {
+// kind 'ram' was REDLINE's ramming (it slowed the tank more), 'bullet' a plane's or an anti-aircraft gun's (issue #14); msg: what the
+// toast says (the original fell back to REDLINE's texts)
+export function hitPlayer(kind: 'shot' | 'ram' | 'bullet', sign: number, msg: string): boolean {
   if (car.immT > 0 || car.topT > 0 || G.state !== 'drive') return false;
-  const t = now(); car.hitLog = car.hitLog.filter(x => t - x < 8000); car.hitLog.push(t);
-  car.slowT = Math.max(car.slowT, 2.4); car.v *= kind === 'ram' ? 0.6 : 0.7;
-  if (car.hitLog.length >= 3) toppleCar(sign); else flash(msg);
+  const t = now(); car.hitLog = car.hitLog.filter(x => t - x[0] < 8000); car.hitLog.push([t, HIT_W[car.k === 1 ? 'plane' : 'tank'][kind]]);
+  if (car.k === 0 && kind !== 'bullet') { car.slowT = Math.max(car.slowT, 2.4); car.v *= kind === 'ram' ? 0.6 : 0.7; }
+  if (car.hitLog.reduce((s, x) => s + x[1], 0) >= 2.999) toppleCar(sign); else flash(msg);
   return true;
+}
+// World of DODO, issue #14: the next (re)spawn in the tank (k 0) or the plane (k 1); without k the other one. While alive the switch
+// takes SWITCH_T s, in which you cannot fire (no escaping a lost fight for free); while destroyed it only picks the next vehicle.
+export const SWITCH_T = 2;
+export function switchVehicle(k?: 0 | 1) {
+  car.next = k ?? ((car.next ^ 1) as 0 | 1);
+  if (G.state !== 'drive' || car.topT > 0) return;
+  if (car.next === car.k) { car.swT = 0; return; }
+  car.swT = SWITCH_T; flash(T.switching(car.next ? T.vehPlane : T.vehTank));
 }
 
 // ---------- game state ----------
@@ -151,10 +170,10 @@ export function hitPlayer(kind: 'shot' | 'ram', sign: number, msg: string): bool
 export const camLook = new Vector3();
 function camBehind() { camera.position.set(car.x - Math.sin(car.h) * 11, 6, car.z - Math.cos(car.h) * 11); camLook.set(car.x, 1.2, car.z); }
 export function reset() {
-  Object.assign(car, { x: depot.park[0], z: depot.park[1], h: Math.PI, v: 0, steer: 0, gy: 0, slowT: 0, topT: 0, roll: 0, rollDir: 1, immT: 0, hitLog: [] });
+  Object.assign(car, { k: 0, swT: 0, x: depot.park[0], z: depot.park[1], h: Math.PI, v: 0, steer: 0, gy: 0, y: 0, p: 0, slowT: 0, topT: 0, roll: 0, rollDir: 1, immT: 0, hitLog: [] });
   seedTram(TRAM_STOPS[(Math.random() * 2) | 0] - 30 - Math.random() * 120); seedTraffic((Math.random() * 1e9) | 0);
   G.realSec = 0;
-  clearShots(); clearImpactFx(); resetParked(); resetProps(); resetPeds(); toast(COARSE ? T.hintStart : T.hintStartDesk);
+  clearShots(); clearBullets(); clearImpactFx(); resetParked(); resetProps(); resetPeds(); toast(COARSE ? T.hintStart : T.hintStartDesk);
   camBehind();
 }
 // World of DODO: start on a street, as far from the other players as the city allows, clear of traffic and the tram
@@ -169,19 +188,23 @@ export function spawnPoint(): { x: number; z: number; h: number } {
   }
   return best || { x: depot.park[0], z: depot.park[1], h: Math.PI };
 }
-// World of DODO: at the start and after being destroyed, the tank appears at a spawn point, immune for SPAWN_IMMUNE s (it blinks meanwhile)
+// World of DODO: at the start and after being destroyed, the tank appears at a spawn point, immune for SPAWN_IMMUNE s (it blinks meanwhile);
+// a plane (issue #14, car.next) comes in from the edge of the airspace (game/plane.ts)
 export const SPAWN_IMMUNE = 3;
 export function respawn(first = false) {
-  const p = spawnPoint();
-  Object.assign(car, { x: p.x, z: p.z, h: p.h, v: 0, steer: 0, gy: groundH(p.x, p.z), topT: 0, roll: 0, slowT: 0, hitLog: [], immT: SPAWN_IMMUNE });
-  camBehind();
+  if (car.next === 1) spawnPlane();
+  else {
+    const p = spawnPoint();
+    Object.assign(car, { k: 0, x: p.x, z: p.z, h: p.h, v: 0, steer: 0, gy: groundH(p.x, p.z), y: 0, p: 0, topT: 0, roll: 0, slowT: 0, swT: 0, hitLog: [], immT: SPAWN_IMMUNE });
+    camBehind();
+  }
   if (!first) flash(T.respawned);
 }
 export function blockedAt(x: number, z: number, h: number): boolean {
   const fx = Math.sin(h) * 1.55, fz = Math.cos(h) * 1.55; if (!(free(x + fx, z + fz, 1.0) && free(x - fx, z - fz, 1.0))) return true;
-  // other players' tanks: you cannot drive into one, but you can always drive out of an overlap
+  // other players' tanks: you cannot drive into one, but you can always drive out of an overlap (planes fly over)
   for (const o of NET.others.values()) {
-    if (!o.on || Math.abs(o.x - x) > 8 || Math.abs(o.z - z) > 8) continue;
+    if (!o.on || o.k === 1 || Math.abs(o.x - x) > 8 || Math.abs(o.z - z) > 8) continue;
     const g = tankGap(x, z, h, o); if (g < 2.1 && g < tankGap(car.x, car.z, car.h, o)) return true;
   }
   return false;
@@ -205,7 +228,7 @@ export function tankPen(x: number, z: number, h: number): { nx: number; nz: numb
     const px = x + fx * j, pz = z + fz * j, w = solidPush(px, pz, TANK_CR); if (w) take(w.nx, w.nz, w.pen);
     for (const p of propsNear(px, pz)) { if (p.state !== 'up') continue; const dx = px - p.x, dz = pz - p.z, d = Math.hypot(dx, dz); if (d > 1e-6) take(dx / d, dz / d, p.r + TANK_CR - d); }
     for (const o of NET.others.values()) {
-      if (!o.on || Math.abs(o.x - px) > 5 || Math.abs(o.z - pz) > 5) continue;                 // another tank: its two circles
+      if (!o.on || o.k === 1 || Math.abs(o.x - px) > 5 || Math.abs(o.z - pz) > 5) continue;    // another tank: its two circles
       for (const b of [-1.55, 1.55]) { const dx = px - o.x - o.hx * b, dz = pz - o.z - o.hz * b, d = Math.hypot(dx, dz); if (d < 2.1) take(d > 1e-6 ? dx / d : -fx, d > 1e-6 ? dz / d : -fz, 2.1 - d); }
     }
   }
@@ -298,9 +321,33 @@ export function breakProps(x: number, z: number, h: number) {
     }
   }
 }
+// World of DODO, issue #14: the anti-aircraft gun on the turret (E, the right mouse button, the touch button). It aims itself at the
+// nearest plane in reach and in sight as drawn here (the shooter decides a bullet's hits, game/bullets.ts), leading it by the bullet's
+// flight, with some spread; with no plane about it fires up and ahead.
+const AA_RATE = 1 / 7, AA_R = 130, AA_ERR = 0.035, AA_Y = 2.3;
+let aaCd = 0;
+function fireAA() {
+  if (aaCd > 0) return; aaCd = AA_RATE;
+  const ox = car.x, oy = car.gy + AA_Y, oz = car.z; let best: NetOther | null = null, bd = AA_R;
+  for (const o of NET.others.values()) {
+    if (!o.on || o.k !== 1 || o.s === 2) continue;
+    const d = Math.hypot(o.x - ox, o.y - oy, o.z - oz); if (d < bd && segHit(ox, oy, oz, o.x, o.y, o.z) >= 1) { bd = d; best = o; }
+  }
+  let dx = Math.sin(car.h) * 0.8, dy = 0.6, dz = Math.cos(car.h) * 0.8;
+  if (best) {
+    const vx = Math.sin(best.h) * Math.cos(best.p) * best.v, vy = Math.sin(best.p) * best.v, vz = Math.cos(best.h) * Math.cos(best.p) * best.v;
+    let t = bd / BUL_V; for (let i = 0; i < 2; i++) { dx = best.x + vx * t - ox; dy = best.y + vy * t - oy; dz = best.z + vz * t - oz; t = Math.hypot(dx, dy, dz) / BUL_V; }
+  }
+  const l = Math.hypot(dx, dy, dz) || 1, e = () => (Math.random() - 0.5) * AA_ERR;
+  dx = dx / l + e(); dy = dy / l + e(); dz = dz / l + e();
+  fireBullet(ox + dx, oy + dy, oz + dz, dx * BUL_V, dy * BUL_V, dz * BUL_V);
+}
 export function updateDrive(dt: number) {
-  carStatus(dt); const dead = car.topT > 0;                        // destroyed: no driving, no firing
-  if (K.fire && !dead) fireShot();
+  carStatus(dt); if (car.k !== 0) return;                          // switched to a plane (carStatus respawned)
+  const dead = car.topT > 0, busy = car.swT > 0;                   // destroyed: no driving, no firing; switching vehicles: no firing
+  aaCd = Math.max(0, aaCd - dt);
+  if (K.fire && !dead && !busy) fireShot();
+  if ((HELD.has('KeyE') || input.rmb || K.alt) && !dead && !busy) fireAA();
   const thr = dead ? 0 : (K.up ? 1 : 0) - (K.down ? 1 : 0), st = dead ? 0 : Math.max(-1, Math.min(1, (K.left ? 1 : 0) - (K.right ? 1 : 0) - input.steerAxis));
   const sl = car.slowT > 0, MAX = 24 * (sl ? 0.55 : 1), REV = 7, ACC = 14 * (sl ? 0.7 : 1), BRK = 32;                  // hit: slowed for a few seconds
   if (dead) car.v *= Math.exp(-4 * dt);
