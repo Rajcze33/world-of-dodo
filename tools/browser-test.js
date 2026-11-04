@@ -105,7 +105,8 @@ async function player(browser, name, viewport, color) {
 // put the tank at (x,z) facing h, standing still
 const place = (page, x, z, h) => page.evaluate((x, z, h) => Object.assign(WOD.car, { x, z, h, v: 0 }), x, z, h);
 // clear what earlier hits did (the bots', the spawn shield), so the next parcel counts; hits: how many recent hits to pretend
-const fresh = (page, hits = 0) => page.evaluate(n => Object.assign(WOD.car, { immT: 0, topT: 0, roll: 0, slowT: 0, hitLog: Array(n).fill(performance.now()) }), hits);
+// (since issue #14 a hit in hitLog is [time, weight]: n recent parcel hits are n entries [now, 1])
+const fresh = (page, hits = 0) => page.evaluate(n => Object.assign(WOD.car, { immT: 0, topT: 0, roll: 0, slowT: 0, hitLog: Array.from({ length: n }, () => [performance.now(), 1]) }), hits);
 const row = (page, name) => page.$$eval('#board li', (lis, name) => lis.map(li => [li.querySelector('.nm').textContent, li.querySelector('b').textContent]).find(r => r[0] === name), name);
 // wait until this page draws the other player's tank near (x,z)
 const seesAt = (page, x, z) => page.waitForFunction((x, z) => [...WOD.NET.others.values()].some(o => !o.bot && o.on && Math.hypot(o.x - x, o.z - z) < 1), SLOW, x, z);
