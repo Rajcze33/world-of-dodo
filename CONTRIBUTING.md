@@ -36,7 +36,9 @@ Zerops right away, so run the checks before you ask for a merge.
     site is one file both load, `client/shared/site.js`: move or change it there);
   - tank size, parcel physics and the hit rules: `server/bots.js` mirrors the client;
   - the traffic, tram and pedestrian code: `server/world.js` is a port of the client's (which still
-    runs it for the intro screen), and the client must keep 33 cars and 50 pedestrians in that order.
+    runs it for the intro screen), and the client must keep 33 cars and 50 pedestrians in that order;
+    `rejoin` (a pushed car back into the lane) lives in both too, and the parked cars are numbered
+    after the cars (`33 + k`) in the client's order.
 - **Protocol changes** go into [docs/PROTOCOL.md](docs/PROTOCOL.md) in the same pull request, and
   `tools/smoke.js` should test them.
 - **The server only relays.** Keep the players' physics in the browser; the server should stay cheap

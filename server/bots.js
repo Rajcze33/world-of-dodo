@@ -7,8 +7,9 @@
 //
 // Parcels fired AT a bot are flown here, because the bot lives here: the game's ballistics, the ground and
 // the buildings (server/city.js); the cars, the tram and the people of each client are not known here. The
-// shooter saw the bot NET_DELAY plus the network delay late, so a parcel is tested against where the bot was
-// REWIND_MS ago (in favour of the shooter). A hit follows the game's rules for a tank: slowed for a moment,
+// shooter saw the bot late (the browser draws everything a little behind the server's clock, plus the network),
+// so a parcel is tested against where the bot was then: the parcel's lag, from the moment of the city the
+// shooter's browser showed when firing (lag compensation, in favour of the shooter). A hit follows the game's rules for a tank: slowed for a moment,
 // three hits within 8 s destroy it (it lies on its side, then comes back at a junction far from the players,
 // immune for a few seconds), and only a hit that takes effect scores.
 'use strict';
@@ -22,7 +23,6 @@ const AHEAD = 7, BLOCK_W = 2.6, BLOCK_T = 1.5;   // a tank this close in front s
 const SHOT_G = 14, SHOT_UP = 4, SHOT_E = 0.4, LEAD_T = 0.79;
 const TANK_L = 2.4, TANK_W = 1.15, TANK_H = 2.1;
 const SLOW_T = 2.4, DEAD_T = 3.2, SPAWN_IMMUNE_T = 3, HIT_WINDOW_MS = 8000;   // the same numbers as the players' tanks
-const REWIND_MS = 200;
 
 const nbrs = (i, j) => [[i + 1, j], [i - 1, j], [i, j + 1], [i, j - 1]].filter(([a, b]) => a >= 0 && a <= 6 && b >= 0 && b <= 6);
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -67,7 +67,7 @@ function nextJunction(bot, target) {
   return opts[Math.random() * opts.length | 0];
 }
 
-// the snapshot row, as the clients send theirs: id, x, z, heading, speed, roll, immune after a respawn
+// the snapshot row, as the clients send theirs: id, x, z, heading, speed, roll, immune after a respawn (the server adds the time)
 const state = b => [b.id, r2(b.x), r2(b.z), Math.round(b.h * 1000) / 1000, r2(b.v), r2(b.roll), b.immT > 0 ? 1 : 0];
 
 // one step of a bot among the people (humans) and every other tank (tanks); returns a parcel to fire, or null
@@ -131,11 +131,16 @@ function stepBot(bot, dt, humans, tanks) {
   return { sid: ++bot.sid, x: r2(bot.x + fx * 3.1), y: 1.5, z: r2(bot.z + fz * 3.1), vx: r2(fx * sp), vy: SHOT_UP, vz: r2(fz * sp) };
 }
 
-// where the bot was at time t (the newest record not later than t)
+// where the bot was at time t: between the two records around it (a respawn in between is not slid across)
 function botAt(bot, t) {
-  let p = bot.hist[0] || bot;
-  for (const r of bot.hist) { if (r.t > t) break; p = r; }
-  return p;
+  const h = bot.hist;
+  if (!h.length) return bot;
+  let i = 0;
+  while (i + 1 < h.length && h[i + 1].t <= t) i++;
+  const a = h[i], b = h[i + 1];
+  if (!b || t <= a.t || Math.hypot(b.x - a.x, b.z - a.z) > 20) return a;
+  const k = (t - a.t) / (b.t - a.t);
+  return { x: a.x + (b.x - a.x) * k, z: a.z + (b.z - a.z) * k, h: a.h + wrapA(b.h - a.h) * k };
 }
 
 function onTank(p, x, y, z) {
@@ -144,12 +149,13 @@ function onTank(p, x, y, z) {
   return Math.abs(dx * hx + dz * hz) < TANK_L && Math.abs(dx * hz - dz * hx) < TANK_W;
 }
 
-// Fly the players' parcels one step; onHit(bot, parcel) for each one that reaches a bot.
+// Fly the players' parcels one step; onHit(bot, parcel) for each one that reaches a bot. s.lag: how many ms behind the
+// server the shooter saw the city.
 function flyParcels(parcels, bots, dt, onHit) {
-  const then = Date.now() - REWIND_MS;
-  const past = bots.map(b => ({ b, p: botAt(b, then) }));
+  const now = Date.now();
   for (let i = parcels.length - 1; i >= 0; i--) {
     const s = parcels[i];
+    const past = bots.map(b => ({ b, p: botAt(b, now - (s.lag ?? 200)) }));
     s.age += dt;
     let alive = s.age < 6;
     const n = Math.max(1, Math.ceil(Math.hypot(s.vx, s.vy, s.vz) * dt / 0.4)), h = dt / n;

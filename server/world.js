@@ -2,10 +2,10 @@
 // are police), the tram, 50 pedestrians, and the trees and lamps knocked down.
 //
 // It is a port of the traffic, tram and pedestrian code of client/index.html, where the original game ran it in the
-// browser for one player. What changes is what cannot be shared: the cars give way to every tank (the players' and the
-// bots') instead of to one van, and nothing shoves them, because a car pushed on one screen would be somewhere else on
-// the others; a tank meets a car like a wall. Parked cars stay where they are (the clients place them alike, from the
-// city's seed). A car that a tank keeps blocking turns back after a while.
+// browser for one player. What changes is what has to be shared: the cars give way to every tank (the players' and the
+// bots') instead of to one van, and a car that a tank keeps blocking turns back after a while. A tank can still shove
+// cars about as in the original, see "cars a player pushes" below. The parked cars are placed by the clients alike,
+// from the city's seed; the server knows only those that have been pushed away from their spot.
 //
 // Pedestrians walk their loops here; a client that hits one with its tank or its own parcel reports it, and the fall
 // happens here, for everyone. A knocked-down pedestrian lies there for a while, then walks again somewhere else. Knocked-down trees and lamps are only remembered and passed on, and stand up again
@@ -13,7 +13,7 @@
 'use strict';
 
 const THREE = require('../client/vendor/three.r128.min.js');   // only for the tram's curve, so its track matches the client's
-const { roadC, blockC, TRAM_K, DEPOT_PARK, freeAt } = require('./city');
+const { CELL, HALF, roadC, blockC, TRAM_K, DEPOT_PARK, freeAt } = require('./city');
 
 // ---------- traffic (client: "moving traffic") ----------
 const LANE = 2.6, JT = 9, N_CARS = 33, VMAX_CAR = 9;
@@ -118,19 +118,28 @@ const tankAhead = (c, k) => {
   return ahead(c, k.x, k.z, 9, 2.6) || ahead(c, k.x + fx, k.z + fz, 9, 2.6) || ahead(c, k.x - fx, k.z - fz, 9, 2.6);
 };
 
+const carAhead = (c, o) => ahead(c, o.x, o.z, 8, 2.1) || ahead(c, o.x - o.hx * 1.9, o.z - o.hz * 1.9, 8, 2.1) || ahead(c, o.x + o.hx * 1.9, o.z + o.hz * 1.9, 8, 2.1);
+
 function stepTraffic(dt, tanks) {
   const VMAX = VMAX_CAR;
   for (const c of CARS) {
-    let target = VMAX, byCar = false, byTank = false;
+    if (c.phase === 'dyn') continue;                                     // a player is pushing it: their browser moves it
+    if (c.ox || c.oz || c.oa) {                                          // back from a push: glide into the lane
+      const f = Math.exp(-3 * dt); c.ox *= f; c.oz *= f; c.oa *= f;
+      if (Math.abs(c.ox) + Math.abs(c.oz) + Math.abs(c.oa) < 0.01) c.ox = c.oz = c.oa = 0;
+    }
+    let target = VMAX, byCar = false, byTank = false, byBody = false;
     if (c.ghost > 0) c.ghost -= dt;
     // keep distance to whatever is ahead: other cars, the tanks, the tram
     for (const o of CARS) {
       if (o === c || (c.phase === 'turn' && o.waitJ)) continue;
-      if (!(ahead(c, o.x, o.z, 8, 2.1) || ahead(c, o.x - o.hx * 1.9, o.z - o.hz * 1.9, 8, 2.1) || ahead(c, o.x + o.hx * 1.9, o.z + o.hz * 1.9, 8, 2.1))) continue;
+      if (!carAhead(c, o)) continue;
       // a car resolving a deadlock passes crossing cars, but never drives into the car ahead in its own lane
-      if (c.ghost > 0 && o.hx * c.hx + o.hz * c.hz < 0.7) continue;
-      target = 0; byCar = true;
+      if (c.ghost > 0 && o.hx * c.hx + o.hz * c.hz < 0.7 && o.phase !== 'dyn') continue;
+      target = 0; byCar = true; if (o.phase === 'dyn') byBody = true;
     }
+    // a parked car pushed into the street stands in the way like a car that does not move
+    for (const o of PARKED.values()) if (carAhead(c, o)) { target = 0; byCar = true; byBody = true; }
     // give way to the tanks early: 'if I keep my speed' and 'if I speed up', and keep yielding a moment so the car doesn't creep into them
     {
       const pos = du => pathAt(c, du), O = [-1.4, 0, 1.4];
@@ -160,8 +169,8 @@ function stepTraffic(dt, tanks) {
       c.stuck += dt;
       if (c.stuck > 4 + (c.id % 4) * 0.5 && !CARS.some(o => o !== c && o.ghost > 0 && Math.abs(o.x - c.x) < 16 && Math.abs(o.z - c.z) < 16)) { c.ghost = 1.6; c.stuck = 0; }
     } else c.stuck = 0;
-    // a tank parked in the way: after a while the car turns back down its street (it switches to the other lane)
-    if (byTank && c.v < 0.5 && c.phase === 'edge') {
+    // a tank parked in the way (or a pushed car left there): after a while the car turns back down its street (it switches to the other lane)
+    if ((byTank || byBody) && c.v < 0.5 && c.phase === 'edge') {
       c.tankT += dt;
       if (c.tankT > TANK_BLOCK_T) { const u = c.u; [c.from, c.to] = [c.to, c.from]; startEdge(c); c.u = Math.max(0, c.len - u); c.plan = null; c.tankT = 0; }
     } else c.tankT = 0;
@@ -172,6 +181,75 @@ function stepTraffic(dt, tanks) {
     if (c.u >= c.len) { const over = c.u - c.len; if (c.phase === 'edge') startTurn(c); else { c.from = c.to; c.to = c.next; startEdge(c); } c.u = over; }
     if (c.u < 0) c.u = 0;
     placeCar(c);
+  }
+}
+
+// ---------- cars a player pushes ----------
+// In the original the van shoved cars about: a car it hit became a free body until it came to rest, then rejoined the
+// traffic. That works here with the authority scheme of networked physics games: whoever's tank (or pushed car) hits a
+// car takes it over. Their browser runs the original body physics for it and reports where it is with every tank state
+// ('st', field c); the server stops driving it, passes it on to everyone (snapshot field k, with the owner and the time
+// of the report, so it moves in step with the owner's tank) and refuses it to anyone else meanwhile. When it has come
+// to rest the owner lets go: a car of the traffic rejoins the nearest street, a parked car stays where it ended up and
+// is towed home TOW_MS later once no tank is near. An owner who goes quiet for OWN_MS loses the car.
+const OWN_MS = 1500, PARKED_MAX = 400, TOW_MS = 30000, TOW_FAR = 60, CLAIM_R = 30, CAR_JUMP = 25;
+const PARKED = new Map();                   // client's parked car k (index N_CARS + k) -> { x, z, hx, hz, v, owner, ownAt, ownTs, restAt }
+
+// back onto the street after a push (client: rejoin): the lane nearest to where it points, gliding there from where it stands
+function rejoin(c) {
+  const ax = c.x, az = c.z, ang = Math.atan2(c.hx, c.hz), cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  let from, to;
+  if (Math.abs(c.hx) >= Math.abs(c.hz)) {
+    const j = cl(Math.round((az + HALF) / CELL), 0, 6), i0 = cl(Math.floor((ax + HALF) / CELL), 0, 5);
+    from = c.hx > 0 ? [i0, j] : [i0 + 1, j]; to = c.hx > 0 ? [i0 + 1, j] : [i0, j];
+  } else {
+    const i = cl(Math.round((ax + HALF) / CELL), 0, 6), j0 = cl(Math.floor((az + HALF) / CELL), 0, 5);
+    from = c.hz > 0 ? [i, j0] : [i, j0 + 1]; to = c.hz > 0 ? [i, j0 + 1] : [i, j0];
+  }
+  c.from = from; c.to = to; startEdge(c);
+  c.u = cl((ax - c.S[0]) * c.dir[0] + (az - c.S[1]) * c.dir[1], 0, c.len);
+  Object.assign(c, { v: 0, plan: null, waitJ: false, yieldT: 0, hurry: 0, hold: 0, stuck: 0, ghost: 0, tankT: 0 });
+  placeCar(c);
+  c.ox = ax - c.x; c.oz = az - c.z;
+  const da = ang - Math.atan2(c.dir[0], c.dir[1]); c.oa = Math.atan2(Math.sin(da), Math.cos(da));
+}
+function letGo(c, i) {
+  c.owner = 0;
+  if (i < N_CARS) rejoin(c);
+  else { c.v = 0; c.restAt = Date.now(); }
+}
+// Player pid (tank at tank.x, tank.z) reports the cars its browser moves, as [index, x, z, heading, speed, released];
+// ts: the time of that report on the server's clock. Returns nothing: a refused claim simply does not show up in k.
+function carsFrom(pid, tank, list, ts) {
+  const now = Date.now();
+  for (const e of list.slice(0, 8)) {
+    if (!Array.isArray(e)) continue;
+    const [i, x, z, a, v, rel] = e;
+    if (!Number.isInteger(i) || i < 0 || i >= N_CARS + PARKED_MAX || ![x, z, a, v].every(Number.isFinite)) continue;
+    if (Math.abs(x) > 300 || Math.abs(z) > 300 || Math.abs(a) > 100 || Math.abs(v) > 60) continue;
+    let c = i < N_CARS ? CARS[i] : PARKED.get(i);
+    const mine = c && c.owner === pid;
+    if (c && c.owner && !mine && now - c.ownAt < OWN_MS) continue;        // somebody else is pushing it
+    if (!mine && Math.hypot(x - tank.x, z - tank.z) > CLAIM_R) continue;    // a new claim: only a car right at the tank
+    if (c && Math.hypot(x - c.x - (c.ox || 0), z - c.z - (c.oz || 0)) > CAR_JUMP) continue;   // and about where it is
+    if (!c) { c = {}; PARKED.set(i, c); }
+    Object.assign(c, { x, z, hx: Math.sin(a), hz: Math.cos(a), v: Math.abs(v), owner: pid, ownAt: now, ownTs: ts, ox: 0, oz: 0, oa: 0 });
+    if (i < N_CARS) c.phase = 'dyn';
+    if (rel === 1) letGo(c, i);
+  }
+}
+// the player left: their cars go back to the traffic (or stay where they are, if parked)
+function dropOwner(pid) {
+  CARS.forEach((c, i) => { if (c.owner === pid) letGo(c, i); });
+  for (const [i, c] of PARKED) if (c.owner === pid) letGo(c, i);
+}
+// owners who went quiet lose their cars; parked cars left somewhere are towed home when nobody is near
+function stepPushed(tanks) {
+  const now = Date.now();
+  CARS.forEach((c, i) => { if (c.owner && now - c.ownAt > OWN_MS) letGo(c, i); });
+  for (const [i, c] of PARKED) {
+    if (c.owner) { if (now - c.ownAt > OWN_MS) letGo(c, i); }
+    else if (now - c.restAt > TOW_MS && !tanks.some(t => Math.hypot(t.x - c.x, t.z - c.z) < TOW_FAR)) PARKED.delete(i);
   }
 }
 
@@ -228,7 +306,7 @@ function stepTram(dt, tanks) {
     if (tankConflict(pos, TRAM_VMAX, O, 3.5, 2.9, tanks) || tankConflict(pos, Math.max(TRAM.v, 2), O, 3.5, 2.9, tanks)) TRAM.yieldT = 0.8;
   }
   if (TRAM.yieldT > 0) { TRAM.yieldT -= dt; target = 0; }
-  for (const c of CARS) {
+  for (const c of [...CARS, ...PARKED.values()]) {
     if (Math.abs(c.x - fx) > 14 || Math.abs(c.z - fz) > 14) continue;
     if (inFront(c.x, c.z) || inFront(c.x + c.hx * 1.9, c.z + c.hz * 1.9) || inFront(c.x - c.hx * 1.9, c.z - c.hz * 1.9)) target = 0;
   }
@@ -344,6 +422,7 @@ function init() {
 
 // one step; tanks: every tank in the city as { x, z, h, v }. Returns the props that stand up again now (their indexes).
 function step(dt, tanks) {
+  stepPushed(tanks);
   stepTram(dt, tanks);
   stepTraffic(dt, tanks);
   stepPeds(dt, tanks);
@@ -353,13 +432,24 @@ function step(dt, tanks) {
 }
 
 const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
-// the snapshot for the clients: c = cars as x, z, heading, speed; m = the tram's place on its track; p = pedestrians as
-// x, z, heading, tilt, fall direction (flat arrays, in the order of the client's TRAFFIC and PEDS)
-function snapshot() {
-  const c = [], p = [];
-  for (const k of CARS) c.push(r2(k.x), r2(k.z), r2(Math.atan2(k.hx, k.hz)), r1(k.v));
+// What moves fast, for every tank snapshot: c = the cars as x, z, heading, speed (flat, in the order of the client's TRAFFIC);
+// m = the tram's place on its track; k = the cars players push, as [index, owner, time of the owner's report, x, z, heading,
+// speed]; q = parked cars pushed away from their spot and left there, as [index, x, z, heading].
+function fast() {
+  const c = [], k = [], q = [];
+  const row = (i, o) => [i, o.owner, o.ownTs, r2(o.x), r2(o.z), r2(Math.atan2(o.hx, o.hz)), r1(o.v)];
+  CARS.forEach((o, i) => {
+    c.push(r2(o.x + (o.ox || 0)), r2(o.z + (o.oz || 0)), r2(Math.atan2(o.hx, o.hz) + (o.oa || 0)), r1(o.v));
+    if (o.owner) k.push(row(i, o));
+  });
+  for (const [i, o] of PARKED) if (o.owner) k.push(row(i, o)); else q.push([i, r2(o.x), r2(o.z), r2(Math.atan2(o.hx, o.hz))]);
+  return { c, m: r2(TRAM.s), k, q };
+}
+// What walks, every other snapshot: p = the pedestrians as x, z, heading, tilt, fall direction (flat, in the order of the client's PEDS)
+function slow() {
+  const p = [];
   for (const q of PEDS) p.push(r1(q.x), r1(q.z), r2(q.h), r2(q.th), q.th > 0 ? r2(Math.atan2(q.fx, q.fz)) : 0);
-  return { t: 'w', c, m: r2(TRAM.s), p };
+  return { p };
 }
 
 // a player reports a pedestrian their tank or their parcel hit; only one near that player counts
@@ -377,4 +467,4 @@ function propDown(i, fx, fz) {
 const propsDown = () => [...PROPS_DOWN].map(([i, d]) => [i, d.fx, d.fz]);
 
 init();
-module.exports = { step, snapshot, hitPed, propDown, propsDown, N_CARS, PED_N };
+module.exports = { step, fast, slow, hitPed, propDown, propsDown, carsFrom, dropOwner, N_CARS, PED_N };
