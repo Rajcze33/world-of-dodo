@@ -1,9 +1,10 @@
 // The tram's track as a smooth closed curve: the parts of three.js r128's CatmullRomCurve3 (and of its base class Curve) that
-// the tram uses, ported operation for operation. The server builds the same curve with three.js itself (server/world.js) and
-// sends only the tram's distance along it, so the points here must come out exactly as there: keep the order of every
-// operation as in three.js (r128, src/extras/curves/CatmullRomCurve3.js and src/extras/core/Curve.js).
+// the tram uses, ported operation for operation (r128, src/extras/curves/CatmullRomCurve3.js and src/extras/core/Curve.js; MIT,
+// Copyright 2010-2021 Three.js Authors, see THIRD_PARTY.md).
 //
-// No imports and only erasable TypeScript, so that Node can load this file as it is to compare it with three.js.
+// World of DODO, issue #16: shared by the client and the server (client/shared/tram.ts builds the track with it on both), so the
+// server no longer loads three.js for it. The server sends only the tram's distance along the track; both sides run this very code
+// on the same points. No imports and only erasable TypeScript, so that Node can load this file as it is.
 
 export interface XYZ { x: number; y: number; z: number }
 export type CurveType = 'centripetal' | 'chordal' | 'catmullrom';

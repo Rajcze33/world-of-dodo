@@ -12,10 +12,10 @@ import { COARSE } from '../core/dom';
 import { now } from '../core/util';
 import { T } from '../texts';
 import { G, car, K, HELD, input, view } from './state';
-import { depot, roadC, blockC, TRAM_K, free, solidPush, groundH, segHit } from '../world/grid';
+import { DEPOT, SPAWNS, free, solidPush, groundH, segHit } from '../world/grid';
 import { propsNear, knockProp, resetProps } from '../world/props';
 import {
-  TRAFFIC, ALLCARS, TRAM, TRAM_L, TRAM_W, TRAM_STOPS, seedTram, seedTraffic, tramNear, TANK_M, CAR_E, carBody, putBody, impulse, toDyn,
+  ALLCARS, TRAM, TRAM_L, TRAM_W, TRAM_STOPS, seedTram, seedTraffic, tramNear, TANK_M, CAR_E, carBody, putBody, impulse, toDyn,
   dynBlocked, resetParked,
 } from '../world/traffic';
 import { resetPeds, hitPeds } from '../world/peds';
@@ -170,23 +170,25 @@ export function switchVehicle(k?: 0 | 1) {
 export const camLook = new Vector3();
 function camBehind() { camera.position.set(car.x - Math.sin(car.h) * 11, 6, car.z - Math.cos(car.h) * 11); camLook.set(car.x, 1.2, car.z); }
 export function reset() {
-  Object.assign(car, { k: 0, swT: 0, x: depot.park[0], z: depot.park[1], h: Math.PI, v: 0, steer: 0, gy: 0, y: 0, p: 0, slowT: 0, topT: 0, roll: 0, rollDir: 1, immT: 0, hitLog: [] });
-  seedTram(TRAM_STOPS[(Math.random() * 2) | 0] - 30 - Math.random() * 120); seedTraffic((Math.random() * 1e9) | 0);
+  Object.assign(car, { k: 0, swT: 0, x: DEPOT.park.x, z: DEPOT.park.z, h: DEPOT.park.h, v: 0, steer: 0, gy: 0, y: 0, p: 0, slowT: 0, topT: 0, roll: 0, rollDir: 1, immT: 0, hitLog: [] });
+  seedTram(TRAM_STOPS[(Math.random() * TRAM_STOPS.length) | 0] - 30 - Math.random() * 120); seedTraffic((Math.random() * 1e9) | 0);
   G.realSec = 0;
   clearShots(); clearBullets(); clearImpactFx(); resetParked(); resetProps(); resetPeds(); toast(COARSE ? T.hintStart : T.hintStartDesk);
   camBehind();
 }
-// World of DODO: start on a street, as far from the other players as the city allows, clear of traffic and the tram
+// World of DODO: start on a street, as far from the other players as the city allows, clear of traffic and the tram.
+// World of DODO, issue #16: the places are the map's spawn points (client/shared/map.ts SPAWNS: about 40 spots on the real streets'
+// centre lines, away from junctions and walls, spread over Karlín, facing along the street towards the middle; tram streets only
+// where the others do not give enough). The browser still picks its own spot, as before; the depot's yard when none is free.
 export function spawnPoint(): { x: number; z: number; h: number } {
   let best: { x: number; z: number; h: number } | null = null, bs = -1;
-  for (let k = 0; k <= 6; k++) for (let j = 0; j < 6; j++) for (const vert of [true, false]) {
-    if (!vert && k === TRAM_K) continue;                                                // not on the tram avenue
-    const x = vert ? roadC(k) : blockC(j), z = vert ? blockC(j) : roadC(k), h = vert ? (z < 0 ? 0 : Math.PI) : (x < 0 ? Math.PI / 2 : -Math.PI / 2);   // facing into the city
-    if (blockedAt(x, z, h) || tramNear(x, z, 14) || TRAFFIC.some(c => Math.hypot(c.x - x, c.z - z) < 10)) continue;
-    let d = 400; for (const o of NET.others.values()) if (o.on) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
-    const sc = d + Math.random() * 40; if (sc > bs) { bs = sc; best = { x, z, h }; }
+  for (const s of SPAWNS) {
+    // not into another tank, a tree or a lamp, not next to the tram or a moving car, not onto a parked one
+    if (blockedAt(s.x, s.z, s.h) || tramNear(s.x, s.z, 14) || ALLCARS.some(c => Math.hypot(c.x - s.x, c.z - s.z) < (c.parked ? 3.5 : 10))) continue;
+    let d = 800; for (const o of NET.others.values()) if (o.on) d = Math.min(d, Math.hypot(o.x - s.x, o.z - s.z));
+    const sc = d + Math.random() * 60; if (sc > bs) { bs = sc; best = s; }
   }
-  return best || { x: depot.park[0], z: depot.park[1], h: Math.PI };
+  const p = best || DEPOT.park; return { x: p.x, z: p.z, h: p.h };
 }
 // World of DODO: at the start and after being destroyed, the tank appears at a spawn point, immune for SPAWN_IMMUNE s (it blinks meanwhile);
 // a plane (issue #14, car.next) comes in from the edge of the airspace (game/plane.ts)
@@ -219,7 +221,8 @@ export function tankGap(x: number, z: number, h: number, o: { x: number; z: numb
 // always with the new heading: steering against a wall stopped even a straight move, and on the construction site or next to
 // another tank a tank got stuck. Now it moves in short steps, each of its three circles is pushed out of whatever it overlaps
 // (buildings and site obstacles, standing trees and lamps, the other tanks), and it loses only the speed that went into the
-// obstacle, so it slides along walls (pushLoss).
+// obstacle, so it slides along walls (pushLoss). Issue #16: the walls are Karlín's footprint polygons and the arena's edge
+// (map.ts solidPush, the same contract as the old boxes'): a tank slides along a slanted or bent facade as along a straight one.
 export const TANK_C = [-1.55, 0, 1.55], TANK_CR = 1.0;               // circle centres along the tank, their radius (as free() and blockedAt use it)
 export function tankPen(x: number, z: number, h: number): { nx: number; nz: number; pen: number } | null {
   const fx = Math.sin(h), fz = Math.cos(h); let best: { nx: number; nz: number; pen: number } | null = null;

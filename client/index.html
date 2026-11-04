@@ -360,6 +360,11 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 .veh input:checked+span{background:var(--dodo-white);color:var(--dodo-charcoal);border-color:var(--dodo-white)}
 .veh input:focus-visible+span{outline:2px solid var(--dodo-light-teal);outline-offset:2px}
 .tbtn.alt{position:absolute;right:16px;bottom:calc(196px + env(safe-area-inset-bottom,0px));pointer-events:auto}
+/* World of DODO, issue #16: the map's sources (OpenStreetMap, IPR Praha, ČÚZK must be credited wherever the map shows): three small lines
+   under the map's buttons while playing, and with the fine print on the intro screen */
+.attr{margin:0;max-width:200px;text-align:right;white-space:pre-line;font:500 9px/1.35 var(--font-secondary);letter-spacing:.02em;color:var(--dodo-light-grey);opacity:.7;text-shadow:0 1px 2px rgba(0,0,0,.9)}
+.fine.src{white-space:pre-line;line-height:1.5}
+@media (max-width:760px){.attr{font-size:8px;max-width:132px}}
 @media (max-width:760px),(pointer:coarse) and (max-width:1024px){
   .board{gap:var(--space-1)}
   .board li{font-size:var(--fs-caption)}
@@ -390,6 +395,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <span id="vehLbl"></span>
     </button>
     <div class="card stats meta" id="stats" hidden></div>
+    <p class="attr" data-t="attrib"></p>
   </div>
   <div class="bc">
     <div class="card pick" id="pick" hidden><span class="meta" data-t="pickLbl"></span><button class="camBtn" type="button" data-v="0">1 · <span data-t="vehTank"></span></button><button class="camBtn" type="button" data-v="1">2 · <span data-t="vehPlane"></span></button></div>
@@ -444,11 +450,11 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <p class="err" id="joinErr" role="alert" hidden></p>
     </form>
     <p class="fine" data-t="introFine"></p>
+    <p class="fine src" data-t="mapSrc"></p>
     <p class="fine"><a class="report" href="https://github.com/Rajcze33/world-of-dodo/issues/new/choose" target="_blank" rel="noopener" data-t="reportLink"></a></p>
   </div>
 </section>
 
-<script src="/shared/site.js"></script><!-- World of DODO: the construction site's layout, shared with the server -->
 <script type="module" src="/src/main.ts"></script>
 
 </body></html>

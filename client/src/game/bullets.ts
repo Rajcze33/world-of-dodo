@@ -1,6 +1,6 @@
 // ---------- World of DODO, issue #14: bullets (the planes' guns, the tanks' anti-aircraft gun, the bots' bursts) ----------
 // A bullet flies straight for BUL_LIFE s (no drop at this range), drawn as a glowing tracer, and stops at the first building, the
-// ground or vehicle on its way. Who decides that it hit:
+// ground (issue #16: the terrain round Karlín too) or vehicle on its way. Who decides that it hit:
 // - a person's bullet: the shooter. Their browser tests it against the others as drawn there, a little in the past (net/net.ts INTERP);
 //   if the victim decided, as for the slow parcels, a fast plane would be out of reach of any gun. The server passes the hit on
 //   (netShotHit, then dmg to the victim, who applies it unless immune and answers like a parcel hit).
@@ -12,6 +12,7 @@ import { basic } from '../core/mat';
 import { T } from '../texts';
 import { car } from './state';
 import { segHit, groundH } from '../world/grid';
+import { WATER_Y } from '../world/land';
 import { NET, netFire, netHit, netName, netShotHit, type NetOther } from '../net/net';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
@@ -64,8 +65,12 @@ export function updateBullets(dt: number) {
     if (!b.on) continue;
     b.age += dt; if (b.age > BUL_LIFE) { b.on = false; continue; }
     const dx = b.vx * dt, dy = b.vy * dt, dz = b.vz * dt;
+    // the first solid (issue #16: map.ts segHit, the footprint polygons, the viaduct, the houses out on the hills), then the ground:
+    // the street, or outside the arena the terrain (the river at its ice, WATER_Y) where the step ends (a step is about the
+    // terrain grid's 10 units; a bullet that would end inside a hill stops where it is)
     let t = segHit(b.x, b.y, b.z, b.x + dx, b.y + dy, b.z + dz), who: NetOther | 'me' | null = null;
-    if (b.y + dy < 0.05 && dy < 0) t = Math.min(t, Math.max(0, (b.y - 0.05) / -dy));                       // the ground
+    const ge = Math.max(WATER_Y, groundH(b.x + dx, b.z + dz)) + 0.05;
+    if (b.y + dy < ge) t = Math.min(t, dy < 0 ? Math.max(0, (b.y - ge) / -dy) : 0);
     const ex = b.x + dx * 0.5, ez = b.z + dz * 0.5, reach = Math.hypot(dx, dz) * 0.5 + 6;
     for (const o of NET.others.values()) {
       if (!o.on || (o.s === 2 && o.k === 1) || o.id === b.by || Math.abs(o.x - ex) > reach || Math.abs(o.z - ez) > reach) continue;

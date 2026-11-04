@@ -3,10 +3,16 @@
 One WebSocket per player at `/ws`, JSON text messages, each an object with a type in `t`.
 The server relays; it does not simulate the players. It does simulate the bots and the city.
 
-Coordinates are the game's world units (1 unit = 5 m): `x` east, `z` south, the city spans
-about ±156, the tanks' world ends at ±250 and the planes' airspace at ±450. A heading `h` is in radians,
-`0` faces +z, and the direction is `(sin h, cos h)`; a plane's pitch `p` lifts it to
-`(sin h cos p, sin p, cos h cos p)`. Heights `y` are above the ground. Speeds are units per second.
+Coordinates are the game's world units in the real Karlín (issue #16; `client/shared/map.ts`, its
+frame in `client/shared/KARLIN-DATA.md`): 1 unit = 1.5 m, `x` east, `z` south, the map turned by 17° so
+that Karlín's streets run along the axes, the origin near Karlínské náměstí. The tanks, the bots and the
+cars stay in the **arena**, `x` −346.7…356, `z` −215…208 (`ARENA`); the planes fly within ±650 of the
+origin (`AIR_LIM`) and are turned back up to 60 beyond it. A row or a parcel farther than 720 from the
+origin on either axis (`WORLD` in `server/server.js`, `AIR_LIM + 70`) is ignored. A heading `h` is in
+radians, `0` faces +z, and the direction is `(sin h, cos h)`; a plane's pitch `p` lifts it to
+`(sin h cos p, sin p, cos h cos p)`. Heights `y` are absolute: the arena's streets are at 0 (its
+pavements 0.3), and outside the arena the terrain rises (Vítkov to about 60). Speeds are units per
+second.
 
 A player drives a tank or flies a plane (issue #14), and may switch between them; the state rows say
 which (`k`).
@@ -23,7 +29,7 @@ arrival delay seen from that player, so the pace of their tank survives the netw
 | `t` | Fields | When |
 | --- | --- | --- |
 | `hello` | `name`, `color`, `key` | First message. `name`: up to 16 characters. `color`: one of the palette (`COLORS` in `server/server.js`, `TANK_COLORS` in the client), anything else gets a free colour. `key`: 16–64 characters `[A-Za-z0-9_-]`, random per page load, lets a reconnect take the player over and keep the score. |
-| `st` | `ct`, `x`, `z`, `h`, `v`, `r`, `s`, `c[]`, `k`, `y`, `p` | 20× a second while playing. `ct`: the moment, on the browser's own clock (ms). `v`: speed (a tank up to 40, a plane up to 90), `r`: roll (a destroyed tank lies on its side, a plane banks), `s`: `1` while immune after a (re)spawn, `2` while destroyed. `c` (a tank, only while there are any): the cars this tank pushes, as `[i, x, z, heading, speed, released]`, at most 8 (they take turns); `i` is a car of the traffic (0–32) or `33 + k` for the client's parked car `k`; `released: 1` the last time, when it has come to rest. A plane adds `k: 1`, its height `y` (0–400) and pitch `p`. |
+| `st` | `ct`, `x`, `z`, `h`, `v`, `r`, `s`, `c[]`, `k`, `y`, `p` | 20× a second while playing. `ct`: the moment, on the browser's own clock (ms). `v`: speed (a tank up to 40, a plane up to 90), `r`: roll (a destroyed tank lies on its side, a plane banks), `s`: `1` while immune after a (re)spawn, `2` while destroyed. `c` (a tank, only while there are any): the cars this tank pushes, as `[i, x, z, heading, speed, released]`, at most 8 (they take turns); `i` is a car of the traffic (0 … `N_CARS` − 1, `N_CARS` in `server/world.js`) or `N_CARS + k` for the client's parked car `k`; `released: 1` the last time, when it has come to rest. A plane adds `k: 1`, its height `y` (0–400) and pitch `p`. |
 | `fire` | `sid`, `x`, `y`, `z`, `vx`, `vy`, `vz`, `rt`, `k` | A parcel left the muzzle (or a plane dropped it), or with `k: 1` a bullet left a gun. `sid`: the player's own running number of what they fire. `rt` (parcels): the moment of the city the browser showed when firing (server clock); a bot is hit where it was then. |
 | `hit` | `by`, `sid`, `kill` | A parcel or bullet of player `by` hit **my** tank or plane and the hit took effect (not while destroyed or immune). `kill`: it destroyed the vehicle. |
 | `shot` | `v`, `sid` | My bullet `sid` hit player or bot `v` on my screen (only bullets; see below). Counts within 400 units of `v`. |
@@ -39,12 +45,12 @@ arrival delay seen from that player, so the pace of their tank survives the netw
 | `err` | `code` | `name_invalid`, `name_taken`, `name_reserved` (BOT1, BOT2, … belong to the bots) or `full`. The socket closes after it. |
 | `join` | `p` | Someone (a player or a bot) came in, as in `players[]`. |
 | `leave` | `id` | Someone left. |
-| `snap` | `ts`, `n`, `p[]`, `c[]`, `m`, `k[]`, `q[]` | 20× a second. `ts`: the server's clock, `n`: the tick (the same snapshot has the same `n` for everyone). `p`: every tank as `[id, x, z, h, v, r, s, t]`, `t` the moment of the row; a plane as `[id, x, z, h, v, r, s, t, 1, y, p]`. `c`: the 33 cars as `x, z, heading, speed` (flat, in the client's car order) at `ts`; `m`: the tram's place along its track. `k`: the cars players push, as `[i, owner, t, x, z, heading, speed]` (`t`: the moment of the owner's report, drawn in step with the owner's tank). `q`: parked cars pushed away from their spot and left there, as `[i, x, z, heading]`; a parked car not in `k` or `q` is on its spot. |
+| `snap` | `ts`, `n`, `p[]`, `c[]`, `m`, `k[]`, `q[]` | 20× a second. `ts`: the server's clock, `n`: the tick (the same snapshot has the same `n` for everyone). `p`: every tank as `[id, x, z, h, v, r, s, t]`, `t` the moment of the row; a plane as `[id, x, z, h, v, r, s, t, 1, y, p]`. `c`: the `N_CARS` cars of the traffic as `x, z, heading, speed` (flat, in the client's car order) at `ts`; `m`: the tram's place along its track. `k`: the cars players push, as `[i, owner, t, x, z, heading, speed]` (`t`: the moment of the owner's report, drawn in step with the owner's tank). `q`: parked cars pushed away from their spot and left there, as `[i, x, z, heading]`; a parked car not in `k` or `q` is on its spot. |
 | `fire` | `id`, `sid`, `x`, `y`, `z`, `vx`, `vy`, `vz`, `k` | Someone else's parcel, or with `k: 1` a bullet: fly it in your world. |
 | `hit` | `by`, `v`, `pts`, `gain`, `kill` | `by` scored `gain` points by hitting `v` and now has `pts`. `kill`: the hit destroyed `v`. `gain` can be 0 (a bullet in a bot that did not destroy it). |
 | `dmg` | `by`, `sid` | A bullet of `by` hit you on the shooter's screen: apply it and, if it took effect, answer with `hit` as for a parcel. |
 | `pong` | `c` | The answer to `ping`, with the same `c`, straight away. |
-| `w` | `ts`, `n`, `p[]` | 10× a second, with every other `snap`: the 50 pedestrians as `x, z, heading, tilt, fall direction` (flat; tilt > 0 while knocked over). |
+| `w` | `ts`, `n`, `p[]` | 10× a second, with every other `snap`: the pedestrians (`PED_N` in `server/world.js`) as `x, z, heading, tilt, fall direction` (flat; tilt > 0 while knocked over). |
 | `prop` | `i`, `fx`, `fz` or `i`, `up` | Another player knocked prop `i` down; or, with `up: 1`, it stands again (90 s later). |
 
 ## Who decides a hit
@@ -62,8 +68,9 @@ and 1 for the bullet that destroys it.
   and lets them fall on its own screen at once. Other players' parcels pass by pedestrians without
   knocking them on your screen.
 - **A parcel in a bot:** the server, because the bot lives there. It flies the players' parcels against the
-  buildings (`server/city.js`) and against where each bot was at the moment the shooter saw (`rt`; 200 ms
-  ago without it, at most 400 ms), and awards 1 point.
+  buildings and the ground (the same map as the browsers', `client/shared/map.ts` through `server/city.js`)
+  and against where each bot was at the moment the shooter saw (`rt`; 200 ms ago without it, at most
+  400 ms), and awards 1 point.
 - **A person's bullet:** the shooter. Their browser tests its bullets against the others as drawn there, a
   little in the past; were the victim to decide, as for the slow parcels, a fast plane would be out of reach
   of any gun. The shooter sends `shot`; the server checks that the bullet was fired in the last 3 s and has
@@ -78,7 +85,9 @@ player's own parcel) runs into becomes that player's, as in the authority scheme
 games: their browser moves it with the game's body physics and reports it in `st.c`; the server stops
 driving it, passes it on in `snap.k` and refuses it to anyone else until the owner lets go
 (`released: 1`) or has not reported it for 1.5 s. A claim counts only for a car within 30 units of the
-claimer's tank and within 25 of where the server has it. A released car of the traffic glides back into
+claimer's tank and within 25 of where the server has it (issue #16: a parked car nobody has moved
+stands on its spot, `PARK` in `client/shared/traffic.ts`, which the server knows too), and only inside
+the arena give or take 20. A released car of the traffic glides back into
 the nearest lane; a parked car stays where it was left, and 30 s later, once no tank is within 60
 units, it is back on its spot. A player who leaves lets go of everything.
 
@@ -87,5 +96,6 @@ The clients are trusted: a modified client can report anything about its own tan
 ## Limits
 
 - 1 KB per message, about 90 messages a second per socket (more are dropped).
+- Positions (`st`) and parcels or bullets (`fire`) beyond `WORLD` (720 units) from the origin are ignored.
 - `MAX_PLAYERS` people (default 24); the bots come on top.
 - A socket that stops answering the server's pings is dropped within 30 s.

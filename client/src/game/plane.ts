@@ -3,9 +3,10 @@
 // looks along it from behind the plane) and an instructor turns the plane towards it, as fast as its speed allows, banking into the
 // turn. The arrow keys (A, D) and the touch pad move the aim too. The flight is arcade: throttle and gravity trade speed for height (a
 // climb slows the plane, a dive speeds it up, a hard turn bleeds speed); below V_STALL it stalls and the nose drops until it is fast
-// again; the ground, a building, a standing tree, the land around the city or another vehicle destroy it; at the edge of the airspace
-// (AIR_LIM) it is turned back. It fires two guns (game/bullets.ts) and drops parcels on the tanks (game/shots.ts dropShot), a few at a
-// time, reloading in the air.
+// again; the ground, a building, a standing tree or another vehicle destroy it; at the edge of the airspace (AIR_LIM) it is turned
+// back. It fires two guns (game/bullets.ts) and drops parcels on the tanks (game/shots.ts dropShot), a few at a time, reloading in
+// the air. World of DODO, issue #16: the ground round Karlín is the real terrain (Vítkov rises some 60 units south of the arena, Letná
+// behind the river), and the houses out there are solid too (client/shared/map.ts): a plane can fly into the hill.
 //
 // The plane is the player's vehicle (car, game/state.ts) as the tank is: x, z, h (heading), v, roll (its bank), plus y (altitude) and
 // p (pitch, nose up positive). Its forward direction is (sin h cos p, sin p, cos h cos p).
@@ -19,9 +20,9 @@ import { $, COARSE } from '../core/dom';
 import { clamp, angLerp } from '../core/util';
 import { T } from '../texts';
 import { G, car, K, HELD, input, view } from './state';
-import { SOLIDS, groundH, AIR_LIM, AIR_TOP } from '../world/grid';
+import { solidNear, solidsIn, groundH, terrainH, AIR_LIM, AIR_TOP, UNIT_M, type Solid } from '../world/grid';
 import { propsNear } from '../world/props';
-import { landHit } from '../world/land';
+import { landHit, WATER_Y } from '../world/land';
 import { NET } from '../net/net';
 import { flash } from '../ui/hud';
 import { carStatus, toppleCar, camLook, vanOwnMat, SPAWN_IMMUNE } from './tank';
@@ -34,8 +35,12 @@ const V_STALL = 14, V_TURN = 26, THRUST = 12, DRAG = 0.0075, GRAV = 16, TURN = 1
 const AIM_P = 1.35, SENS = 0.0022;                          // the aim's pitch limit (rad), mouse sensitivity (rad per pixel)
 const GUN_RATE = 1 / 12, GUN_CONV = 150;                    // seconds between bullets (the two guns take turns), where their lines meet
 const BOMBS = 4, BOMB_RELOAD = 5, BOMB_CD = 0.6;            // parcels on board, seconds to load another, seconds between drops
-const SPAWN_R = 380, SPAWN_Y = 80, SPAWN_V = 32;            // a plane comes in from the edge of the airspace, at this height and speed
-export const KMH = 18, M_PER_U = 5;                         // the speed in km/h and the height in metres (1 unit = 5 m)
+// a plane comes in from the edge of the airspace (issue #16: 100 inside it, as 380 was inside 450), at this height (or higher over
+// the hills, see spawnPlane) and speed
+const SPAWN_R = AIR_LIM - 100, SPAWN_Y = 80, SPAWN_V = 32;
+// the speed in km/h and the height in metres. World of DODO, issue #16: 1 unit is 1.5 m in the real Karlín (UNIT_M; it was 5 m, which
+// made a plane at its top speed fly 1530 km/h); a tank's speedometer keeps the original's own factor (main.ts)
+export const KMH = UNIT_M * 3.6, M_PER_U = UNIT_M;
 
 // the plane's own state: throttle (0..1), the aim (yaw, pitch), stalled, the guns, the parcels on board and their reload, the warning
 // at the edge of the airspace
@@ -98,22 +103,38 @@ export function spawnPlane() {
   let best = 0, bs = -1;
   for (let i = 0; i < 16; i++) {
     const a = i / 16 * Math.PI * 2, x = Math.sin(a) * SPAWN_R, z = Math.cos(a) * SPAWN_R;
-    let d = 800; for (const o of NET.others.values()) if (o.on) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
+    let d = 1400; for (const o of NET.others.values()) if (o.on) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
     const sc = d + Math.random() * 60; if (sc > bs) { bs = sc; best = a; }
   }
-  const x = Math.sin(best) * SPAWN_R, z = Math.cos(best) * SPAWN_R, h = Math.atan2(-x, -z);
-  Object.assign(car, { k: 1, x, z, h, y: SPAWN_Y, p: 0, v: SPAWN_V, gy: 0, steer: 0, topT: 0, roll: 0, slowT: 0, swT: 0, hitLog: [], immT: SPAWN_IMMUNE });
+  const x = Math.sin(best) * SPAWN_R, z = Math.cos(best) * SPAWN_R, h = Math.atan2(-x, -z), y = Math.max(SPAWN_Y, ridge(x, z) + 25);
+  Object.assign(car, { k: 1, x, z, h, y, p: 0, v: SPAWN_V, gy: 0, steer: 0, topT: 0, roll: 0, slowT: 0, swT: 0, hitLog: [], immT: SPAWN_IMMUNE });
   Object.assign(pl, { thr: 0.75, aimY: h, aimP: 0, stall: false, gunCd: 0, bombCd: 0, bombs: BOMBS, bombT: 0, t: 0 });
   input.mx = input.my = 0;
   planeCam(0, true);
 }
 
 // ---------- flying ----------
+// World of DODO, issue #16: how high the ground and the roofs reach along the first 300 units of the way in from (x,z) towards the
+// middle: a plane that comes in over Vítkov starts above the hill and the memorial, not inside them
+const RQ: Solid[] = [];
+function ridge(x: number, z: number): number {
+  const l = Math.hypot(x, z) || 1; let top = 0;
+  for (let s = 0; s <= 300; s += 15) {
+    const px = x - x / l * s, pz = z - z / l * s; top = Math.max(top, terrainH(px, pz));
+    for (const b of solidsIn(px - 15, pz - 15, px + 15, pz + 15, RQ)) top = Math.max(top, b.top ?? b.h);
+  }
+  return top;
+}
+
 const fwd = (h: number, p: number) => [Math.sin(h) * Math.cos(p), Math.sin(p), Math.cos(h) * Math.cos(p)];
-// inside a building (with margin m), a standing tree or lamp, the land around the city, or too close to another vehicle?
+// the ground (outside the arena the terrain, the river's ice), a building (with a margin), a standing tree or lamp, the land round the
+// city (the woods' trees, a landmark's towers), or too close to another vehicle?
+// World of DODO, issue #16: the buildings are Karlín's footprint polygons with the viaduct and the site (map.ts solidNear: 0.9 aside,
+// 0.6 over the top, the old box test's margins), the land round the city is the real terrain (groundH outside the arena).
+const floorH = (x: number, z: number) => Math.max(groundH(x, z), WATER_Y);   // the ground, or the river's ice over its bed
 function crashed(x: number, y: number, z: number): boolean {
-  if (y < groundH(x, z) + 0.8) return true;
-  for (const b of SOLIDS) if (x > b.x0 - 0.9 && x < b.x1 + 0.9 && z > b.z0 - 0.9 && z < b.z1 + 0.9 && y < b.h + 0.6) return true;
+  if (y < floorH(x, z) + 0.8) return true;
+  if (solidNear(x, y, z, 0.9, 0.6)) return true;
   if (y < 8) for (const p of propsNear(x, z)) if (p.state === 'up' && Math.hypot(x - p.x, z - p.z) < p.r + 1.2) return true;
   if (landHit(x, y, z)) return true;
   for (const o of NET.others.values()) {
@@ -178,7 +199,7 @@ export function updateFly(dt: number) {
   const [mx, my, mz] = fwd(car.h, car.p);
   car.x += mx * car.v * dt; car.y += my * car.v * dt - (pl.stall ? 3 * dt : 0); car.z += mz * car.v * dt;
   car.x = clamp(car.x, -AIR_LIM - 60, AIR_LIM + 60); car.z = clamp(car.z, -AIR_LIM - 60, AIR_LIM + 60);
-  if (crashed(car.x, car.y, car.z)) { car.y = Math.max(car.y, groundH(car.x, car.z) + 0.5); toppleCar(1); flash(T.crashed); return; }
+  if (crashed(car.x, car.y, car.z)) { car.y = Math.max(car.y, floorH(car.x, car.z) + 0.5); toppleCar(1); flash(T.crashed); return; }
 
   // the guns: the two take turns, their lines meet GUN_CONV ahead
   pl.gunCd -= dt; pl.bombCd -= dt;
@@ -213,7 +234,7 @@ export function planeView(dt: number, tnow: number) {
   sight.setEnabled(show);
   if (show) {
     const [mx, my, mz] = fwd(car.h, car.p), vy = my * car.v, h = car.y - 1.0 - 0.3, t = (vy + Math.sqrt(vy * vy + 2 * SHOT_G * Math.max(0, h))) / SHOT_G;
-    const x = car.x + mx * car.v * t, z = car.z + mz * car.v * t; sight.position.set(x, groundH(x, z) + 0.15, z);
+    const x = car.x + mx * car.v * t, z = car.z + mz * car.v * t; sight.position.set(x, floorH(x, z) + 0.15, z);
   }
 }
 // spinning propellers, for the other players' planes (net/net.ts)
@@ -223,7 +244,7 @@ export function spinProp(g: TransformNode, a: number) { const p = g.metadata?.pr
 // Destroyed: it backs off and up, watching the blast from outside its cloud. C (G.camMode) moves it farther back, for a wider view.
 export function planeCam(dt: number, snap = false) {
   const [ax, ay, az] = fwd(pl.aimY, pl.aimP), dead = car.topT > 0, back = dead ? 34 : G.camMode ? 30 : 15, up = dead ? 16 : G.camMode ? 7 : 3.6;
-  const cx = car.x - ax * back, cz = car.z - az * back, cy = Math.max(car.y - (dead ? 0 : ay * back) + up, groundH(cx, cz) + 1.5);
+  const cx = car.x - ax * back, cz = car.z - az * back, cy = Math.max(car.y - (dead ? 0 : ay * back) + up, floorH(cx, cz) + 1.5);
   const k = snap ? 1 : 1 - Math.exp(-dt * (dead ? 3 : 12)), c = camera.position;
   c.x += (cx - c.x) * k; c.y += (cy - c.y) * k; c.z += (cz - c.z) * k;
   if (dead) { const q = Math.min(1, dt * 3); camLook.x += (car.x - camLook.x) * q; camLook.y += (car.y - camLook.y) * q; camLook.z += (car.z - camLook.z) * q; }

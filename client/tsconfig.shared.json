@@ -1,0 +1,10 @@
+{
+  // World of DODO, issue #16: client/shared runs on the server too (Node 24 loads it without a build step by stripping the
+  // types), so it may use only erasable TypeScript and no browser API. `npm run check` checks it with these settings as well.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2023"],
+    "erasableSyntaxOnly": true
+  },
+  "include": ["shared"]
+}

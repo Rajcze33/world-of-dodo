@@ -11,7 +11,7 @@
     "start": "node server/server.js",
     "dev": "vite",
     "build": "vite build && node tools/compress.js",
-    "check": "tsc --noEmit -p client",
+    "check": "tsc --noEmit -p client && tsc --noEmit -p client/tsconfig.shared.json",
     "smoke": "node tools/smoke.js",
     "test:browser": "node tools/browser-test.js"
   },

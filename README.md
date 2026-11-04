@@ -1,8 +1,9 @@
 # World of DODO
 
 A small multiplayer tank and plane game in the browser. One snowy city, everybody in their own DODO
-tank or plane, parcels for ammunition. Built on *Poslední míle* (The Last Mile), the 3D delivery game DODO made for
-Christmas 2026, where the delivery van had already turned into a tank.
+tank or plane, parcels for ammunition. The city is **Karlín, a real district of Prague**, built from open map data:
+its streets, houses, the tram on Sokolovská, the Negrelli viaduct and the hill of Vítkov. Built on *Poslední míle* (The
+Last Mile), the 3D delivery game DODO made for Christmas 2026, where the delivery van had already turned into a tank.
 
 **Play: https://game-3a26-3000.prg1.zerops.app** (English: add `?lang=en`)
 
@@ -16,16 +17,18 @@ Christmas 2026, where the delivery van had already turned into a tank.
 - **Fly.** A plane flies where the mouse points, as in War Thunder's arcade "mouse aim": click into the
   game, move the mouse, W and S for the throttle, Space or the left button for the guns, E (or the right
   button) drops a parcel on the tanks below. The arrow keys fly it too. Climb too steeply and it stalls;
-  the ground, a building or a tree end the flight; the airspace reaches far beyond the city, over
-  forests, villages and an airfield, and the plane turns back at its edge.
+  the ground, a building or a tree end the flight; the airspace reaches far beyond Karlín, over the
+  Vltava, Holešovice and Letná and up the hill of Vítkov (fly low and you hit it), and the plane turns
+  back at its edge.
 - **Damage adds up.** Three parcels or twelve bullets destroy a tank, one parcel or six bullets a plane,
   and every hit scores its share: a bullet is 3 points in a tank, 5 in a plane. A destroyed vehicle
   comes back somewhere else, blinking and immune for a few seconds; V switches between tank and plane
   (while destroyed, 1 or 2 picks the next one).
-- **The bots** are driven by the server: they roam the streets, chase the nearest tank and shoot back,
-  and fire short bursts at a plane that flies low over them.
-- **A construction site** south of the city: containers, a half-built house, sand piles, barriers, machines
-  and a tower crane. Everything there is cover: it stops parcels, tanks and the line of sight.
+- **The bots** are driven by the server: they roam Karlín's real streets, chase the nearest tank and
+  shoot back, and fire short bursts at a plane that flies low over them.
+- **A construction site** (off for now): sand piles, barriers, machines, a tower crane, a half-built
+  house and a container yard, all of it cover. Karlín's empty lots are too small for it, so it waits
+  for a real building site in Karlín (#17, `SITE_LOT` in client/shared/map.ts).
 - **A shared city.** The cars, the tram and the pedestrians are the same for everyone. Tanks shove cars
   about as in the original game, and everyone sees the car fly. A pedestrian a tank or a parcel knocks
   down lies there for a while, then is gone and walks again somewhere else.
@@ -72,21 +75,52 @@ npm start          # http://localhost:3000
 While working on the game page, `npm run dev` serves `client/` with live reload on
 http://localhost:5173 and passes the game's WebSocket to `npm start` (run both).
 
+## The map: the real Karlín
+
+The city is Karlín as it is, from open data, generated into one file, `client/shared/karlin.json`
+(never edited by hand):
+
+- the buildings (footprints, heights, roofs), the streets, the tram and railway lines, squares, parks,
+  trees, water and landmarks from **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
+  (ODbL);
+- the number of floors of every house from **IPR Praha**, *Podlažnost budov* (CC BY 4.0);
+- the terrain around Karlín (Vítkov, Letná, the river bed) from **ČÚZK**, *DMR 5G* (CC BY 4.0).
+
+No Google, Mapbox, Apple, Esri or Mapy.com content is used. The game shows the three attributions,
+"© OpenStreetMap contributors (ODbL)", "datový podklad © IPR Praha (CC BY 4.0)" and "výškopis © ČÚZK
+(CC BY 4.0)".
+
+One game unit is 1.5 m, the houses are 1.2 times their real height (a bit of a cartoon), and the map is
+turned by 17° so that Karlín's streets run along the axes. The tanks, bots and cars stay in the
+**arena**, about 1 km × 630 m from the Negrelli viaduct to Forum Karlín and from the Vltava embankment
+to the railway at the foot of Vítkov; the planes fly over a square of about 2 km round it.
+[client/shared/KARLIN-DATA.md](client/shared/KARLIN-DATA.md) describes the data, what was simplified
+and the known problems; [tools/karlin/README.md](tools/karlin/README.md) says how to make it again:
+
+```sh
+node tools/karlin/gen.mjs            # from the cached downloads (add --refresh to download OSM, IPR and ČÚZK again)
+node tools/karlin/check.mjs          # check the file
+```
+
 ## How it works
 
 ```
 client/index.html   the page: HUD, intro screen, touch controls (markup and styles)
 client/src/         the game in TypeScript on Babylon.js, built by Vite into client/dist:
   core/             engine, scene, lights and shadows, geometry, materials, textures
-  world/            the city grid, buildings, props, traffic and tram, pedestrians, the land around
+  world/            drawing Karlín: buildings, streets, landmarks, props, traffic and tram, pedestrians, the land
+                    around; grid.ts is the world as the game code asks for it
   game/             the player's tank and plane, parcels, bullets, effects, input, quality levels
   net/              the other players and the shared city from the server
   ui/               HUD and minimap;  main.ts: the frame loop and the join form
+client/shared/      the world, written once and run by the page and the server alike: map.ts (the solids,
+                    the ground, the street graph, spawn points; from karlin.json), geom.ts, site.ts (the
+                    construction site), the traffic, tram and pedestrian code
 server/server.js    serves the built page, relays the players over a WebSocket, keeps the score
-server/bots.js      the bots: driving, aiming, and what happens when a parcel hits one
+server/bots.js      the bots: driving the street graph, aiming, and what happens when a parcel hits one
 server/world.js     the shared city life: cars, tram, pedestrians, knocked-down trees and lamps
-server/city.js      the city's streets and buildings as numbers, for the bots and the city
-client/shared/site.js  the construction site's layout, loaded by the page and by the server
+server/city.js      the map for the server (client/shared/map.ts, which Node 24 runs as it is)
+tools/karlin/       the map's generator (OpenStreetMap, IPR Praha, ČÚZK → client/shared/karlin.json)
 docs/PROTOCOL.md    every message between the browser and the server
 ```
 
@@ -106,7 +140,9 @@ do it), so the network's jitter does not show. [docs/PROTOCOL.md](docs/PROTOCOL.
 The game page is TypeScript on [Babylon.js](https://www.babylonjs.com/), built with Vite
 (`npm run build`; the server sends `client/dist`). The scene is right-handed like the three.js
 original it was ported from (x east, z south, y up). The fonts and images are in `client/public`.
-The first load is about 1.2 MB of compressed script (Babylon.js), sent as brotli or gzip.
+The first load is about 1.3 MB of compressed script (Babylon.js and the map of Karlín), sent as brotli or gzip.
+The server loads the same `client/shared` TypeScript directly: Node 24 strips the types, so that code
+uses only erasable TypeScript (no enums, namespaces or parameter properties) and imports with `.ts`.
 
 ## Configuration
 
@@ -121,10 +157,14 @@ Environment variables of the server:
 ## Tests
 
 ```sh
-npm run check          # TypeScript: the whole game page type-checks
+npm run check          # TypeScript: the whole game page and client/shared type-check
 npm run smoke          # protocol test against a running server (default http://localhost:3400)
 npm run test:browser   # two players in headless Chrome; needs Chrome and: npm i --no-save puppeteer-core@25.14.0
+node tools/test-map.ts # the shared map core (client/shared/map.ts): collisions, ground, street graph, spawns
 ```
+
+The smoke and browser tests take their places (spawn points, a street for a duel, a house's wall) from
+the map itself, so run them against a server of the same version.
 
 There is no CI on purpose: it is a game for fun, and a push to `main` goes straight to the server
 (see Deploy). Run the checks yourself before you push.
@@ -169,5 +209,8 @@ Found a bug or have an idea? [Open an issue](https://github.com/Rajcze33/world-o
 ## License
 
 The code is under the [MIT License](LICENSE). Third-party parts (three.js, the fonts) keep their own
-licenses, see [THIRD_PARTY.md](THIRD_PARTY.md). The DODO name and logo are trademarks of DODO and are
-not covered by the MIT License.
+licenses, see [THIRD_PARTY.md](THIRD_PARTY.md). The map data, `client/shared/karlin.json`, is a database
+derived from OpenStreetMap and is under the [ODbL](https://opendatacommons.org/licenses/odbl/) (© OpenStreetMap
+contributors), with data © IPR Praha and © ČÚZK (CC BY 4.0); see
+[client/shared/KARLIN-DATA.md](client/shared/KARLIN-DATA.md). The DODO name and logo are trademarks of
+DODO and are not covered by the MIT License.
