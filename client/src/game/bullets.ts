@@ -15,9 +15,11 @@ import { car } from './state';
 import { segHit, groundH } from '../world/grid';
 import { WATER_Y, surfaceY } from '../../shared/naval.ts';
 import { splash } from '../world/water';
-import { NET, netFire, netHit, netName, netShotHit, type NetOther } from '../net/net';
+import { NET, netFire, netHit, netName, netShotHit, netThit, type NetOther } from '../net/net';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
+import { friendly } from './teams';
+import { depotSeg } from '../world/objectives';
 
 export const BUL_V = 170, BUL_LIFE = 1.6;                  // speed (units/s, plus the shooter's own), seconds in flight
 const BUL_MAX = 192;
@@ -89,14 +91,19 @@ export function updateBullets(dt: number) {
     if (!b.mine && car.topT <= 0 && Math.abs(car.x - ex) < rm && Math.abs(car.z - ez) < rm) {
       const u = vehicleT(b.x, b.y, b.z, dx, dy, dz, car.k, car.x, car.y, car.z, car.h, car.gy); if (u < t) { t = u; who = 'me'; wet = false; }
     }
+    // World of DODO, issue #24: a standing supply depot stops it too; mine tells the server (net/net.ts netThit), which decides the damage
+    let dep = -1; const dh = depotSeg(b.x, b.y, b.z, dx, dy, dz); if (dh && dh.t < t) { t = dh.t; who = null; wet = false; dep = dh.i; }
     b.x += dx * Math.min(1, t); b.y += dy * Math.min(1, t); b.z += dz * Math.min(1, t);
     if (t >= 1) continue;
     b.on = false;
     if (wet) splash(b.x, b.z, 0.15);
-    if (who === 'me' && b.bot && hitPlayer('bullet', 1, T.gunBy(netName(b.by)))) {    // a bot's bullet that took effect: scores for the bot
+    if (dep >= 0 && b.mine) netThit(dep, 1, b.x, b.y, b.z, b.sid);
+    // a bot's bullet that took effect: scores for the bot. Issue #24: a teammate's (a bot's or, passed on as dmg, a person's) does nothing,
+    // and mine in a teammate is not reported
+    if (who === 'me' && b.bot && !friendly(b.by) && hitPlayer('bullet', 1, T.gunBy(netName(b.by)))) {
       const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(b.by))); netHit(b, kill);
     }
-    else if (who && who !== 'me' && b.mine) netShotHit(who.id, b.sid);                // mine hit someone here: the server passes it on
+    else if (who && who !== 'me' && b.mine && !friendly(who.id)) netShotHit(who.id, b.sid);   // mine hit someone here: the server passes it on
   }
   draw();
 }

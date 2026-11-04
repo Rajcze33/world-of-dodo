@@ -5,10 +5,15 @@
 // copied every frame; only the markers are drawn each time. The arena is wider than high: its view is a square round the arena's
 // middle as wide as the arena, so the river shows above it and Vítkov below. World of DODO, issue #20: in a ship it shows the river round
 // it (a window of SEA_E either side of the ship, cut from the airspace's map drawn twice as big), and the ships are drawn as hulls.
+// World of DODO, issue #24: the zones (a circle in the colour of the team that holds it, an arc round it for how far a capture has got)
+// and the supply depots (a square in their team's colour; a destroyed one dark and crossed out), the others in their team's colour, my
+// teammates always (the enemy only once spotted), my arrow ringed in my team's colour.
 import { DATA, ARENA, AIR_LIM, SITE, DEPOT, BLOCKS } from '../../shared/map.ts';
+import { ZONES, DEPOTS } from '../../shared/rules.ts';
 import { $ } from '../core/dom';
 import { now, hexCss } from '../core/util';
 import { SPOT_MS } from '../net/net';
+import { TM, zoneP, teamCss } from '../game/teams';
 import type { Other } from '../game/types';
 
 // a rounded rectangle path
@@ -23,6 +28,7 @@ export interface MapOpt {
   others?: Iterable<Other>;                    // the other players and the bots
   air?: boolean;                               // flying: the whole airspace
   sea?: boolean;                               // sailing: the river round the ship (issue #20)
+  team?: number;                               // my team (issue #24; -1 none)
 }
 // an arrow pointing along heading h, q its size
 function arrow(c: CanvasRenderingContext2D, x: number, y: number, h: number, q: number) {
@@ -92,23 +98,48 @@ export function drawMap(ctx: CanvasRenderingContext2D, S: number, opt: MapOpt) {
     ctx.fillStyle = '#2f3534'; ctx.fillRect(0, 0, S, S);
     ctx.drawImage(base(B, true), (cx - e + AIR_LIM) * k, (cz - e + AIR_LIM) * k, 2 * e * k, 2 * e * k, 0, 0, S, S);
   } else ctx.drawImage(base(S, air), 0, 0);
-  const r = Math.max(6, S / 24);
-  ctx.fillStyle = '#b2dcd6'; ctx.beginPath(); ctx.arc(mx(DEPOT.park.x), my(DEPOT.park.z), r * 0.7, 0, Math.PI * 2); ctx.fill();   // the depot's start
+  const r = Math.max(6, S / 24), team = opt.team ?? -1, teams = TM.on && (team === 0 || team === 1);
+  if (!teams) { ctx.fillStyle = '#b2dcd6'; ctx.beginPath(); ctx.arc(mx(DEPOT.park.x), my(DEPOT.park.z), r * 0.7, 0, Math.PI * 2); ctx.fill(); }   // the depot's start (issue #24: no more one start)
+  else objectives(ctx, mx, my, sc, r);
   if (opt.others) {
     const t = now();
     for (const o of opt.others) {
-      const age = t - (o.seenAt || -1e9); if (!o.on || age > SPOT_MS) continue;   // the other players: only once spotted,
-      ctx.globalAlpha = o.seen ? 1 : Math.max(0.2, 1 - age / SPOT_MS);            // then their last seen place, fading
-      ctx.fillStyle = hexCss(o.color); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
-      if (o.k === 1) arrow(ctx, mx(o.seenX!), my(o.seenZ!), o.h, r * 0.7);
-      else if (o.k === 2) hull(ctx, mx(o.seenX!), my(o.seenZ!), o.h, r * 0.6);
-      else { ctx.beginPath(); ctx.arc(mx(o.seenX!), my(o.seenZ!), r * 0.62, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+      const mate = teams && o.team === team;                                     // issue #24: a teammate shows where he is
+      const age = mate ? 0 : t - (o.seenAt || -1e9); if (!o.on || age > SPOT_MS || mate && o.s === 2 && o.k === 1) continue;   // the others: only once spotted,
+      ctx.globalAlpha = mate || o.seen ? 1 : Math.max(0.2, 1 - age / SPOT_MS);   // then their last seen place, fading
+      const x = mate ? o.x : o.seenX!, z = mate ? o.z : o.seenZ!;
+      ctx.fillStyle = teams && o.team >= 0 ? teamCss(o.team) : hexCss(o.color); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+      if (o.k === 1) arrow(ctx, mx(x), my(z), o.h, r * 0.7);
+      else if (o.k === 2) hull(ctx, mx(x), my(z), o.h, r * 0.6);
+      else { ctx.beginPath(); ctx.arc(mx(x), my(z), r * 0.62, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
     }
     ctx.globalAlpha = 1;
   }
   if (opt.car) {
-    const c = opt.car; ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#3d4543'; ctx.lineWidth = 1.5;
+    const c = opt.car; ctx.fillStyle = '#ffffff'; ctx.strokeStyle = teams ? teamCss(team) : '#3d4543'; ctx.lineWidth = teams ? 2.5 : 1.5;
     (sea ? hull : arrow)(ctx, Math.max(r, Math.min(S - r, mx(c.x))), Math.max(r, Math.min(S - r, my(c.z))), c.h, r * (sea ? 0.75 : 0.9));
+  }
+}
+
+// World of DODO, issue #24: the zones and the depots on the map (mx, my: world to the map's pixels, sc its pixels per unit, r the
+// markers' size)
+function objectives(ctx: CanvasRenderingContext2D, mx: (x: number) => number, my: (z: number) => number, sc: number, r: number) {
+  const TAU = Math.PI * 2;
+  for (const zn of ZONES) {
+    const own = TM.z[zn.i] ? TM.z[zn.i][0] : -1, p = zoneP(zn.i), x = mx(zn.x), y = my(zn.z), q = Math.max(r * 0.75, zn.r * sc);
+    ctx.fillStyle = ctx.strokeStyle = teamCss(own);
+    ctx.globalAlpha = own >= 0 ? 0.4 : 0.2; ctx.beginPath(); ctx.arc(x, y, q, 0, TAU); ctx.fill();
+    ctx.globalAlpha = 1; ctx.lineWidth = 1.5; ctx.stroke();
+    if (Math.abs(p) > 0.5 && Math.abs(p) < 99.5) {                              // a capture under way: an arc round it
+      ctx.strokeStyle = teamCss(p > 0 ? 0 : 1); ctx.lineWidth = Math.max(2, r * 0.3);
+      ctx.beginPath(); ctx.arc(x, y, q + ctx.lineWidth, -Math.PI / 2, -Math.PI / 2 + TAU * Math.abs(p) / 100); ctx.stroke();
+    }
+  }
+  for (const d of DEPOTS) {
+    const up = !TM.d[d.i] || TM.d[d.i][0] > 0, x = mx(d.x), y = my(d.z), q = Math.max(r * 0.48, d.r * sc);
+    ctx.strokeStyle = up ? '#ffffff' : teamCss(d.team); ctx.lineWidth = up ? 1.2 : Math.max(1.5, r * 0.25);
+    if (up) { ctx.fillStyle = teamCss(d.team); ctx.fillRect(x - q, y - q, q * 2, q * 2); ctx.strokeRect(x - q, y - q, q * 2, q * 2); }
+    else { ctx.beginPath(); ctx.moveTo(x - q, y - q); ctx.lineTo(x + q, y + q); ctx.moveTo(x + q, y - q); ctx.lineTo(x - q, y + q); ctx.stroke(); }
   }
 }
 

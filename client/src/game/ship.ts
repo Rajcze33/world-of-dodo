@@ -33,6 +33,8 @@ import { carStatus, camLook, vanOwnMat, hitPlayer, SPAWN_IMMUNE, SINK_T } from '
 import { fireBullet, BUL_V } from './bullets';
 import { fireShell, fireTorp, shipBox, glow, puff, SHELL_V, SHELL_G } from './shells';
 import { startImpactFx } from './fx';
+import { teamMat, friendly } from './teams';
+import { TEAM_SHIP_SPAWNS } from '../../shared/rules.ts';
 
 // ---------- the numbers ----------
 // speed: the top speed (13 u/s, 38 knots), how fast the speed follows the telegraph (up, and down or braking), the telegraph's steps
@@ -115,7 +117,7 @@ export function makeShip(paint: StandardMaterial): TransformNode {
   const g = new TransformNode('ship', scene);
   const mesh = (name: string, geo: Geo, mat: StandardMaterial, cast: boolean, parent: TransformNode = g) => { const m = geoMesh(name, geo, mat, cast, false); m.parent = parent; return m; };
   const at = (geo: Geo, x: number, y: number, z: number) => translate(geo, x, y, z);
-  const P = Bucket(), R = Bucket(), L = Bucket();
+  const P = Bucket(), R = Bucket(), L = Bucket(), TB = Bucket();   // TB: World of DODO, issue #24, the team's colour
   hull(P, R);
   // the bridge: its block, the wheelhouse with windows all round, the wings with the navigation lights, the mast with a yard and radar
   addGeo(R, at(boxGeo(3.3, 1.95, 3.2), 0, 2.07, 2.2), null, WH);
@@ -134,7 +136,7 @@ export function makeShip(paint: StandardMaterial): TransformNode {
   addGeo(R, at(boxGeo(2.6, 0.95, 3.9), 0, 1.52, -1.65), null, WH);
   const funnel = (r0: number, r1: number, h: number, y: number) => rotateX(scaleGeo(at(cylGeo(r0, r1, h, 14), 0, y, 0), 0.72, 1, 1), -0.1);
   addGeo(P, at(funnel(0.8, 0.92, 2.1, 3.0), 0, 0, -1.8), null, 0xffffff);
-  addGeo(R, at(funnel(0.83, 0.85, 0.4, 3.75), 0, 0, -1.8), null, WH);
+  addGeo(TB, at(funnel(0.83, 0.85, 0.4, 3.75), 0, 0, -1.8), null, WH);                 // the band (issue #24: the team's)
   addGeo(R, at(funnel(0.81, 0.81, 0.3, 4.2), 0, 0, -1.8), null, DARK);
   for (const sx of [-1, 1]) {
     addGeo(R, at(cylGeo(0.45, 0.5, 0.35, 10), sx * AA_X, 2.17, AA_Z), null, GREY);
@@ -149,11 +151,13 @@ export function makeShip(paint: StandardMaterial): TransformNode {
     for (const k of [-1, 0, 1]) addGeo(R, at(rotateY(rotateX(cylGeo(0.15, 0.15, 2.4, 6), Math.PI / 2), a), sx * TUBE_X + k * ox, 1.38, TUBE_Z + k * oz), null, GREY);
     addGeo(R, at(boxGeo(0.14, 0.4, 0.5), sx * 1.5, 1.05, 8.6), null, DARK);             // the anchors
   }
-  // the jack staff at the bow, the ensign staff at the stern with a little DODO-green flag
+  // the jack staff at the bow, the ensign staff at the stern with a flag (World of DODO, issue #24: the team's, a little bigger than the
+  // DODO-green one it was)
   addGeo(R, at(cylGeo(0.04, 0.04, 1.1, 4), 0, 2.5, 10.9), null, DARK);
-  addGeo(R, at(cylGeo(0.04, 0.04, 1.5, 4), 0, 1.8, -10.75), null, DARK);
-  addGeo(R, at(boxGeo(0.04, 0.45, 0.75), 0, 2.3, -11.1), null, COL.green);
+  addGeo(R, at(cylGeo(0.04, 0.04, 2.0, 4), 0, 2.05, -10.75), null, DARK);
+  addGeo(TB, at(boxGeo(0.05, 0.7, 1.15), 0, 2.65, -11.3), null, COL.green);
   mesh('shipPaint', P, paint, true); mesh('shipParts', R, VC_MAT, true); mesh('shipLights', L, VC_GLOW, false);
+  const teamM = mesh('shipTeam', TB, teamMat(-1), true);                                // painted by game/teams.ts flagTeam
   // the logos: on the hull's sides, leaning out with the flare, and on the bridge's sides, readable from outside
   LOGO_MAT ??= basic(0xffffff, { map: logoTex, transparent: true });
   const lg = Bucket(), st = HULL[3], lean = Math.atan2(st[1] - st[3], st[2] - KEEL);
@@ -182,7 +186,7 @@ export function makeShip(paint: StandardMaterial): TransformNode {
     mesh('shipTurretPaint', tp, paint, true, n); mesh('shipTurretParts', tr, VC_MAT, true, n); mesh('shipGunParts', gb, VC_MAT, true, gn);
     tur.push(n); guns.push(gn);
   });
-  g.metadata = { tur, guns, smokeT: 0 };
+  g.metadata = { tur, guns, smokeT: 0, team: [teamM] };
   return g;
 }
 // another player's ship leaves (net/net.ts): its meshes go with their shadows (the paint and the logo are shared)
@@ -214,12 +218,13 @@ export function poseShip(g: TransformNode, x: number, y: number, z: number, h: n
 
 // ---------- spawning ----------
 // at one of the river's spawn points (client/shared/naval.ts SHIP_SPAWNS: about 16 spots at least 25 from the banks, facing along the
-// river), as far from the others as the river allows, never right onto another ship
+// river), as far from the others as the river allows, never right onto another ship. World of DODO, issue #24: on my team's half of
+// the river (client/shared/rules.ts TEAM_SHIP_SPAWNS: A the west, B the east, none close to the river zone), far from the enemy
 export function spawnShip() {
-  let best = SHIP_SPAWNS[0] || { x: 0, z: -400, h: Math.PI / 2 }, bs = -1;
-  for (const s of SHIP_SPAWNS) {
+  let best = SHIP_SPAWNS[0] || { x: 0, z: -400, h: Math.PI / 2 }, bs = -1e9;
+  for (const s of NET.team === 0 || NET.team === 1 ? TEAM_SHIP_SPAWNS[NET.team] : SHIP_SPAWNS) {
     let d = 1400, ship = Infinity;
-    for (const o of NET.others.values()) if (o.on) { const e = Math.hypot(o.x - s.x, o.z - s.z); d = Math.min(d, e); if (o.k === 2) ship = Math.min(ship, e); }
+    for (const o of NET.others.values()) if (o.on) { const e = Math.hypot(o.x - s.x, o.z - s.z); if (!friendly(o.id)) d = Math.min(d, e); if (o.k === 2) ship = Math.min(ship, e); }
     const sc = (ship < 30 ? -1000 : 0) + d + Math.random() * 60; if (sc > bs) { bs = sc; best = s; }
   }
   Object.assign(car, { k: 2, x: best.x, z: best.z, h: best.h, y: 0, p: 0, v: 0, gy: WATER_Y, steer: 0, topT: 0, roll: 0, slowT: 0, swT: 0, hitLog: [], immT: SPAWN_IMMUNE });
@@ -263,7 +268,8 @@ function moveShip(nh: number, dist: number, dt: number) {
   }
   if (rammed && sh.ramCd <= 0) {
     const close = -(Math.sin(car.h) * car.v - rammed.hx * rammed.v) * rx - (Math.cos(car.h) * car.v - rammed.hz * rammed.v) * rz;   // closing speed
-    if (close > RAM_V) { sh.ramCd = 2; hitPlayer('ram', rx * Math.cos(car.h) - rz * Math.sin(car.h) > 0 ? -1 : 1, T.rammed(rammed.name)); }
+    // (World of DODO, issue #24: a teammate's ship only bumps)
+    if (close > RAM_V && !friendly(rammed.id)) { sh.ramCd = 2; hitPlayer('ram', rx * Math.cos(car.h) - rz * Math.sin(car.h) > 0 ? -1 : 1, T.rammed(rammed.name)); }
   }
   const l = Math.hypot(px, pz); if (l < 1e-4 || Math.abs(car.v) < 0.01) return;
   const d = (Math.sin(car.h) * px + Math.cos(car.h) * pz) / l * Math.sign(car.v);      // -1: straight into it, 0: along it
@@ -349,13 +355,13 @@ function torpedoes() {
   sh.torpCd = TORP_RELOAD;
 }
 // the anti-aircraft guns: as the tank's (game/tank.ts fireAA), from the two mounts by the funnel in turn, at the nearest plane in reach
-// and in sight as drawn here, led by the bullet's flight; with no plane about they fire up and ahead
+// and in sight as drawn here, led by the bullet's flight; with no plane about they fire up and ahead (issue #24: only the enemy's planes)
 function aa() {
   if (sh.aaCd > 0) return; sh.aaCd = AA_RATE; sh.aaGun = -sh.aaGun;
   const hx = Math.sin(car.h), hz = Math.cos(car.h), ox = car.x + hz * AA_X * sh.aaGun + hx * AA_Z, oy = WATER_Y + car.y + AA_Y, oz = car.z - hx * AA_X * sh.aaGun + hz * AA_Z;
   let best: NetOther | null = null, bd = AA_R;
   for (const o of NET.others.values()) {
-    if (!o.on || o.k !== 1 || o.s === 2) continue;
+    if (!o.on || o.k !== 1 || o.s === 2 || friendly(o.id)) continue;
     const d = Math.hypot(o.x - ox, o.y - oy, o.z - oz); if (d < bd && segHit(ox, oy, oz, o.x, o.y, o.z) >= 1) { bd = d; best = o; }
   }
   if (!best && COARSE && !HELD.has('KeyE')) return;                // on a touch screen the guns fire by themselves, only at a plane
@@ -373,7 +379,7 @@ function aa() {
 export function updateShip(dt: number) {
   carStatus(dt);                                                   // immunity, and the countdown to the respawn once destroyed (game/tank.ts)
   if (car.k !== 2) { input.mx = input.my = 0; return; }            // switched to another vehicle (carStatus respawned)
-  const dead = car.topT > 0, busy = car.swT > 0;
+  const dead = car.topT > 0, busy = car.swT > 0 || G.hold;        // (issue #24: G.hold, the break after a round: no firing)
   sh.t += dt; sh.ramCd -= dt; sh.aaCd -= dt; sh.torpCd = Math.max(0, sh.torpCd - dt);
   // the aim: the mouse (locked to the game) or a drag on a touch screen; slower through the binoculars
   sh.zoom = !dead && (input.rmb || HELD.has('ShiftLeft') || HELD.has('ShiftRight'));

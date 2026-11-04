@@ -1,13 +1,17 @@
-// Smoke test of a running World of DODO server: the static files and the whole protocol with two players
-// and the bots. Expects the default of 3 bots (BOTS=3).
+// Smoke test of a running World of DODO server: the static files and the whole protocol with the players and the bots.
 // Usage: node tools/smoke.js [http://localhost:3400]
 // World of DODO, issue #16: the places come from the map of the real Karlín (client/shared/map.ts, loaded the way the server loads
 // it, server/city.js; Node 24 runs the TypeScript), so run it against a server of the same version. Issue #20: the ships' places come
 // from the river (client/shared/naval.ts).
+// Issue #24: the team game (client/shared/rules.ts): two teams of TEAM_SIZE (read from what the first player finds), the objectives
+// (zones, depots), the rounds. The test ends a round itself (A's team scores up to the round's points, obj.r.to), so run it against a
+// server nobody else plays on; with ROUND_SEC under about 300 the round may end on its own in the middle of the test. It takes about
+// two and a half minutes (a depot it destroys must come back after 90 s).
 'use strict';
 
 const M = require('../server/city');
 const NV = require('../client/shared/naval.ts');
+const R = require('../client/shared/rules.ts');
 
 const BASE = (process.argv[2] || 'http://localhost:3400').replace(/\/$/, '');
 const WS_URL = BASE.replace(/^http/, 'ws') + '/ws';
@@ -24,11 +28,11 @@ const WORLD = M.AIR_LIM + 70;               // server/server.js WORLD: the plane
 // A's place: the map's spawn point nearest the middle, on a street, where a player's tank may start
 const HOME = M.SPAWNS[0];
 // a spot off every street, so no bot can run into a parcel there: the middle of an empty lot (the first two are the construction site
-// and the depot) at least 8 units from any carriageway
+// and the depot) at least 8 units from any carriageway and from every supply depot (issue #24)
 const OFF = (() => {
   for (const l of [...M.DATA.lots.slice(2), ...M.DATA.lots]) {
     const x = Math.round((l[0] + l[2]) / 2 * 100) / 100, z = Math.round((l[1] + l[3]) / 2 * 100) / 100, n = M.nearestEdge(x, z);
-    if (n.d - n.e.w / 2 >= 8 && !M.solidAt(x, 1, z)) return { x, z };
+    if (n.d - n.e.w / 2 >= 8 && !M.solidAt(x, 1, z) && R.DEPOTS.every(d => Math.hypot(d.x - x, d.z - z) > 20)) return { x, z };
   }
   return { x: M.ARENA.x0 + 2, z: M.ARENA.z0 + 2 };
 })();
@@ -47,20 +51,30 @@ function client() {
   const ws = new WebSocket(WS_URL);
   const inbox = [];
   const waiters = [];
-  const last = new Map();                 // id -> the newest snapshot row of that tank
-  const track = new Map();                // id -> [[ms, x, z], ...]: every row of the tanks being watched (api.watch)
+  const last = new Map();                 // id -> the newest snapshot row of that vehicle
+  const track = new Map();                // id -> [[ms, x, z, y, k, s], ...]: every row of the vehicles being watched (api.watch)
+  const roster = new Map();               // id -> { id, name, bot, team, ... }: who is in, as this socket heard it (issue #24: with the teams)
+  const ptsOf = new Map();                // id -> personal points as this socket heard them (hits, and issue #24's pts for zones and depots)
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
-    if (m.t === 'snap') { for (const s of m.p) { last.set(s[0], s); track.get(s[0])?.push([Date.now(), s[1], s[2]]); } api.snap = m; }
+    if (m.t === 'welcome') { roster.clear(); for (const p of m.players) { roster.set(p.id, { ...p }); ptsOf.set(p.id, p.pts || 0); } ptsOf.set(m.id, m.pts || 0); }
+    else if (m.t === 'hit') ptsOf.set(m.by, m.pts);
+    else if (m.t === 'pts') ptsOf.set(m.id, m.pts);
+    else if (m.t === 'join') roster.set(m.p.id, { ...m.p });
+    else if (m.t === 'leave') roster.delete(m.id);
+    else if (m.t === 'team' && roster.has(m.id)) roster.get(m.id).team = m.team;
+    if (m.t === 'snap') { for (const s of m.p) { last.set(s[0], s); track.get(s[0])?.push([Date.now(), s[1], s[2], s[9] || 0, s[8] || 0, s[6]]); } api.snap = m; }
     if (m.t === 'w') api.world = m;
+    if (m.t === 'obj') api.obj = m;
     const i = waiters.findIndex(w => w.test(m));
     if (i >= 0) waiters.splice(i, 1)[0].resolve(m);
-    else if (m.t !== 'snap' && m.t !== 'w') inbox.push(m);
+    else if (m.t !== 'snap' && m.t !== 'w' && m.t !== 'obj') { inbox.push(m); if (inbox.length > 4000) inbox.splice(0, 1000); }   // (the bots fire a lot)
   };
   const opened = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   const closed = new Promise(res => { ws.onclose = e => res(e); });
   const api = {
-    ws, opened, closed, last, track, world: null, snap: null,
+    ptsOf: id => ptsOf.get(id) ?? 0,
+    ws, opened, closed, last, track, roster, world: null, snap: null, obj: null,
     send: m => ws.send(JSON.stringify(m)),
     watch: id => track.set(id, []),
     // the next message that passes test (also one that already arrived), or null after ms
@@ -79,6 +93,7 @@ function client() {
 
 const key = () => Array.from({ length: 24 }, () => 'abcdefghijklmnopqrstuvwxyz'[Math.random() * 26 | 0]).join('');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const health = async () => (await fetch(BASE + '/health')).json();
 
 async function refused(hello) {
   const c = client();
@@ -87,6 +102,14 @@ async function refused(hello) {
   const e = await c.next(m => m.t === 'err');
   await c.closed;
   return e && e.code;
+}
+// a person joining with team (0, 1, 'auto' or nothing): their welcome (and the socket in .c)
+async function join(name, team) {
+  const c = client();
+  await c.opened;
+  c.send({ t: 'hello', name, key: key(), ...(team === undefined ? {} : { team }) });
+  const w = await c.next(m => m.t === 'welcome');
+  return Object.assign(w || {}, { c });
 }
 
 (async () => {
@@ -115,36 +138,107 @@ async function refused(hello) {
   r = await fetch(BASE + '/health');
   check(r.status === 200 && (await r.json()).ok === true, '/health answers');
 
-  // two players
+  // issue #24: the places of the team game stand where the rules say (client/shared/rules.ts against the map): the ground zones on a
+  // carriageway, the river zone on the water, every depot on open ground off the streets in its team's half, one of each team's
+  // within a ship's shell range of the river
+  const nav = []; for (let x = -700; x <= 700; x += 5) for (let z = -700; z <= 0; z += 5) if (NV.inWater(x, z, 6)) nav.push([x, z]);
+  const riverD = d => Math.min(...nav.map(([x, z]) => Math.hypot(x - d.x, z - d.z)));
+  check(R.ZONES.length === 4 && R.ZONES.slice(0, 3).every(q => !q.sea && M.onRoad(q.x, q.z) && M.freeAt(q.x, q.z, 3)) && R.ZONES[3].sea && NV.inWater(R.ZONES[3].x, R.ZONES[3].z, R.ZONES[3].r - 2),
+    'the three ground zones are on Karlín\'s streets, the river zone on the Vltava');
+  check(R.DEPOTS.length === 8 && R.DEPOTS.every((d, i) => d.i === i && d.team === (i < 4 ? 0 : 1) && R.homeSide(d.team, d.x) && M.freeAt(d.x, d.z, d.r + 1.5)
+    && !M.onRoad(d.x, d.z) && R.ZONES.every(q => Math.hypot(q.x - d.x, q.z - d.z) > q.r + 30)) && [0, 1].every(t => R.DEPOTS.some(d => d.team === t && riverD(d) <= 125)),
+    'the eight depots stand on open ground in their team\'s half, away from the zones, one of each team\'s within a shell\'s reach of the river');
+
+  // two players, in the two teams (issue #24: hello asks for one)
   const a = client(), b = client();
   await Promise.all([a.opened, b.opened]);
   const ka = key(), kb = key();
-  a.send({ t: 'hello', name: '  Tester' + RLO + ' A  ', color: BLUE, key: ka });
+  a.send({ t: 'hello', name: '  Tester' + RLO + ' A  ', color: BLUE, key: ka, team: 0 });
   const wa = await a.next(m => m.t === 'welcome');
   check(wa && wa.name === 'Tester A', 'A is welcomed, the name is cleaned (' + (wa && wa.name) + ')');
   check(wa && wa.color === BLUE && wa.pts === 0, 'A gets the colour A picked, and 0 points');
-  const botsA = wa ? wa.players.filter(p => p.bot) : [];
-  check(botsA.length === 3 && botsA.map(p => p.name).join() === 'BOT1,BOT2,BOT3', 'the first player in finds BOT1, BOT2 and BOT3');
-  b.send({ t: 'hello', name: 'Tester B', color: 0x123456, key: kb });
+  check(wa && wa.team === 0, 'A is in team A, as asked');
+  const g0 = wa && wa.game;
+  check(g0 && g0.sc.join() === '0,0' && g0.z.length === 4 && g0.z.every(z => z[0] === -1 && z[1] === 0) && g0.d.length === 8 && g0.d.every(d => d[0] === R.DEPOT_HP && d[1] === 0)
+    && g0.r.st === 'play' && g0.r.win === -1 && g0.r.left > 0 && g0.r.to > 0, `the welcome carries a fresh round: scores, neutral zones, depots standing (to ${g0 && g0.r.to} points, ${g0 && g0.r.left} s)`);
+  const bots0 = wa ? wa.players.filter(p => p.bot) : [], TS = (bots0.length + 1) / 2;
+  check(Number.isInteger(TS) && TS >= 2 && bots0.filter(p => p.team === 0).length === TS - 1 && bots0.filter(p => p.team === 1).length === TS
+    && bots0.map(p => p.name).sort().join() === bots0.map((p, i) => 'BOT' + (i + 1)).sort().join(),
+    `the first player in finds the bots: ${TS - 1} in A and ${TS} in B (TEAM_SIZE ${TS}), BOT1 … BOT${bots0.length}`);
+  b.send({ t: 'hello', name: 'Tester B', color: 0x123456, key: kb, team: 1 });
   const wb = await b.next(m => m.t === 'welcome');
-  check(wb && wb.players.some(p => p.id === wa.id && p.name === 'Tester A' && !p.bot), 'B is welcomed and sees A');
+  check(wb && wb.team === 1 && wb.players.some(p => p.id === wa.id && p.name === 'Tester A' && !p.bot && p.team === 0), 'B is welcomed in team B and sees A in team A');
   check(wb && wb.color !== 0x123456 && wb.color !== BLUE, 'a colour off the palette is replaced by a free one');
-  const ja = await a.next(m => m.t === 'join');
-  check(ja && ja.p.id === wb.id, 'A hears that B joined');
-  r = await fetch(BASE + '/health');
-  const hl = await r.json();
-  check(hl.players === 2 && hl.bots === 3, `/health counts 2 players and 3 bots (${JSON.stringify(hl)})`);
+  const gone = await a.next(m => m.t === 'leave' && bots0.some(p => p.id === m.id));
+  check(gone && bots0.find(p => p.id === gone.id).team === 1, 'a bot of team B makes room for B');
+  const ja = await a.next(m => m.t === 'join' && !m.p.bot);
+  check(ja && ja.p.id === wb.id && ja.p.team === 1, 'A hears that B joined team B');
+  let hl = await health();
+  check(hl.players === 2 && hl.bots === 2 * TS - 2, `/health counts 2 players and ${2 * TS - 2} bots (${JSON.stringify(hl)})`);
 
-  // issue #16: where the tanks start. A player's browser picks one of the map's spawn points (client/src/game/tank.ts spawnPoint), the
-  // server places the bots on them (server/bots.js placeFar): all on a carriageway, spread over Karlín
-  const spread = Math.min(...M.SPAWNS.map((p, i) => Math.min(...M.SPAWNS.filter((q, j) => j !== i).map(q => Math.hypot(p.x - q.x, p.z - q.z)))));
-  check(M.SPAWNS.length >= 20 && M.SPAWNS.every(p => M.onRoad(p.x, p.z)) && spread > 20,
-    `a player spawns on a road: the map's ${M.SPAWNS.length} spawn points are all on a carriageway, at least ${spread.toFixed(0)} units apart`);
-  const sb = await b.next(m => m.t === 'snap' && botsA.every(p => m.p.some(s => s[0] === p.id)));
-  const bot0 = sb ? botsA.map(p => sb.p.find(s => s[0] === p.id)) : [];
-  check(bot0.length === 3 && bot0.every(s => onStreets(s[1], s[2]) && M.inArena(s[1], s[2])), `the bots are on the streets (${bot0.map(s => s[1].toFixed(0) + ',' + s[2].toFixed(0)).join('; ')})`);
-  for (const p of botsA) b.watch(p.id);              // and they are watched from now on: do they keep to the streets? (checked below)
+  // issue #24: a supply depot, hit by A's browser (thit): a parcel takes 2, a bullet 0.25; once per projectile, only the other team's
+  // depot, only from near, only where it is; destroyed: 30 points for A's team, back 90 s later (checked at the end). (Done first: the
+  // bots are still on their way.)
+  const D = R.DEPOTS.filter(d => d.team === 1).sort((p, q) => Math.hypot(HOME.x - p.x, HOME.z - p.z) - Math.hypot(HOME.x - q.x, HOME.z - q.z))[0];
+  const OWN = R.DEPOTS.find(d => d.team === 0);
+  const hpOf = o => o && o.d[D.i][0];
+  const objAfter = async (ms = 400) => { await sleep(ms); return a.obj; };
+  a.send({ t: 'st', ct: 1, x: D.x + 9, z: D.z, h: 0, v: 0, r: 0, s: 0 });
+  await sleep(100);
+  const fireAt = (sid, k = 0) => a.send({ t: 'fire', sid, x: D.x + 6, y: 1.5, z: D.z, vx: -10, vy: 4, vz: 0, ...(k ? { k } : {}) });
+  const thitD = (sid, k = 0, dx = 1, i = D.i) => a.send({ t: 'thit', i, k, x: (i === D.i ? D.x : OWN.x) + dx, y: D.y + 0.5, z: i === D.i ? D.z : OWN.z, sid });
+  fireAt(70); await sleep(50); thitD(70);
+  let o1 = await a.next(m => m.t === 'obj' && m.d[D.i][0] < R.DEPOT_HP, 1500);
+  check(o1 && hpOf(o1) === R.DEPOT_HP - 2 && o1.d[D.i][1] === 0, `a parcel on B's depot ${D.i} takes 2 (${hpOf(o1)} left), the players hear it at once (obj)`);
+  thitD(70);
+  check(hpOf(await objAfter()) === R.DEPOT_HP - 2, 'the same parcel does not hit it twice');
+  fireAt(71); await sleep(50); thitD(71, 0, 0, OWN.i);
+  check((await objAfter()).d[OWN.i][0] === R.DEPOT_HP, 'a team cannot damage its own depot');
+  fireAt(72); await sleep(50); thitD(72, 0, 25);
+  check(hpOf(await objAfter()) === R.DEPOT_HP - 2, 'a hit claimed off the depot does not count');
+  a.send({ t: 'st', ct: 2, x: D.x + 300, z: D.z, h: 0, v: 0, r: 0, s: 0 });
+  await sleep(100); fireAt(73); await sleep(50); thitD(73);
+  check(hpOf(await objAfter()) === R.DEPOT_HP - 2, 'nor one from a shooter 300 units away');
+  a.send({ t: 'st', ct: 3, x: D.x + 9, z: D.z, h: 0, v: 0, r: 0, s: 0 });
+  await sleep(100); fireAt(74, 1); await sleep(50); thitD(74, 1);
+  check(hpOf(await objAfter()) === R.DEPOT_HP - 2.25, 'a bullet takes 0.25');
+  const sc0 = a.obj.sc[0];
+  fireAt(75); fireAt(76); await sleep(50); thitD(75); thitD(76, 0, -1);
+  const od = await a.next(m => m.t === 'obj' && m.d[D.i][0] === 0, 1500);
+  const killedAt = Date.now();
+  check(od && od.d[D.i][1] > od.ts + 88000 && od.d[D.i][1] < od.ts + 91000 && od.sc[0] >= sc0 + R.DEPOT_PTS,
+    `two more parcels destroy it: ${R.DEPOT_PTS} points for team A (${sc0} -> ${od && od.sc[0]}), rebuilt in 90 s (${od && od.d[D.i][1] - od.ts} ms)`);
+
+  // issue #24: the teams. A person asking for a team gets it unless it has 2 or more people more than the other; auto: the team with
+  // fewer people. H1 and H2 stay for the whole test (A's teammates).
+  const h1 = await join('Helper One', 0), h2 = await join('Helper Two', 0);
+  const c3 = await join('Tester C', 0), c4 = await join('Tester D', 'auto'), c5 = await join('Tester E', 1), c6 = await join('Tester F');
+  check(h1.team === 0 && h2.team === 0 && c3.team === 1 && c4.team === 1 && c5.team === 1 && c6.team === 0,
+    `teams: asked A, A (granted), asked A with A 2 ahead (B instead), auto (B, fewer), asked B, auto (A): ${[h1, h2, c3, c4, c5, c6].map(w => w.team).join(', ')}`);
+  hl = await health();
+  check(hl.players === 8 && hl.bots === 2 * Math.max(0, TS - 4), `each person took a bot's place: 8 players, ${2 * Math.max(0, TS - 4)} bots (${JSON.stringify(hl)})`);
+  for (const w of [c3, c4, c5, c6]) w.c.ws.close();
+  await Promise.all([c3, c4, c5, c6].map(w => w.c.closed));
+  await sleep(300);
+  hl = await health();
+  check(hl.players === 4 && hl.bots === 2 * TS - 4, `when they leave, bots take their places again (${JSON.stringify(hl)})`);
+
+  // the bots' vehicles: each team flies a plane and sails a ship (no person of it does), the rest drive tanks
+  let RO = a.roster;                                    // who is who (the bots' teams), as A's socket heard it
+  const botTeam = { get: id => RO.get(id) && RO.get(id).bot ? RO.get(id).team : undefined, has: id => !!(RO.get(id) && RO.get(id).bot) };
+  const sk = await b.next(m => m.t === 'snap' && m.p.filter(s => botTeam.has(s[0])).length === 2 * TS - 4, 3000);
+  const rows = sk ? sk.p.filter(s => botTeam.has(s[0])) : [];
+  const per = t => rows.filter(s => botTeam.get(s[0]) === t);
+  check(rows.length === 2 * TS - 4 && [0, 1].every(t => per(t).length < 2 || (per(t).filter(s => s[8] === 1).length === 1 && per(t).filter(s => s[8] === 2).length === 1 && per(t).filter(s => !s[8]).length === per(t).length - 2)),
+    `each team's bots: a plane, a ship, the rest tanks (A ${per(0).map(s => s[8] || 0).join('')}, B ${per(1).map(s => s[8] || 0).join('')})`);
+  const tanks0 = rows.filter(s => !s[8]);
+  check(tanks0.length > 0 && tanks0.every(s => onStreets(s[1], s[2]) && M.inArena(s[1], s[2])), `the tank bots are on the streets (${tanks0.map(s => s[1].toFixed(0) + ',' + s[2].toFixed(0)).join('; ')})`);
+  check(rows.filter(s => s[8] === 1).every(s => s.length === 11 && s[9] > M.terrainH(s[1], s[2]) + 10) && rows.filter(s => s[8] === 2).every(s => s.length === 13 && NV.bankDist(s[1], s[2]) > 0),
+    'the plane bots are in the air, the ship bots on the river, in the rows a player\'s plane and ship send');
+  for (const s of rows) b.watch(s[0]);                  // and they are watched from now on (checked below)
   const watchT = Date.now();
+  const foe = tanks0.find(s => botTeam.get(s[0]) === 1), mate = tanks0.find(s => botTeam.get(s[0]) === 0);
+  const foeId = foe[0];
 
   check(await refused({ name: 'tester a' }) === 'name_taken', 'a taken name is refused (case does not matter)');
   check(await refused({ name: ' ' + ZWSP + ' ' }) === 'name_invalid', 'an empty name is refused');
@@ -153,11 +247,15 @@ async function refused(hello) {
   a.send({ t: 'ping', c: 12345 });
   const pong = await a.next(m => m.t === 'pong');
   check(pong && pong.c === 12345, 'a ping gets its pong');
+  // issue #24: the objectives come once a second (and at once on a change)
+  const objs = []; for (let i = 0; i < 3; i++) objs.push(await a.next(m => m.t === 'obj', 1600));
+  check(objs.every(o => o && Array.isArray(o.sc) && o.z.length === 4 && o.d.length === 8 && o.r) && objs[2].ts - objs[0].ts <= 2200,
+    `the objectives (obj) come at least once a second (${objs.map(o => o && o.ts).join(', ')})`);
 
   // positions, each stamped with the moment it shows on the server's clock (from the browser's own clock, ct)
   const t0 = Math.round(performance.now());
   a.send({ t: 'st', ct: t0, x: HOME.x, z: HOME.z, h: 1.2, v: 12, r: 0, s: 1 });
-  const snap = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id));
+  const snap = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[1] === HOME.x));
   const sa = snap && snap.p.find(s => s[0] === wa.id);
   check(sa && sa[1] === HOME.x && sa[2] === HOME.z && sa[6] === 1, 'B gets A\'s position (and the spawn shield) in a snapshot');
   check(snap && typeof snap.ts === 'number' && sa.length === 8 && sa[7] <= snap.ts, 'the snapshot and its rows carry the server\'s clock');
@@ -170,10 +268,10 @@ async function refused(hello) {
   a.send({ t: 'st', x: 0, z: -WORLD - 1, h: 0, v: 30, r: 0, k: 1, y: 50, p: 0 });
   const snap2 = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[1] !== HOME.x), 500);
   check(!snap2, `a position outside the world (${WORLD} units from the middle, tank or plane) is ignored`);
-  const bot1 = botsA[0], p0 = b.last.get(bot1.id);
+  const p0 = b.last.get(foeId);
   await sleep(1500);                                               // (1.5 s: it may be turning round at a dead end, issue #16)
-  const p1 = b.last.get(bot1.id);
-  check(p0 && p1 && Math.hypot(p1[1] - p0[1], p1[2] - p0[2]) > 3, 'BOT1 drives around the city');
+  const p1 = b.last.get(foeId);
+  check(p0 && p1 && (Math.hypot(p1[1] - p0[1], p1[2] - p0[2]) > 3 || R.zoneAt(p1[1], p1[2], false) >= 0 || p1[6] === 2), 'a tank bot drives around the city (or holds a zone)');
 
   // the shared city: every snapshot has the cars and the tram, every other one the pedestrians; a knocked pedestrian falls for everyone
   const s1 = await b.next(m => m.t === 'snap');
@@ -225,13 +323,16 @@ async function refused(hello) {
   a.send({ t: 'prop', i: TREE, fx: 0, fz: 1 });
   check(!(await b.next(m => m.t === 'prop', 500)), 'a tree that is down already is not knocked down again');
 
-  // a parcel (straight up, off every street, so no bot can run into it), a hit, the points
+  // a parcel (straight up, off every street, so no bot can run into it), a hit, the points (A and B are in different teams)
   a.send({ t: 'fire', sid: 1, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });
-  const fb = await b.next(m => m.t === 'fire' && m.id === wa.id);
+  const fb = await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 1);
   check(fb && fb.sid === 1 && fb.vy === 4, 'B gets A\'s parcel');
+  const scA = a.obj.sc[0];
   b.send({ t: 'hit', by: wa.id, sid: 1 });
   const [ha, hb] = await Promise.all([a.next(m => m.t === 'hit' && m.v === wb.id), b.next(m => m.t === 'hit' && m.v === wb.id)]);
-  check(ha && ha.by === wa.id && ha.pts === 10 && ha.gain === 10 && !ha.kill && hb && hb.pts === 10, 'a hit on a player scores 10 for A, both hear it');
+  check(ha && ha.by === wa.id && ha.gain === 10 && ha.pts >= 10 && !ha.kill && hb && hb.pts === ha.pts, 'a hit on a player scores 10 for A, both hear it');
+  const oh = await a.next(m => m.t === 'obj' && m.sc[0] >= scA + 10, 1500);
+  check(!!oh, `and 10 for A's team (${scA} -> ${oh && oh.sc[0]})`);
   b.send({ t: 'hit', by: wa.id, sid: 1 });
   check(!(await a.next(m => m.t === 'hit' && m.v === wb.id, 500)), 'the same parcel does not score twice');
   b.send({ t: 'hit', by: wa.id, sid: 99 });
@@ -242,21 +343,42 @@ async function refused(hello) {
   await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 2);
   b.send({ t: 'hit', by: wa.id, sid: 2, kill: true });
   const hk = await b.next(m => m.t === 'hit' && m.v === wb.id);
-  check(hk && hk.kill === true && hk.pts === 20, 'the hit that destroys B is passed on as a kill');
+  check(hk && hk.kill === true && hk.gain === 10, 'the hit that destroys B is passed on as a kill');
 
-  // a parcel dropped onto a bot: the server flies it and scores 1 point
+  // issue #24: friendly fire is off. H1 (A's teammate) reporting A's parcel scores nothing, A's bullet on H1 is not passed on
+  h1.c.send({ t: 'st', ct: 1, x: OFF.x, z: OFF.z + 3, h: 0, v: 0, r: 0, s: 0 });
+  a.send({ t: 'fire', sid: 3, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });
+  await h1.c.next(m => m.t === 'fire' && m.id === wa.id && m.sid === 3);
+  h1.c.send({ t: 'hit', by: wa.id, sid: 3, kill: true });
+  check(!(await a.next(m => m.t === 'hit' && m.v === h1.id, 600)), 'a hit on a teammate scores nothing');
+  a.send({ t: 'fire', k: 1, sid: 4, x: OFF.x, y: 2, z: OFF.z, vx: 0, vy: 0, vz: 170 });
+  a.send({ t: 'shot', v: h1.id, sid: 4 });
+  check(!(await h1.c.next(m => m.t === 'dmg', 600)), 'a teammate\'s bullet is not passed on');
+
+  // a parcel dropped onto a bot: the server flies it, 5 points (issue #24: half a person's, at least 1) for a bot of the other team, and
+  // nothing for a teammate's
   let hbot = null;
-  for (let i = 0; i < 4 && !hbot; i++) {
-    const s = a.last.get(bot1.id);
-    if (!s) { await sleep(200); continue; }
+  for (let i = 0; i < 6 && !hbot; i++) {
+    const s = a.last.get(foeId);
+    if (!s || s[6]) { await sleep(400); continue; }
     const [, x, z, h, v] = s, back = v * 0.15;                // the server tests against where the bot was 200 ms ago
     a.send({ t: 'fire', sid: 10 + i, x: x - Math.sin(h) * back, y: 1.0, z: z - Math.cos(h) * back, vx: 0, vy: 0, vz: 0 });
-    hbot = await a.next(m => m.t === 'hit' && m.v === bot1.id, 1000);
+    hbot = await a.next(m => m.t === 'hit' && m.v === foeId && m.by === wa.id, 1000);
   }
-  check(hbot && hbot.by === wa.id && hbot.gain === 1, 'a parcel on a bot scores 1 point for A');
+  check(hbot && hbot.gain === 5, `a parcel on a bot of the other team scores 5 points for A (${hbot && hbot.gain})`);
+  let hmate = null;
+  for (let i = 0; i < 3 && mate && !hmate; i++) {
+    const s = a.last.get(mate[0]);
+    if (!s) { await sleep(200); continue; }
+    const [, x, z, h, v] = s, back = v * 0.15;
+    a.send({ t: 'fire', sid: 16 + i, x: x - Math.sin(h) * back, y: 1.0, z: z - Math.cos(h) * back, vx: 0, vy: 0, vz: 0 });
+    hmate = await a.next(m => m.t === 'hit' && m.v === mate[0] && m.by === wa.id, 800);
+  }
+  check(!!mate && !hmate, 'a parcel on a bot of A\'s own team scores nothing');
 
   // planes (issue #14): a plane's row carries its kind, height and pitch; a bullet's shooter reports its hit (shot), the victim gets it
-  // passed on (dmg) and answers like a parcel hit: 3 points for a bullet in a tank, 5 in a plane; a bot fires at a low plane
+  // passed on (dmg) and answers like a parcel hit: 3 points for a bullet in a tank, 5 in a plane; a bot fires at a low enemy plane
+  while (await a.next(m => m.t === 'hit' && (m.by === wa.id || m.v === wa.id), 100));   // (hits A heard earlier and no check took: not these)
   const edgeZ = -(M.AIR_LIM + 55);                                // beyond the arena, out at the airspace's edge (the turn-back zone)
   a.send({ t: 'st', ct: t0 + 500, x: 30, z: edgeZ, h: 0, v: 32, r: 0.2, s: 0, k: 1, y: 80, p: 0.1 });
   const sp = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[8] === 1));
@@ -272,7 +394,7 @@ async function refused(hello) {
   const dm = await b.next(m => m.t === 'dmg');
   check(dm && dm.by === wa.id && dm.sid === 20, 'A\'s bullet that hit B on A\'s screen is passed on to B');
   b.send({ t: 'hit', by: wa.id, sid: 20 });
-  const hg = await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id && m.pts > (hbot ? hbot.pts : 20));
+  const hg = await a.next(m => m.t === 'hit' && m.v === wb.id && m.by === wa.id);
   check(hg && hg.gain === 3, 'a bullet in a tank scores 3');
   a.send({ t: 'shot', v: wb.id, sid: 20 });
   a.send({ t: 'shot', v: wb.id, sid: 2 });
@@ -284,23 +406,24 @@ async function refused(hello) {
   const hp = await b.next(m => m.t === 'hit' && m.v === wa.id && m.by === wb.id);
   check(da && hp && hp.gain === 5, 'a bullet in a plane scores 5');
   let flak = null;
+  const foeTanks = () => [...a.last.values()].filter(s => botTeam.get(s[0]) === 1 && !s[8] && !s[6]);
   for (let i = 0; i < 25 && !flak; i++) {
-    const s = a.last.get(bot1.id);
+    const s = foeTanks()[i % Math.max(1, foeTanks().length)];
     if (!s) { await sleep(200); continue; }
     a.send({ t: 'st', ct: t0 + 510 + i, x: s[1], z: s[2], h: 0, v: 20, r: 0, s: 0, k: 1, y: 30, p: 0 });   // right above the bot
-    flak = await a.next(m => m.t === 'fire' && m.k === 1 && botsA.some(p => p.id === m.id), 300);
+    flak = await a.next(m => m.t === 'fire' && m.k === 1 && botTeam.get(m.id) === 1 && !(a.last.get(m.id) || [])[8], 300);
   }
-  check(!!flak, 'a bot fires at a low plane above it');
+  check(!!flak, 'a tank bot of the other team fires at a low plane above it');
 
   // issue #20: ships. A ship's row (k 2) carries its heave and sinking, its pitch and its turrets' yaw, and counts only on the river;
   // only a ship fires shells (k 2) and torpedoes (k 3); the victim reports their hits as for a parcel: a shell scores 10 in a tank and
-  // 4 in a ship, a torpedo 15; a shell dropped on a bot is flown by the server (1 point). The ships go to the river's spawn points
-  // farthest from the arena, out of the bots' hunting range (150).
+  // 4 in a ship, a torpedo 15; a shell dropped on a bot is flown by the server (5 points). The ships go to the river's spawn points
+  // farthest from the arena.
   const outside = p => Math.hypot(Math.max(M.ARENA.x0 - p.x, 0, p.x - M.ARENA.x1), Math.max(M.ARENA.z0 - p.z, 0, p.z - M.ARENA.z1));
   const [SEA, SEA2] = [...NV.SHIP_SPAWNS].sort((p, q) => outside(q) - outside(p));
   let shipPts = null;
   const ptsNow = m => { if (m && m.by === wa.id) shipPts = m.pts; return m; };
-  while (await a.next(m => m.t === 'hit', 200));                     // (hits A heard earlier and no check took: not these)
+  while (await a.next(m => m.t === 'hit' && (m.by === wa.id || m.v === wa.id), 200));   // (hits A heard earlier and no check took: not these)
   a.send({ t: 'st', ct: t0 + 600, x: SEA.x, z: SEA.z, h: SEA.h, v: 8, r: -0.05, s: 0, k: 2, y: 0.03, p: 0.01, a: [0.4, 3] });
   const ss = await b.next(m => m.t === 'snap' && m.p.some(s => s[0] === wa.id && s[8] === 2));
   const rs = ss && ss.p.find(s => s[0] === wa.id);
@@ -337,16 +460,16 @@ async function refused(hello) {
   a.send({ t: 'fire', k: 3, sid: 44, x: SEA.x, y: NV.WATER_Y, z: SEA.z, vx: 60, vy: 0, vz: 0 });
   a.send({ t: 'fire', k: 2, sid: 45, x: SEA.x, y: NV.WATER_Y + 3, z: SEA.z, vx: 150, vy: 60, vz: 0 });
   check(!(await b.next(m => m.t === 'fire' && m.id === wa.id && m.sid >= 43 && m.sid <= 45, 500)), 'a torpedo off the water or too fast, or a shell too fast, is ignored');
-  // a shell dropped on a bot (A is a ship): the server flies it as it flies the parcels, 1 point
+  // a shell dropped on a bot of the other team (A is a ship): the server flies it as it flies the parcels, 5 points
   let sbot = null;
-  for (let i = 0; i < 4 && !sbot; i++) {
-    const s = a.last.get(bot1.id);
-    if (!s) { await sleep(200); continue; }
+  for (let i = 0; i < 6 && !sbot; i++) {
+    const s = a.last.get(foeId);
+    if (!s || s[6]) { await sleep(400); continue; }
     const [, x, z, h, v] = s, back = v * 0.15;
     a.send({ t: 'fire', k: 2, sid: 50 + i, x: x - Math.sin(h) * back, y: 1.0, z: z - Math.cos(h) * back, vx: 0, vy: 0, vz: 0 });
-    sbot = ptsNow(await a.next(m => m.t === 'hit' && m.v === bot1.id && m.by === wa.id, 1000));
+    sbot = ptsNow(await a.next(m => m.t === 'hit' && m.v === foeId && m.by === wa.id, 1000));
   }
-  check(sbot && sbot.gain === 1, 'a ship\'s shell on a bot scores 1 point for A');
+  check(sbot && sbot.gain === 5, `a ship's shell on a bot of the other team scores 5 points for A (${sbot && sbot.gain})`);
   // how long they can score: a torpedo runs 16 s and scores for 20 after its launch, a shell for 10 (both are reported 11 s later)
   a.send({ t: 'fire', k: 3, sid: 60, x: SEA.x, y: NV.WATER_Y, z: SEA.z, vx: 0, vy: 0, vz: 22 });
   a.send({ t: 'fire', k: 2, sid: 61, x: SEA.x, y: NV.WATER_Y + 3, z: SEA.z, vx: 70, vy: 30, vz: 70 });
@@ -359,56 +482,151 @@ async function refused(hello) {
   check(hlate && hlate.gain === 15, 'a torpedo still scores 11 s after its launch (its run is 16 s)');
   b.send({ t: 'st', ct: 4, x: rb[1], z: rb[2], h: 0, v: 0, r: 0, s: 0 });   // B is a tank again
 
-  // issue #16: the bots have been driving Karlín's street graph all along (B has watched them since they came in): for 30 s none of
+  // issue #24: the zones. A and her two teammates (H1, H2: at most 3 of a team count) drive into the ground zone with the fewest tanks of
+  // team B about: team A takes it, and it gives A a point every second; then they sail into the river zone as ships and take it too
+  const helpers = [a, h1.c, h2.c];
+  const foeNear = q => [...a.last.values()].filter(s => botTeam.get(s[0]) === 1 && !s[8] && s[6] !== 2 && Math.hypot(s[1] - q.x, s[2] - q.z) < q.r + 60).length;
+  const G = R.ZONES.filter(q => !q.sea).sort((p, q) => foeNear(p) - foeNear(q))[0];
+  const holdIn = async (q, ship, ms) => {
+    const until = Date.now() + ms;
+    let o = null;
+    for (let n = 0; Date.now() < until; n++) {
+      helpers.forEach((c, i) => {
+        const x = q.x + (i - 1) * 3, z = q.z + (ship ? (i - 1) * 6 : 0);
+        c.send(ship ? { t: 'st', ct: 10 + n, x, z, h: 1.57, v: 2, r: 0, s: 0, k: 2, y: 0, p: 0, a: [0, 3.14] } : { t: 'st', ct: 10 + n, x, z, h: 0, v: 0, r: 0, s: 0 });
+      });
+      o = a.obj;
+      if (o && o.z[q.i][0] === 0 && o.z[q.i][1] === 100) return o;
+      await sleep(200);
+    }
+    return null;
+  };
+  const before = a.obj.z[G.i];
+  const tz0 = Date.now(), oz = await holdIn(G, false, 25000);
+  check(!!oz, `three tanks of A take the ground zone ${G.name} (from ${before}; ${((Date.now() - tz0) / 1000).toFixed(1)} s)`);
+  const cp = await a.next(m => m.t === 'pts' && m.gain === R.CAP_PTS, 2000);
+  check(!!cp, `the tanks that took it get ${R.CAP_PTS} points each (pts)`);
+  const o2a = await a.next(m => m.t === 'obj', 1500);
+  await sleep(3200);
+  const o2b = a.obj, ownA = o2a.z.map((z, i) => z[0] === 0 && o2b.z[i][0] === 0 ? 1 : 0).reduce((s, v) => s + v, 0), secs = Math.floor((o2b.ts - o2a.ts) / 1000);
+  check(ownA >= 1 && o2b.sc[0] - o2a.sc[0] >= ownA * (secs - 1), `an owned zone gives its team a point a second (A owns ${ownA}: +${o2b.sc[0] - o2a.sc[0]} in ${secs} s)`);
+  const RZ = R.ZONES[3], tz1 = Date.now(), or = await holdIn(RZ, true, 30000);
+  check(!!or, `three ships of A take the river zone (${((Date.now() - tz1) / 1000).toFixed(1)} s)`);
+  for (const c of helpers) c.send({ t: 'st', ct: 900, x: HOME.x, z: HOME.z, h: 0, v: 0, r: 0, s: 0 });
+  h1.c.send({ t: 'st', ct: 901, x: OFF.x, z: OFF.z, h: 0, v: 0, r: 0, s: 0 }); h2.c.send({ t: 'st', ct: 901, x: OFF.x + 4, z: OFF.z, h: 0, v: 0, r: 0, s: 0 });
+
+  // issue #16: the tank bots have been driving Karlín's street graph all along (B has watched them since they came in): for 30 s none of
   // them left the streets or stood still (at least 10 units in every 8 s: a dead end, the arena's edge or a tank in the way only turns
-  // it back), and each got around (its places span 30 units or more)
+  // it back), unless it held a zone (issue #24: a tank bot stops in a zone while it captures it) or lay destroyed. Issue #24: the plane
+  // bots flew (in the air, over the ground, far), the ship bots sailed (on the water, and got about)
   await sleep(Math.max(0, 30500 - (Date.now() - watchT)));
   const stuck = [];
-  for (const p of botsA) {
-    const L = (b.track.get(p.id) || []).filter(r => r[0] - watchT <= 30000), cum = [0];
-    let minWin = Infinity, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, off = 0;
+  for (const id of b.track.keys()) {
+    const L = (b.track.get(id) || []).filter(r => r[0] - watchT <= 30000), name = 'BOT#' + id, k = L.length ? L[0][4] : 0, cum = [0];
     for (let i = 1; i < L.length; i++) cum.push(cum[i - 1] + Math.hypot(L[i][1] - L[i - 1][1], L[i][2] - L[i - 1][2]));
+    const path = cum[cum.length - 1];
+    if (L.length < 400 || L.some(r => r[4] !== k)) { if (L.length < 400) stuck.push(`${name}: ${L.length} rows`); continue; }
+    if (k === 1) {
+      const low = L.filter(r => r[5] !== 2 && r[3] < M.terrainH(r[1], r[2]) + 2).length;
+      if (low || path < 300) stuck.push(`${name} (plane): ${low} rows on the ground, ${path.toFixed(0)} units`);
+      else console.log(`     ${name} (plane): ${path.toFixed(0)} units in 30 s, never under 2 over the ground`);
+      continue;
+    }
+    if (k === 2) {
+      const dry = L.filter(r => NV.bankDist(r[1], r[2]) < -0.5).length;
+      if (dry || path < 40) stuck.push(`${name} (ship): ${dry} rows off the water, ${path.toFixed(0)} units`);
+      else console.log(`     ${name} (ship): ${path.toFixed(0)} units in 30 s on the river`);
+      continue;
+    }
+    let minWin = Infinity, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, off = 0;
     for (let i = 0, j = 0; i < L.length; i++) {
       while (j < L.length && L[j][0] - L[i][0] < 8000) j++;
-      if (j < L.length) minWin = Math.min(minWin, cum[j] - cum[i]);
+      if (j >= L.length) break;
+      const held = L.slice(i, j).some(r => r[5] === 2 || R.zoneAt(r[1], r[2], false) >= 0);
+      if (!held) minWin = Math.min(minWin, cum[j] - cum[i]);
     }
     for (const [, x, z] of L) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); if (!onStreets(x, z)) off++; }
-    const span = Math.hypot(x1 - x0, z1 - z0), path = cum[cum.length - 1];
-    if (L.length < 400 || off || !(minWin >= 10) || !(span >= 30)) stuck.push(`${p.name}: ${L.length} rows, ${off} off the streets, ${minWin.toFixed(0)} units in the slowest 8 s, span ${span.toFixed(0)}`);
-    else console.log(`     ${p.name}: ${path.toFixed(0)} units in 30 s, at least ${minWin.toFixed(0)} in every 8 s, over ${span.toFixed(0)} units of Karlín`);
+    const span = Math.hypot(x1 - x0, z1 - z0);
+    if (off || !(minWin >= 10) || !(span >= 30)) stuck.push(`${name}: ${off} rows off the streets, ${minWin.toFixed(0)} units in the slowest 8 s outside a zone, span ${span.toFixed(0)}`);
+    else console.log(`     ${name} (tank): ${path.toFixed(0)} units in 30 s, at least ${minWin === Infinity ? '-' : minWin.toFixed(0)} in every 8 s outside a zone, over ${span.toFixed(0)} units of Karlín`);
   }
-  check(!stuck.length, 'every bot follows the street graph for 30 s without getting stuck' + (stuck.length ? ' (' + stuck.join('; ') + ')' : ''));
+  check(!stuck.length, 'for 30 s the tank bots follow the street graph without getting stuck, the plane bots fly, the ship bots sail' + (stuck.length ? ' (' + stuck.join('; ') + ')' : ''));
+  hl = await health();
+  check(hl.tick && hl.tick.avg < 20, `the server's tick takes ${hl.tick && hl.tick.avg} ms on average (${hl.tick && hl.tick.max} at most, processor ${hl.tick && hl.tick.cpu}) with ${hl.bots} bots`);
 
-  // A drops (pushing a car) and comes back from the same page (same key): the car goes back to the traffic, the points are still there
-  const ptsA = shipPts ?? (hg ? hg.pts : hbot ? hbot.pts : 20);
+  // A drops (pushing a car) and comes back from the same page (same key): the car goes back to the traffic, the points are still there,
+  // and she is in her team again
   const [dx, dz, dh] = carAt(b.snap, 2);
   a.send({ t: 'st', ct: t0 + 900, x: dx, z: dz, h: 0, v: 0, r: 0, s: 0, c: [[2, dx, dz, dh, 1, 0]] });
   const held = await b.next(m => m.t === 'snap' && ownerOf(m, 2) === wa.id);
   a.ws.close();
   const lb = await b.next(m => m.t === 'leave' && m.id === wa.id);
   check(!!lb, 'B hears that A left');
+  const ptsA = b.ptsOf(wa.id);           // (issue #24: with what A's tank earned in a zone, pts messages)
   await sleep(150);
   check(held && !ownerOf(b.snap, 2), 'the car A was pushing goes back to the traffic');
   const a2 = client();
   await a2.opened;
   a2.send({ t: 'hello', name: 'Tester A', key: ka });
   const wa2 = await a2.next(m => m.t === 'welcome');
-  check(wa2 && wa2.pts === ptsA, `A rejoins with the same key and keeps ${ptsA} points`);
+  check(wa2 && wa2.pts === ptsA && wa2.team === 0, `A rejoins with the same key and keeps ${ptsA} points and her team`);
   check(wa2 && wa2.props.some(p => p[0] === TREE && p[1] === 1), 'whoever comes in later finds the tree down');
   const a3 = client();
   await a3.opened;
   a3.send({ t: 'hello', name: 'Tester A', key: ka });
   const wa3 = await a3.next(m => m.t === 'welcome');
-  check(wa3 && wa3.id === wa2.id && wa3.pts === ptsA, 'a second socket from the same page takes the player over');
+  check(wa3 && wa3.id === wa2.id && wa3.pts === ptsA && wa3.team === 0, 'a second socket from the same page takes the player over');
   await a2.closed;
+  const A = a3, aId = wa3.id;
+  A.send({ t: 'st', ct: 1, x: OFF.x - 4, z: OFF.z, h: 0, v: 0, r: 0, s: 0 });
+
+  // the depot destroyed at the start is back 90 s later
+  await sleep(Math.max(0, 91500 - (Date.now() - killedAt)));
+  const ob = await A.next(m => m.t === 'obj', 1500);
+  check(ob && ob.d[D.i][0] === R.DEPOT_HP && ob.d[D.i][1] === 0, `B's depot ${D.i} is rebuilt 90 s after it was destroyed`);
+
+  // issue #24: the round. A's team scores up to the round's points (A's parcels on B): the round ends, team A wins, the best players are
+  // named; in the intermission nothing is fired and nothing scores; INTER_S later a new round: scores, points, zones and depots reset, and
+  // the teams evened out (A's team has 3 people, B's 1: the one of A's who came in last, A herself since she came back, goes over)
+  RO = A.roster;
+  const o0 = await A.next(m => m.t === 'obj', 1500), to = o0.r.to;
+  let sid = 1000, endObj = null;
+  A.send({ t: 'fire', sid: 999, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });   // (reported only in the intermission)
+  while (!endObj) {
+    const need = Math.max(1, Math.ceil((to - A.obj.sc[0]) / 10)), n = Math.min(15, need), s0 = sid;
+    for (let i = 0; i < n; i++) { sid++; A.send({ t: 'fire', sid, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 }); }
+    await sleep(40);
+    for (let i = s0 + 1; i <= sid; i++) b.send({ t: 'hit', by: aId, sid: i });
+    endObj = await A.next(m => m.t === 'obj' && m.r.st === 'end', 300);
+    if (sid > 1000 + to) break;
+  }
+  check(endObj && endObj.r.win === 0 && endObj.sc[0] >= to && endObj.r.left <= R.INTER_S && endObj.r.left >= R.INTER_S - 1 && Array.isArray(endObj.r.best) && endObj.r.best.some(e => e[0] === aId),
+    `a round ends when a team reaches ${to}: team A wins (${endObj && endObj.sc.join(':')}), the best players are named (${endObj && JSON.stringify(endObj.r.best)}), ${R.INTER_S} s of intermission`);
+  A.send({ t: 'fire', sid: ++sid, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });
+  check(!(await b.next(m => m.t === 'fire' && m.id === aId && m.sid === sid, 600)), 'in the intermission nothing is fired');
+  while (await A.next(m => m.t === 'hit' && m.by === aId, 100));
+  b.send({ t: 'hit', by: aId, sid: 999 });
+  check(!(await A.next(m => m.t === 'hit' && m.by === aId, 600)), 'and nothing scores');
+  const e1 = A.obj; await sleep(2200); const e2 = A.obj;
+  check(e1.sc.join() === e2.sc.join() && e2.r.st === 'end', 'the scores stand still in the intermission');
+  const tm = await A.next(m => m.t === 'team', (R.INTER_S + 4) * 1000);
+  const nr = await A.next(m => m.t === 'obj' && m.r.st === 'play', 5000);
+  check(tm && tm.id === aId && tm.team === 1, `the teams are evened out: the latest of A's three goes over to B (${JSON.stringify(tm)})`);
+  check(nr && nr.sc[0] + nr.sc[1] <= 6 && nr.z.every(z => z[0] === -1 || Math.abs(z[1]) < 100) && nr.d.every(d => d[0] === R.DEPOT_HP) && nr.r.win === -1 && nr.r.left > 5,
+    `then a new round: scores from nothing (${nr && nr.sc}), zones neutral, depots standing (${nr && nr.d.map(d => d[0]).join(',')})`);
+  // A (now B's) hits H1 (A's): her points start again from nothing
+  A.send({ t: 'fire', sid: ++sid, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });
+  await h1.c.next(m => m.t === 'fire' && m.id === aId && m.sid === sid);
+  h1.c.send({ t: 'hit', by: aId, sid });
+  const hn = await A.next(m => m.t === 'hit' && m.by === aId && m.v === h1.id);
+  check(hn && hn.pts === 10, `everyone's points start from nothing in the new round (A: ${hn && hn.pts})`);
 
   // everybody leaves: the bots go too
-  a3.ws.close(); b.ws.close();
-  await Promise.all([a3.closed, b.closed]);
+  A.ws.close(); b.ws.close(); h1.c.ws.close(); h2.c.ws.close();
+  await Promise.all([A.closed, b.closed, h1.c.closed, h2.c.closed]);
   await sleep(300);
-  r = await fetch(BASE + '/health');
-  const h2 = await r.json();
-  check(h2.players === 0 && h2.bots === 0, 'with nobody left, the bots are gone');
+  const h2h = await health();
+  check(h2h.players === 0 && h2h.bots === 0, 'with nobody left, the bots are gone');
 
   console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
   process.exit(failed ? 1 : 0);

@@ -60,6 +60,7 @@ export interface Prop {
 // yaw of its turrets
 export interface Other {
   id: number; name: string; color: number; pts: number; bot: boolean;
+  team: number;                          // World of DODO, issue #24: 0 A, 1 B (-1: a server without teams)
   g: TransformNode;                      // the tank
   pg: TransformNode | null;              // the plane
   sg: TransformNode | null;              // the ship

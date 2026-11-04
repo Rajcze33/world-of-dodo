@@ -18,10 +18,12 @@ import { car } from './state';
 import { solidAt, groundH } from '../world/grid';
 import { WATER_Y, inWater, surfaceY } from '../../shared/naval.ts';
 import { splash, torpWake } from '../world/water';
-import { NET, netFire, netHit, netName } from '../net/net';
+import { NET, netFire, netHit, netName, netThit } from '../net/net';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
 import { fx } from './fx';
+import { friendly } from './teams';
+import { depotBody, depotHitAt } from '../world/objectives';
 
 // muzzle speed and gravity of a shell (server/bots.js has the same SHELL_G): at 45° it reaches SHELL_V² / SHELL_G, about 320
 export const SHELL_V = 110, SHELL_G = 38;
@@ -118,15 +120,20 @@ export function netShell(m: { id: number; sid: number; x: number; y: number; z: 
   const s = nextShell(m.x, m.y, m.z, m.vx, m.vy, m.vz); s.by = m.id; s.sid = m.sid;
   glow(m.x, m.y, m.z, 1.4, 0.15);                                   // its muzzle flash
 }
-// the shell blows up here (s: the blast's size)
-function boom(s: Shell, size: number) { burst(s.x, s.y, s.z, size); s.on = false; }
+// the shell blows up here (s: the blast's size). World of DODO, issue #24: mine that bursts near an enemy's supply depot (client/shared/
+// rules.ts depotAt: within DEPOT_NEAR of it, below its top) tells the server, which decides the damage (net/net.ts netThit, k 2)
+function boom(s: Shell, size: number) {
+  burst(s.x, s.y, s.z, size); s.on = false;
+  if (s.mine) { const di = depotHitAt(s.x, s.y, s.z, 2, NET.team); if (di >= 0) netThit(di, 2, s.x, s.y, s.z, s.sid); }
+}
 // one step of a shell: what is it in now?
 function shellStep(s: Shell) {
   const x = s.x, y = s.y, z = s.z;
   if (Math.abs(x) > 780 || Math.abs(z) > 780 || y < WATER_Y - 20) { s.on = false; return; }
   // my own ship or tank, hit by another's shell: I decide (it took effect: it scores for them)
+  // (World of DODO, issue #24: a teammate's shell bursts on it and does nothing)
   if (!s.mine && car.topT <= 0 && (car.k === 2 ? shipBox(x, y, z, car.x, car.y, car.z, car.h) : car.k === 0 && tankBox(x, y, z, car.x, car.gy, car.z, car.h))) {
-    if (hitPlayer('shell', Math.random() < 0.5 ? 1 : -1, T.shellBy(netName(s.by)))) {
+    if (!friendly(s.by) && hitPlayer('shell', Math.random() < 0.5 ? 1 : -1, T.shellBy(netName(s.by)))) {
       const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(s.by))); netHit(s, kill);
     }
     return boom(s, 1.1);
@@ -136,6 +143,7 @@ function shellStep(s: Shell) {
     if (!o.on || o.id === s.by || Math.abs(o.x - x) > 12 || Math.abs(o.z - z) > 12) continue;
     if (o.k === 2 ? o.s !== 2 && shipBox(x, y, z, o.x, o.y, o.z, o.h) : o.k === 0 && tankBox(x, y, z, o.x, groundH(o.x, o.z), o.z, o.h)) return boom(s, 1.1);
   }
+  if (depotBody(x, y, z) >= 0) return boom(s, 1.3);              // World of DODO, issue #24: a standing supply depot
   if (solidAt(x, y, z)) return boom(s, 1.3);                     // a building (the viaduct, a bridge's deck or pier)
   const g = surfaceY(x, z);                                       // the river's surface or the ground (client/shared/naval.ts)
   if (y < g) { if (g === WATER_Y) { splash(x, z, 1); s.on = false; } else { s.y = g + 0.2; boom(s, 1.3); } }
@@ -178,7 +186,7 @@ function torpStep(t: Torp) {
   if (!inWater(x, z, 0.3)) return torpBoom(t, 1.6);               // a bank or a bridge pier
   if (!t.mine && car.k === 2 && car.topT <= 0 && shipBox(x, WATER_Y + 0.3, z, car.x, car.y, car.z, car.h)) {
     const side = (x - car.x) * Math.cos(car.h) - (z - car.z) * Math.sin(car.h) > 0 ? 1 : -1;   // hit on the port (+x) side: it lists that way
-    if (hitPlayer('torp', side, T.torpBy(netName(t.by)))) {
+    if (!friendly(t.by) && hitPlayer('torp', side, T.torpBy(netName(t.by)))) {   // (issue #24: a teammate's torpedo bursts harmlessly)
       const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(t.by))); netHit(t, kill);
     }
     return torpBoom(t, 2.4);

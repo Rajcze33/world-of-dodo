@@ -1,7 +1,7 @@
 # World of DODO
 
-A small multiplayer tank, plane and ship game in the browser. One snowy city, everybody in their own DODO
-tank, plane or warship, parcels for ammunition. The city is **Karlín, a real district of Prague**, built from open map data:
+A small multiplayer tank, plane and ship game in the browser. One snowy city, two teams, everybody in their own
+DODO tank, plane or warship, parcels for ammunition. The city is **Karlín, a real district of Prague**, built from open map data:
 its streets, houses, the tram on Sokolovská, the Negrelli viaduct and the hill of Vítkov. Built on *Poslední míle* (The
 Last Mile), the 3D delivery game DODO made for Christmas 2026, where the delivery van had already turned into a tank.
 
@@ -9,11 +9,29 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
 
 ![Two players and a bot in the city](docs/screenshot.png)
 
-- **Join with a name only.** Pick a name, a colour and a tank, a plane or a ship, and go. No account, no
-  password, nothing is stored: your score lasts as long as you stay connected.
+- **Join with a name only.** Pick a name, a colour, a team (or let the game pick one) and a tank, a plane or a
+  ship, and go. No account, no password, nothing is stored: your score lasts as long as you stay connected.
+- **Two teams, A and B.** Team A's home is the west of Karlín (the Negrelli viaduct), team B's the east (Forum
+  Karlín); you come in on your team's side. The game keeps the teams even (you may pick one, as long as it
+  has no more than one person more than the other). Teammates cannot hurt each other. Your team shows on
+  the name tags, the scoreboard, the minimap and a little flag on every vehicle.
+- **Every vehicle wins points for its team in its own way**, and they all add up to the team's score:
+  - **tanks capture the three ground zones**, Viadukt, Náměstí (by the church on Karlínské náměstí) and
+    Forum: every tank inside pushes the zone towards its team (at most three of a team count, the two
+    sides cancel out), and a zone a team owns gives it **1 point a second**;
+  - **ships capture the river zone** on the Vltava north of Karlín, the same way, 1 point a second;
+  - **planes bomb the other team's supply depots**, four in each team's half (fuel tanks and crates): three
+    parcels destroy one, **30 points**, and it is rebuilt 90 s later. A tank's parcels and a ship's shells
+    destroy them too (a few stand close enough to the river for the ships' guns);
+  - **every hit scores** as below.
+  - and personally: every tank (ship) inside a zone when its team takes it gets **10 points**, and whoever
+    destroys a depot gets its 30, so a bomber shows on the scoreboard as much as a gunner.
+- **Rounds.** A round ends when a team reaches **1000 points** or after **15 minutes** (the higher score
+  wins). 15 s later a new round begins from nothing, the teams evened out.
 - **Shoot the others.** In a tank, Space (or the green button on a phone) fires a parcel and E the
-  anti-aircraft gun, which aims itself at the nearest plane. A parcel in another player's tank is worth
-  **10 points**, a hit on a bot (BOT1, BOT2, …) **1 point**.
+  anti-aircraft gun, which aims itself at the nearest plane. A parcel in a player's tank of the other team
+  is worth **10 points**; a hit on a bot (BOT1, BOT2, …) half of what it is worth on a person (a parcel in a
+  bot's tank 5).
 - **Fly.** A plane flies where the mouse points, as in War Thunder's arcade "mouse aim": click into the
   game, move the mouse, W and S for the throttle, Space or the left button for the guns, E (or the right
   button) drops a parcel on the tanks below. The arrow keys fly it too. Climb too steeply and it stalls;
@@ -40,9 +58,13 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
   the name, the colour and the vehicle can be changed; the tab stays open, and the start button joins
   again. In a plane or a ship the first Esc only lets the mouse go (the browser's rule), the second one
   leaves.
-- **The bots** are driven by the server: they roam Karlín's real streets, chase the nearest tank and
-  shoot back, fire short bursts at a plane that flies low over them, and parcels at a ship close to
-  the embankment.
+- **The bots** are driven by the server and fill both teams up to six (a person who comes in takes a
+  bot's place). Each team has a bot plane and a bot ship (unless one of its people flies or sails one), the
+  rest are tanks. The tanks drive Karlín's real streets to the zones and capture them, fight the other
+  team's tanks and ships, and fire short bursts at a plane that flies low over them; the planes bomb the
+  depots and fight the other team's planes; the ships hold the river zone and fight the other ships with
+  their guns, torpedoes and anti-aircraft guns. They fly and sail the players' own planes and ships and
+  make mistakes on purpose: they can be beaten.
 - **A construction site** (off for now): sand piles, barriers, machines, a tower crane, a half-built
   house and a container yard, all of it cover. Karlín's empty lots are too small for it, so it waits
   for a real building site in Karlín (#17, `SITE_LOT` in client/shared/map.ts).
@@ -132,9 +154,13 @@ client/src/         the game in TypeScript on Babylon.js, built by Vite into cli
   ui/               HUD and minimap;  main.ts: the frame loop and the join form
 client/shared/      the world, written once and run by the page and the server alike: map.ts (the solids,
                     the ground, the street graph, spawn points; from karlin.json), geom.ts, site.ts (the
-                    construction site), the traffic, tram and pedestrian code
-server/server.js    serves the built page, relays the players over a WebSocket, keeps the score
-server/bots.js      the bots: driving the street graph, aiming, and what happens when a parcel hits one
+                    construction site), naval.ts (the river), rules.ts (the teams, zones, depots and their
+                    numbers), the traffic, tram and pedestrian code
+server/server.js    serves the built page, relays the players over a WebSocket, keeps the score and the teams
+server/game.js      the team game: team scores, zones, depots, rounds (the rules: client/shared/rules.ts)
+server/bots.js      the bots: the tanks (driving the street graph, aiming), and what happens when something hits one
+server/planebot.js  the plane bots (the players' flight model);  server/shipbot.js: the ship bots
+server/shots.js     what the server flies: the people's shots at the bots, everything the bots fire
 server/world.js     the shared city life: cars, tram, pedestrians, knocked-down trees and lamps
 server/city.js      the map for the server (client/shared/map.ts, which Node 24 runs as it is)
 tools/karlin/       the map's generator (OpenStreetMap, IPR Praha, ČÚZK → client/shared/karlin.json)
@@ -147,7 +173,8 @@ or bullet is passed on, and every browser flies it. **The player who gets hit by
 hit**, because on that screen their tank is exactly where it is; **a bullet's shooter decides** (a fast
 plane would be out of reach otherwise), and the server passes the hit on. The server awards the points. The bots and the life
 of the city (cars, tram, pedestrians) run on the server, so everyone sees the same city, and the
-server decides what hits a bot. **A car a tank shoves is that player's** until it comes to rest: their
+server decides what hits a bot. **The server keeps the team game**: the zones, the depots (a browser says
+where its parcel, shell or bullet hit one, the server checks it), the team scores and the rounds. **A car a tank shoves is that player's** until it comes to rest: their
 browser moves it and the server passes it on.
 
 Every row of a snapshot carries the moment it shows on the server's clock, and the browsers draw the
@@ -168,8 +195,10 @@ Environment variables of the server:
 | Variable | Default | |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP and WebSocket port |
-| `BOTS` | `3` | number of bots, 0–8; they drive only while at least one person is playing |
+| `TEAM_SIZE` | `6` | members of a team: bots fill each team up to it, people counted (1–16); they play only while at least one person is in |
 | `MAX_PLAYERS` | `24` | people at once; the bots come on top |
+| `ROUND_POINTS` | `1000` | the points that win a round (for tests) |
+| `ROUND_SEC` | `900` | a round's length in seconds (for tests) |
 
 ## Tests
 
@@ -181,7 +210,9 @@ node tools/test-map.ts # the shared map core (client/shared/map.ts): collisions,
 ```
 
 The smoke and browser tests take their places (spawn points, a street for a duel, a house's wall) from
-the map itself, so run them against a server of the same version.
+the map itself, so run them against a server of the same version. The smoke test plays a whole round
+(its team scores up to the round's points, `ROUND_POINTS`), so run it against a server nobody plays on; it
+takes about two and a half minutes.
 
 There is no CI on purpose: it is a game for fun, and a push to `main` goes straight to the server
 (see Deploy). Run the checks yourself before you push.
@@ -217,6 +248,8 @@ The WebSocket runs over the same HTTPS port (`/ws`), nothing else to open.
   moment ago on its owner's screen. A car somebody else is pushing does not give way to you until they
   let go of it.
 - One server is one world. More players than `MAX_PLAYERS` wait outside.
+- The supply depots do not stop a tank (it drives through them); the bots never ram anybody, and a ship
+  bot is not hurt by a person's ship ramming it.
 
 ## Contributing
 

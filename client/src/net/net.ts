@@ -6,6 +6,9 @@
 // here they are drawn like the other players, in grey. The cars, the tram and the people are the shared city, see net/world.ts.
 // World of DODO, issue #20: a player may sail a ship on the Vltava (k 2 in the rows, with its heave, pitch and turrets), and the ships
 // fire shells (fire k 2) and torpedoes (fire k 3), flown and decided like parcels (game/shells.ts).
+// World of DODO, issue #24: two teams. hello asks for a team (or auto), welcome and join say everyone's (team moves someone later, at a
+// round's end), obj carries the round (game/teams.ts), thit reports my hit on a supply depot. A teammate's tag and paint stay theirs,
+// the tag glows in the team's colour, and the scoreboard lists the teams with their scores, mine first.
 //
 // World of DODO, timing, as most network games do it (Valve's Source engine; Gabriel Gambetta's and Glenn Fiedler's write-ups on
 // snapshot interpolation): every snapshot row says which moment of the server's clock it shows, and this browser draws the others INTERP
@@ -19,10 +22,12 @@ import { camera, canvas, scene } from '../core/engine';
 import { $ } from '../core/dom';
 import { lerp, angLerp, r2, hexCss } from '../core/util';
 import { groundH, segHit } from '../world/grid';
-import { G, car } from '../game/state';
+import { G, car, view } from '../game/state';
 import type { Other, Row } from '../game/types';
+import { TM, objMsg, teamsWelcome, flagTeam, teamCss, teamHex, teamName, thitSent, friendly, type ObjMsg } from '../game/teams';
+import { DEPOTS } from '../../shared/rules.ts';
 import { T } from '../texts';
-import { makeTank, disposeTank, paintMat, vanMat, vanOwnMat, hitPlayer } from '../game/tank';
+import { makeTank, disposeTank, paintMat, vanMat, vanOwnMat, hitPlayer, respawn } from '../game/tank';
 import { makePlane, disposePlane, spinProp } from '../game/plane';
 import { makeShip, disposeShip, poseShip, turretYaw } from '../game/ship';
 import { netBullet } from '../game/bullets';
@@ -48,6 +53,7 @@ export interface NetOther extends Other { tag: Tag; mat: Material }
 export const NET = {
   ws: null as WebSocket | null, id: 0, name: '', color: 0, pts: 0, want: false, live: false, inGame: false, err: '', retry: 0, retryT: 0, sendT: 0, sid: 0, rr: 0,
   off: null as number | null, pingAt: 0, others: new Map<number, NetOther>(),
+  team: -1, teamPick: 'auto' as 'auto' | 0 | 1,   // issue #24: my team (0 A, 1 B; -1 none yet), and the one asked for in the join form
   key: Array.from(crypto.getRandomValues(new Uint8Array(24)), b => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[b & 63]).join(''),   // this page load: a reconnect keeps the score, a reload starts at 0
 };
 // the colours a player can pick; the server accepts only these (COLORS in server/server.js, same order)
@@ -94,7 +100,7 @@ export function netConnect() {
   let ws: WebSocket;
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { netFail(T.errConn); return; }
   NET.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: NET.name, color: NET.color, key: NET.key }));
+  ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: NET.name, color: NET.color, key: NET.key, team: NET.teamPick }));
   ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } if (NET.ws === ws) netMsg(m); };
   ws.onclose = () => {
     if (NET.ws !== ws) return;
@@ -123,14 +129,22 @@ function netMsg(m: any) {
     else { const sh = NET.others.get(m.by); if (sh) sh.pts = m.pts; }
     renderBoard();
   }
-  else if (m.t === 'dmg') {                                                           // issue #14: someone's bullet hit me on their screen
-    if (hitPlayer('bullet', 1, T.gunBy(netName(m.by)))) { const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(m.by))); netHit({ by: m.by, sid: m.sid }, kill); }
+  else if (m.t === 'dmg') {                                                           // issue #14: someone's bullet hit me on their screen (#24: not a teammate's)
+    if (!friendly(m.by) && hitPlayer('bullet', 1, T.gunBy(netName(m.by)))) { const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(m.by))); netHit({ by: m.by, sid: m.sid }, kill); }
   }
+  else if (m.t === 'obj') objMsg(m as ObjMsg);                                        // issue #24: the round, the zones, the depots
+  else if (m.t === 'pts') {                                                          // issue #24: points for a zone taken or a depot destroyed
+    if (m.id === NET.id) NET.pts = m.pts; else { const o = NET.others.get(m.id); if (o) o.pts = m.pts; }
+    renderBoard();
+  }
+  else if (m.t === 'team') setTeam(m.id, m.team);                                     // issue #24: someone moved to the other team
   else if (m.t === 'join') { netAdd(m.p); renderBoard(); }
   else if (m.t === 'leave') { const o = NET.others.get(m.id); if (o) { netDrop(o); NET.others.delete(m.id); renderBoard(); } }
   else if (m.t === 'welcome') {
     NET.live = true; NET.retry = 0; NET.err = ''; NET.id = m.id; NET.name = m.name; NET.color = m.color; NET.pts = m.pts; paintMat(vanOwnMat, m.color);
-    NET.others.forEach(netDrop); NET.others.clear(); m.players.forEach(netAdd); renderBoard();
+    NET.team = m.team === 0 || m.team === 1 ? m.team : -1; paintOwn();                // issue #24: my team, on my vehicles' flags
+    NET.others.forEach(netDrop); NET.others.clear(); m.players.forEach(netAdd);
+    teamsWelcome(m.game); renderBoard();                                               // issue #24: the round as it stands
     NET.off = null; worldClear();                                                      // the server may have restarted: a new clock, a new city
     if (!NET.inGame) { NET.inGame = true; WORLD.on = true; start(); } else flash(T.back);
     propsDown(m.props);
@@ -148,13 +162,31 @@ export function netLeave() {
   NET.others.forEach(netDrop); NET.others.clear(); renderBoard();
   WORLD.on = false; worldClear();
 }
-// another player or a bot: the tank in their paint, the name glowing above it
-function netAdd(p: { id: number; name: string; color: number; pts?: number; bot?: boolean }) {
+// another player or a bot: the tank in their paint, the name glowing above it (World of DODO, issue #24: in their team's colour, which
+// their vehicles' flags show too)
+function netAdd(p: { id: number; name: string; color: number; pts?: number; bot?: boolean; team?: number }) {
   if (p.id === NET.id || NET.others.has(p.id)) return;
-  const mat = paintMat(vanMat.clone('tank' + p.id), p.color), g = makeTank(false, mat), tag = nameTag(p.name, p.color);
-  g.setEnabled(false); tag.visible = false;
-  NET.others.set(p.id, { id: p.id, name: p.name, color: p.color, pts: p.pts || 0, bot: !!p.bot, g, pg: null, sg: null, mat, tag, buf: [], on: false, x: 0, z: 0, h: 0, hx: 0, hz: 1, v: 0, r: 0, s: 0, k: 0, y: 0, p: 0, a: 0, b: Math.PI });
+  const team = p.team === 0 || p.team === 1 ? p.team : -1;
+  const mat = paintMat(vanMat.clone('tank' + p.id), p.color), g = makeTank(false, mat), tag = nameTag(p.name, teamHex(team, p.color));
+  g.setEnabled(false); tag.visible = false; flagTeam(g, team);
+  NET.others.set(p.id, { id: p.id, name: p.name, color: p.color, pts: p.pts || 0, bot: !!p.bot, team, g, pg: null, sg: null, mat, tag, buf: [], on: false, x: 0, z: 0, h: 0, hx: 0, hz: 1, v: 0, r: 0, s: 0, k: 0, y: 0, p: 0, a: 0, b: Math.PI });
 }
+// World of DODO, issue #24: someone (or I) moved to team t, at a round's end to even the teams: their tag and flags, or mine (and I come
+// back in my new half)
+function setTeam(id: unknown, t: unknown) {
+  const team = t === 0 || t === 1 ? t : -1;
+  if (id === NET.id) {
+    const was = NET.team; NET.team = team; TM.on = team >= 0; paintOwn();
+    if (was !== team && team >= 0 && G.state === 'drive') { respawn(); flash(T.teamMoved(teamName(team))); }
+  } else {
+    const o = NET.others.get(id as number); if (!o) return;
+    o.team = team; o.tag.style.setProperty('--c', hexCss(teamHex(team, o.color)));
+    flagTeam(o.g, team); flagTeam(o.pg, team); flagTeam(o.sg, team);
+  }
+  renderBoard();
+}
+// my tank's, plane's and ship's flags in my team's colour
+function paintOwn() { for (const g of [view.van, view.plane, view.ship]) flagTeam(g, NET.team); }
 // their tank, plane and ship go with their meshes (and their shadows, game/tank.ts disposeTank), its paint and its tag
 function netDrop(o: NetOther) { disposeTank(o.g); if (o.pg) disposePlane(o.pg); if (o.sg) disposeShip(o.sg); o.mat.dispose(); o.tag.remove(); }
 // spinning wheels, for the callers that have them (a tank's list is empty, see game/tank.ts)
@@ -269,8 +301,8 @@ export function netUpdate(dt: number, tnow: number) {
     o.x = s.x; o.z = s.z; o.h = s.h; o.v = s.v; o.r = s.r; o.s = s.s; o.k = s.k; o.y = s.y; o.p = s.p; o.a = s.a; o.b = s.b; o.hx = Math.sin(o.h); o.hz = Math.cos(o.h);
     o.on = true;
     const blink = o.s === 1 && Math.floor(tnow / 110) % 2 === 1, plane = o.k === 1, ship = o.k === 2;   // blinks while immune after a (re)spawn
-    if (plane && !o.pg) o.pg = makePlane(o.mat as StandardMaterial);
-    if (ship && !o.sg) o.sg = makeShip(o.mat as StandardMaterial);
+    if (plane && !o.pg) { o.pg = makePlane(o.mat as StandardMaterial); flagTeam(o.pg, o.team); }   // (issue #24: in the team's colours)
+    if (ship && !o.sg) { o.sg = makeShip(o.mat as StandardMaterial); flagTeam(o.sg, o.team); }
     o.g.setEnabled(!plane && !ship && !blink); o.pg?.setEnabled(plane && o.s !== 2 && !blink); o.sg?.setEnabled(ship && o.y > -7.5 && !blink);
     const gy = groundH(o.x, o.z);
     if (plane) {                                                                                         // issue #14: a plane, gone once destroyed
@@ -299,18 +331,39 @@ export function inSight(x: number, y: number, z: number) {
   if ((x - c.x) ** 2 + (y - c.y) ** 2 + (z - c.z) ** 2 > max * max) return false;
   return segHit(c.x, c.y, c.z, x, y, z) >= 1;
 }
-// the scoreboard: the best five, and you below them if you are not among them; ties share a rank; bots are listed too
+// the scoreboard: the best five, and you below them if you are not among them; ties share a rank; bots are listed too.
+// World of DODO, issue #24: by teams, mine first: a team's row with its score (game/teams.ts TM.sc: the hits, the zones and the depots of
+// all its players and bots), under it its best six (and me); a phone shows the best two of each (and me), the rows marked x hide there
+type BoardRow = { name: string; color: number; pts: number; me?: boolean; bot?: boolean; team?: number };
+function boardLi(el: HTMLElement, cls: string, rank: string, color: string, name: string, pts: number) {
+  const li = document.createElement('li'); li.className = cls;
+  li.innerHTML = '<span class="rk meta"></span><i></i><span class="nm"></span><b class="meta"></b>';
+  li.querySelector('.rk')!.textContent = rank; li.querySelector('i')!.style.background = color;
+  li.querySelector('.nm')!.textContent = name; li.querySelector('b')!.textContent = String(pts); el.appendChild(li);
+}
 export function renderBoard() {
-  const all: { name: string; color: number; pts: number; me?: boolean; bot?: boolean }[] = [{ name: NET.name, color: NET.color, pts: NET.pts, me: true }, ...NET.others.values()];
+  const all: BoardRow[] = [{ name: NET.name, color: NET.color, pts: NET.pts, me: true, team: NET.team }, ...NET.others.values()];
   all.sort((a, b) => b.pts - a.pts || +!!a.bot - +!!b.bot || a.name.localeCompare(b.name, T.lang));
-  const rows = all.slice(0, 5), mine = all.find(p => p.me)!; if (!rows.includes(mine)) rows.push(mine);
-  const el = $('board'); el.innerHTML = '';
-  for (const p of rows) {
-    const li = document.createElement('li'); li.className = p.me ? 'me' : p.bot ? 'bot' : '';
-    li.innerHTML = '<span class="rk meta"></span><i></i><span class="nm"></span><b class="meta"></b>';
-    li.querySelector('.rk')!.textContent = String(1 + all.filter(q => q.pts > p.pts).length); li.querySelector('i')!.style.background = hexCss(p.color);
-    li.querySelector('.nm')!.textContent = p.name; li.querySelector('b')!.textContent = String(p.pts); el.appendChild(li);
+  const el = $('board'), mine = all.find(p => p.me)!; el.innerHTML = '';
+  const row = (p: BoardRow, of: BoardRow[], x: boolean) => boardLi(el, (p.me ? 'me' : p.bot ? 'bot' : '') + (x ? ' x' : ''), String(1 + of.filter(q => q.pts > p.pts).length), hexCss(p.color), p.name, p.pts);
+  if (NET.team === 0 || NET.team === 1) {
+    for (const t of [NET.team, 1 - NET.team]) {
+      boardLi(el, 'team t' + t, '', teamCss(t), T.team(teamName(t)), Math.round(TM.sc[t] || 0));
+      const mem = all.filter(p => p.team === t), rows = mem.slice(0, 6);
+      if (t === NET.team && !rows.includes(mine)) rows.push(mine);
+      rows.forEach((p, k) => row(p, mem, k >= 2 && !p.me));
+    }
+  } else {
+    const rows = all.slice(0, 5); if (!rows.includes(mine)) rows.push(mine);
+    rows.forEach((p, k) => row(p, all, k >= 3 && !p.me));
   }
   $('online').textContent = T.online(all.filter(p => !p.bot).length); $('myPts').textContent = String(NET.pts);
+}
+// World of DODO, issue #24: my parcel (k 0), bullet (1) or shell (2) number sid hit supply depot i at (x, y, z) on my screen (game/shots.ts,
+// bullets.ts, shells.ts): the server checks it against its depots and applies the damage. Not on my own team's depots (they cannot be
+// damaged), not in the break after a round.
+export function netThit(i: number, k: number, x: number, y: number, z: number, sid: number) {
+  const d = DEPOTS[i]; if (!d || !TM.on || G.hold || d.team === NET.team || !sid) return;
+  thitSent(i); netSend({ t: 'thit', i, k, x: r2(x), y: r2(y), z: r2(z), sid });
 }
 export function joinErr(msg: string) { const e = $('joinErr'); e.textContent = msg; e.hidden = !msg; }
