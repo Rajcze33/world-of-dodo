@@ -1,5 +1,8 @@
 node_modules
+client/dist
 docs
 tools
+!tools/compress.js
 .git
 *.log
+test-shots

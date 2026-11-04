@@ -21,8 +21,9 @@ anything.
 
 ## Before you push
 
-- `npm run check`, then `docker compose up --build -d` and `npm run smoke` (http://localhost:3400).
-  A change to the game page also wants `npm run test:browser` (Chrome + puppeteer-core, see README).
+- `npm run check` (TypeScript), then `docker compose up --build -d` and `npm run smoke`
+  (http://localhost:3400). A change to the game page also wants `npm run test:browser` (Chrome +
+  puppeteer-core, see README); the page is built in the Docker image, or with `npm run build`.
 - There is no CI, and `main` is what runs on the server: never push untested work to `main`; use a
   branch and a pull request.
 - A protocol change updates docs/PROTOCOL.md and tools/smoke.js in the same pull request.
@@ -33,7 +34,8 @@ anything.
 
 ## Style
 
-- The game is one dense HTML file on purpose (no build step). Write like the code around you,
+- The game is TypeScript on Babylon.js in `client/src`, one module per part (README lists them;
+  CONTRIBUTING has the 3D conventions and the build order). Write like the code around you,
   explain the why in comments, and mark changes against the original game "World of DODO".
-- Player-facing texts live in `T` at the top of the game script: Czech first, English in the
-  `LANG==='en'` blocks.
+- Player-facing texts live in `client/src/texts.ts`: Czech first (`CS`), English (`EN`) with the
+  same keys.

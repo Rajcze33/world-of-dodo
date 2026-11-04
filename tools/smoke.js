@@ -65,19 +65,21 @@ async function refused(hello) {
   const html = await r.text();
   check(r.status === 200 && html.includes('World of DODO'), 'GET / serves the game');
   check((r.headers.get('content-security-policy') || '').includes("connect-src 'self' ws: wss:"), 'the page has its content policy');
-  r = await fetch(BASE + '/vendor/three.r128.min.js');
-  check(r.status === 200 && r.headers.get('content-type').startsWith('text/javascript'), 'three.js is served');
+  const app = (html.match(/<script type="module"[^>]*src="(\/app\/[^"]+\.js)"/) || [])[1];
+  r = app ? await fetch(BASE + app) : { status: 0, headers: new Headers() };
+  check(r.status === 200 && (r.headers.get('content-type') || '').startsWith('text/javascript'), `the built game script is served (${app})`);
+  check((r.headers.get('cache-control') || '').includes('immutable'), 'the built script may be cached for good (its name changes with it)');
   r = await fetch(BASE + '/fonts/Poppins-SemiBold.ttf');
   check(r.status === 200, 'fonts are served');
   r = await fetch(BASE + '/assets/logo-white.png');
   check(r.status === 200, 'the logo is served');
   r = await fetch(BASE + '/shared/site.js');
   check(r.status === 200 && (await r.text()).includes('WOD_SITE'), 'the construction site layout is served');
-  r = await fetch(BASE + '/vendor/..%2f..%2fserver%2fserver.js');
+  r = await fetch(BASE + '/app/..%2f..%2f..%2fserver%2fserver.js');
   // 404 from this server; behind the Zerops balancer the request is refused with 400 before it gets here
   check(r.status === 404 || r.status === 400, `no way out of the client folder (${r.status})`);
   r = await fetch(BASE + '/package.json');
-  check(r.status === 404, 'nothing outside the three asset folders');
+  check(r.status === 404, 'nothing outside the asset folders');
   r = await fetch(BASE + '/health');
   check(r.status === 200 && (await r.json()).ok === true, '/health answers');
 

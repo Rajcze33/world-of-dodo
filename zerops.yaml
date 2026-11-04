@@ -4,11 +4,16 @@ zerops:
   - setup: game
     build:
       base: nodejs@24
+      # the game page is built here (Vite, TypeScript, Babylon.js); the build tools stay behind, only the server's
+      # packages go with it
       buildCommands:
-        - npm ci --omit=dev --ignore-scripts
+        - npm ci --ignore-scripts
+        - npm run build
+        - npm prune --omit=dev
       deployFiles:
         - server
-        - client
+        - client/dist
+        - client/shared
         - node_modules
         - package.json
       cache:

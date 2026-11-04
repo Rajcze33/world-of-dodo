@@ -12,7 +12,7 @@
 // after PROP_BACK_MS.
 'use strict';
 
-const THREE = require('../client/vendor/three.r128.min.js');   // only for the tram's curve, so its track matches the client's
+const THREE = require('./vendor/three.r128.min.js');   // only for the tram's curve; the client has the same curve in client/src/world/catmull.ts
 const { CELL, HALF, roadC, blockC, TRAM_K, DEPOT_PARK, freeAt } = require('./city');
 
 // ---------- traffic (client: "moving traffic") ----------
