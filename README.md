@@ -36,6 +36,10 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
   tank, 4 in a ship, a torpedo 15. A destroyed vehicle comes back somewhere else (a ship sinks first),
   blinking and immune for a few seconds; V switches between tank, plane and ship (while destroyed, 1, 2
   or 3 picks the next one).
+- **Back to the menu.** Esc (or the Menu button on a phone) leaves the game for the start screen, where
+  the name, the colour and the vehicle can be changed; the tab stays open, and the start button joins
+  again. In a plane or a ship the first Esc only lets the mouse go (the browser's rule), the second one
+  leaves.
 - **The bots** are driven by the server: they roam Karlín's real streets, chase the nearest tank and
   shoot back, fire short bursts at a plane that flies low over them, and parcels at a ship close to
   the embankment.
