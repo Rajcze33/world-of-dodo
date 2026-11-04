@@ -7,6 +7,7 @@ export const G = {
   state: 'intro' as 'intro' | 'drive',
   camMode: 0,                       // 0: behind the tank, 1: high above it (C or the camera button)
   realSec: 0,                       // seconds since driving out (the start hint shows for the first few)
+  hold: false,                      // World of DODO, issue #24: the break after a round (game/teams.ts): nobody fires, no hit counts
 };
 
 // the player's vehicle: a tank or (World of DODO, issue #14) a plane, or (issue #20) a ship on the Vltava. k: what it is now (0 a tank,

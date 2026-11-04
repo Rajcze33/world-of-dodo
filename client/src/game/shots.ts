@@ -15,12 +15,14 @@ import { WATER_Y, surfaceY } from '../../shared/naval.ts';
 import { splash } from '../world/water';
 import { ALLCARS, TRAM, TRAM_L, TRAM_W, PARCEL_M, carBody, putBody, impulse, toDyn } from '../world/traffic';
 import { PEDS, knockPed } from '../world/peds';
-import { NET, netFire, netHit, netName } from '../net/net';
+import { NET, netFire, netHit, netName, netThit } from '../net/net';
 import { WORLD, netPed } from '../net/world';
 import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
 import { PLANE_R } from './bullets';
-import { shipBox, SHIP_HH } from './shells';
+import { shipBox, SHIP_HH, burst } from './shells';
+import { friendly, teamOf } from './teams';
+import { depotBody, depotHitAt } from '../world/objectives';
 
 export const SHOT_MAX = 64, SHOT_G = 14;
 const SHOT_SPEED = 45, SHOT_UP = 4, SHOT_CD = 0.28, SHOT_LIFE = 14, SHOT_E = 0.4;
@@ -132,6 +134,11 @@ export function spawnShot(x: number, z: number, fx: number, fz: number, sp: numb
   s.on = true; s.rest = false; s.touched = false; s.owner = owner; s.age = 0; s.ox = s.oz = 0; s.x = x + fx * 3.1; s.y = 1.5; s.z = z + fz * 3.1; s.vx = fx * sp; s.vz = fz * sp; s.vy = SHOT_UP;
   s.wx = (Math.random() - 0.5) * 10; s.wy = (Math.random() - 0.5) * 10; showShot(s, Math.atan2(fx, fz)); return s;
 }
+// World of DODO, issue #24: parcel s bursts at supply depot i (game/shells.ts burst); mine reports the hit (thit, k 0)
+function depotBurst(s: Shot, i: number) {
+  burst(s.x, s.y, s.z, 0.8); if (s.owner === 'p') netThit(i, 0, s.x, s.y, s.z, s.sid);
+  s.on = false; s.vis = false;
+}
 export function clearShots() { shots.forEach(s => { s.on = false; s.vis = false; }); shotCd = 0; drawShots(); }
 export function updateShots(dt: number) {
   shotCd = Math.max(0, shotCd - dt);
@@ -144,6 +151,10 @@ export function updateShots(dt: number) {
     for (let i = 0; i < n; i++) {
       const px = s.x, py = s.y, pz = s.z;
       s.vy -= SHOT_G * h; s.x += s.vx * h; s.y += s.vy * h; s.z += s.vz * h;
+      // World of DODO, issue #24: a parcel that runs into a standing supply depot bursts there, on every screen; mine tells the server,
+      // which decides the damage (net/net.ts netThit: not for my own team's depots)
+      const di = depotBody(s.x, s.y, s.z);
+      if (di >= 0) { depotBurst(s, di); break; }
       const hit = shotHit(s.x, s.y, s.z, px, py, pz, s.owner);
       if (hit) {
         if (hit.top !== undefined) { s.y = hit.top + 0.25; s.vx = s.vy = s.vz = 0; s.rest = true; s.g.rotation.x = s.g.rotation.z = 0; break; } // lands on a roof
@@ -159,7 +170,8 @@ export function updateShots(dt: number) {
         }
         else if (hit.player) {                                                   // another player's parcel hits you
           const sg = Math.random() < 0.5 ? 1 : -1;
-          if (!s.scored && hitPlayer('shot', sg, (car.k === 2 ? T.shipHitBy : T.hitBy)(netName(s.by)))) {    // a hit that took effect scores for the shooter
+          // a hit that took effect scores for the shooter (World of DODO, issue #24: a teammate's parcel only bounces off)
+          if (!s.scored && !friendly(s.by) && hitPlayer('shot', sg, (car.k === 2 ? T.shipHitBy : T.hitBy)(netName(s.by)))) {
             s.scored = true; const kill = car.topT > 0;
             if (kill) flash(T.killedBy(netName(s.by))); netHit(s, kill);
           }
@@ -179,6 +191,12 @@ export function updateShots(dt: number) {
       if (g0 === WATER_Y && s.y < g0) { splash(s.x, s.z, 0.45); s.on = false; s.vis = false; break; }
       if (s.y < gy + 0.25) {
         s.y = gy + 0.25;
+        // World of DODO, issue #24: where it first comes down near an enemy's supply depot (client/shared/rules.ts depotAt, within
+        // DEPOT_NEAR of it) it bursts and counts, as on the server; the shooter's own team's depots it only bounces past
+        if (!s.touched && s.vy < 0) {
+          s.touched = true;
+          const dn = depotHitAt(s.x, s.y, s.z, 0, s.owner === 'p' ? NET.team : teamOf(s.by)); if (dn >= 0) { depotBurst(s, dn); break; }
+        }
         if (s.vy < 0) { s.vy = -s.vy * SHOT_E; s.vx *= 0.78; s.vz *= 0.78; s.wx *= 0.6; s.wy *= 0.6; if (s.vy < 1.8) s.vy = 0; }
         if (s.vy === 0) {
           s.vx *= Math.max(0, 1 - 4 * h); s.vz *= Math.max(0, 1 - 4 * h);

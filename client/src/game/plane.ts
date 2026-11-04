@@ -30,6 +30,9 @@ import { flash } from '../ui/hud';
 import { carStatus, toppleCar, camLook, vanOwnMat, SPAWN_IMMUNE } from './tank';
 import { fireBullet, BUL_V, PLANE_R } from './bullets';
 import { dropShot, SHOT_G } from './shots';
+import { teamMat, isTeamPart, friendly, home } from './teams';
+import { depotBody } from '../world/objectives';
+import { PLANE_SIDE_X } from '../../shared/rules.ts';
 
 // flight: stall speed, the speed of the best turn, engine thrust, drag, gravity (arcade: stronger than real, so height costs speed),
 // the fastest turn (rad/s), the speed a hard turn bleeds, how far the plane banks into a turn
@@ -57,21 +60,23 @@ export function makePlane(paint: StandardMaterial): TransformNode {
   const mesh = (name: string, geo: Geo, mat: StandardMaterial, cast: boolean, parent: TransformNode = g) => { const m = geoMesh(name, geo, mat, cast, false); m.parent = parent; return m; };
   const at = (geo: Geo, x: number, y: number, z: number) => translate(geo, x, y, z);
   const along = (geo: Geo) => rotateX(geo, Math.PI / 2);                            // a cylinder's top end to the nose (+z)
-  const paintG = Bucket(), rest = Bucket(), glow = Bucket();
+  const paintG = Bucket(), rest = Bucket(), glow = Bucket(), team = Bucket();
   addGeo(paintG, at(along(cylGeo(0.5, 0.62, 2.0, 10)), 0, 0, 1.45), null, 0xffffff);        // the fuselage: engine section
   addGeo(paintG, at(along(cylGeo(0.62, 0.2, 3.0, 10)), 0, 0, -1.05), null, 0xffffff);       // and the tail cone
   for (const sx of [-1, 1]) {
     addGeo(paintG, at(rotateZ(boxGeo(3.3, 0.16, 1.5), sx * 0.06), sx * 1.95, -0.28, 0.55), null, 0xffffff);   // wings, a little dihedral
-    addGeo(rest, at(rotateZ(boxGeo(0.45, 0.17, 1.52), sx * 0.06), sx * 3.1, -0.21, 0.55), null, COL.white);  // white stripes near the tips
+    addGeo(team, at(rotateZ(boxGeo(0.45, 0.17, 1.52), sx * 0.06), sx * 3.1, -0.21, 0.55), null, COL.white);  // stripes near the tips (issue #24: the team's)
     addGeo(rest, at(along(cylGeo(0.05, 0.05, 0.7, 6)), sx * 1.5, -0.3, 1.45), null, COL.charcoal);            // the guns
     addGeo(glow, at(boxGeo(0.18, 0.12, 0.18), sx * 3.62, -0.15, 0.55), null, sx > 0 ? 0xff4040 : 0x40ff80);   // port red (+x), starboard green
   }
   addGeo(paintG, at(boxGeo(2.8, 0.1, 0.75), 0, 0.05, -2.3), null, 0xffffff);                // tailplane
   addGeo(paintG, at(boxGeo(0.1, 1.05, 0.95), 0, 0.55, -2.3), null, 0xffffff);               // fin
+  addGeo(team, at(boxGeo(0.13, 0.36, 0.97), 0, 0.9, -2.3), null, 0xffffff);                 // World of DODO, issue #24: the fin's top in the team's colour
   addGeo(rest, at(along(cylGeo(0.52, 0.52, 0.22, 12)), 0, 0, 2.5), null, COL.charcoal);     // the cowling's ring
   addGeo(rest, at(along(coneGeo(0.24, 0.55, 10)), 0, 0, 2.86), null, COL.white);            // the spinner
   addGeo(glow, at(boxGeo(0.14, 0.14, 0.14), 0, 0.3, -2.8), null, 0xffffff);                 // the tail light
   mesh('planePaint', paintG, paint, true); mesh('planeParts', rest, VC_MAT, true); mesh('planeLights', glow, VC_GLOW, false);
+  const teamM = mesh('planeTeam', team, teamMat(-1), true);                                // painted by game/teams.ts flagTeam
   mesh('planeCanopy', at(scaleGeo(sphereGeo(0.42, 10, 6, Math.PI / 2), 1, 1, 2.1), 0, 0.42, 0.1), lambert(0x1d2a33, { emissive: COL.light, emissiveIntensity: 0.3 }), false);
   // the logo on top of each wing, readable from behind the plane
   const logo = (sx: number) => at(rotateY(rotateX(planeGeo(1.9, 0.64), -Math.PI / 2), Math.PI), sx * 2.0, -0.19 + sx * 0.0, 0.55);
@@ -82,12 +87,13 @@ export function makePlane(paint: StandardMaterial): TransformNode {
   const blades = Bucket(); for (let k = 0; k < 3; k++) addGeo(blades, rotateZ(at(boxGeo(0.18, 1.15, 0.05), 0, 0.62, 0), k * Math.PI * 2 / 3), null, COL.charcoal);
   mesh('planeBlades', blades, VC_MAT, false, prop);
   mesh('planeDisc', circleGeo(1.25, 24), basic(0xffffff, { transparent: true, opacity: 0.06, double: true, depthWrite: false }), false, prop);
-  g.metadata = { prop };
+  g.metadata = { prop, team: [teamM] };
   return g;
 }
-// another player's plane leaves (net/net.ts): its meshes go, with their shadows and own materials (the paint is the caller's)
+// another player's plane leaves (net/net.ts): its meshes go, with their shadows and own materials (the paint is the caller's; issue #24:
+// the team's colour is shared, game/teams.ts)
 export function disposePlane(g: TransformNode) {
-  for (const m of g.getChildMeshes()) { removeCaster(m); if (m.material && m.material !== VC_MAT && m.material !== VC_GLOW && m.name !== 'planePaint') m.material.dispose(); }
+  for (const m of g.getChildMeshes()) { removeCaster(m); if (m.material && m.material !== VC_MAT && m.material !== VC_GLOW && m.name !== 'planePaint' && !isTeamPart(m)) m.material.dispose(); }
   g.dispose();
 }
 
@@ -100,12 +106,15 @@ export function buildPlane() {
 }
 
 // ---------- spawning ----------
-// on a circle round the city at the edge of the airspace, facing its centre, as far from the others as it allows
+// on a circle round the city at the edge of the airspace, facing its centre, as far from the others as it allows. World of DODO, issue
+// #24: from my team's side (A the west, B the east: where x is on it and at least PLANE_SIDE_X from the middle, as the server's plane
+// bots come in; client/shared/rules.ts), far from the enemy
 export function spawnPlane() {
   let best = 0, bs = -1;
   for (let i = 0; i < 16; i++) {
     const a = i / 16 * Math.PI * 2, x = Math.sin(a) * SPAWN_R, z = Math.cos(a) * SPAWN_R;
-    let d = 1400; for (const o of NET.others.values()) if (o.on) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
+    if (NET.team >= 0 && (Math.abs(x) < PLANE_SIDE_X || !home(x))) continue;
+    let d = 1400; for (const o of NET.others.values()) if (o.on && !friendly(o.id)) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
     const sc = d + Math.random() * 60; if (sc > bs) { bs = sc; best = a; }
   }
   const x = Math.sin(best) * SPAWN_R, z = Math.cos(best) * SPAWN_R, h = Math.atan2(-x, -z), y = Math.max(SPAWN_Y, ridge(x, z) + 25);
@@ -140,6 +149,7 @@ function crashed(x: number, y: number, z: number): boolean {
   if (solidNear(x, y, z, 0.9, 0.6)) return true;
   if (y < 8) for (const p of propsNear(x, z)) if (p.state === 'up' && Math.hypot(x - p.x, z - p.z) < p.r + 1.2) return true;
   if (landHit(x, y, z)) return true;
+  if (y < 12 && depotBody(x, y, z) >= 0) return true;                // World of DODO, issue #24: a standing supply depot
   for (const o of NET.others.values()) {
     if (!o.on || o.s === 2) continue;
     if (o.k === 1 ? Math.hypot(o.x - x, o.y - y, o.z - z) < PLANE_R * 1.1 : o.k === 2 ? shipBox(x, y, z, o.x, o.y, o.z, o.h) : y < 3.2 && Math.hypot(o.x - x, o.z - z) < 3) return true;
@@ -206,7 +216,7 @@ export function updateFly(dt: number) {
 
   // the guns: the two take turns, their lines meet GUN_CONV ahead
   pl.gunCd -= dt; pl.bombCd -= dt;
-  const busy = car.swT > 0;                                  // switching to the other vehicle: no firing
+  const busy = car.swT > 0 || G.hold;                        // switching to the other vehicle (or the break after a round, issue #24): no firing
   if ((K.fire || input.lmb) && pl.gunCd <= 0 && !busy) {
     pl.gunCd = Math.max(0, pl.gunCd + GUN_RATE); pl.gun = -pl.gun;
     const o = onPlane(pl.gun * 1.5, -0.3, 1.8, V0), c = V1.set(car.x + mx * GUN_CONV, car.y + my * GUN_CONV, car.z + mz * GUN_CONV);

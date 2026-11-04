@@ -29,6 +29,9 @@ import { spawnPlane } from './plane';
 import { spawnShip } from './ship';
 import { clearShells } from './shells';
 import { WATER_Y } from '../../shared/naval.ts';
+import { teamMat, friendly } from './teams';
+import { TEAM_SPAWNS } from '../../shared/rules.ts';
+import { depotPush } from '../world/objectives';
 
 // ---------- DODO colours ----------
 // the DODO teal of the delivery tanks; every player tank gets a clone in its own colour (three's Phong: a little shine)
@@ -67,12 +70,16 @@ export function makeTank(withLights: boolean, hullMat?: StandardMaterial, labelT
   addGeo(trest, rotateX(cylGeo(0.11, 0.11, 2.5, 10), Math.PI / 2), mtx(0, 1.5, 1.95), COL.charcoal);   // barrel
   addGeo(trest, boxGeo(0.26, 0.26, 0.36), mtx(0, 1.5, 3.2), BLACK);                                   // muzzle brake
   addGeo(trest, cylGeo(0.22, 0.22, 0.14, 12), mtx(-0.25, 1.8, -0.1), COL.charcoal);                   // hatch
+  addGeo(trest, cylGeo(0.025, 0.03, 1.7, 5), mtx(-0.4, 2.6, -0.45), COL.charcoal);                    // World of DODO, issue #24: an antenna
   mesh('tankTurretParts', trest, VC_MAT, true, turret);
+  // World of DODO, issue #24: the team's colour (game/teams.ts flagTeam paints it): a pennant on the antenna (turned 35° out, so that it
+  // shows from behind and from the side) and a band round the turret
+  const team = mesh('tankTeam', mergeGeos([at(boxGeo(0.03, 0.46, 0.8), -0.4 - 0.23, 3.2, -0.45 - 0.33, 0, 0.61), at(cylGeo(0.85, 0.865, 0.07, 22), 0, 1.285, 0)]), teamMat(-1), false, turret);
   // label on the turret sides (DODO logo)
   mesh('tankLabel', mergeGeos([-1, 1].map(sx => at(planeGeo(1.1, 0.42), sx * 0.8, 1.5, 0, 0, sx * Math.PI / 2))),
     basic(0xffffff, { map: labelTex || logoTex, transparent: true }), false, turret);
   if (withLights) headlight(g);
-  g.metadata = { wheels: [], body, turret };
+  g.metadata = { wheels: [], body, turret, team: [team] };
   return g;
 }
 // The headlight: three's SpotLight(white, 1.3, reach 48, cone 0.55 rad, penumbra 0.6, decay 1) at (0, 1.1, 2.3) aimed at (0, 0, 14),
@@ -162,9 +169,11 @@ export function toppleCar(sign: number) {
 // returns whether the hit took effect (not while toppled or immune right after): only such a hit scores for another player.
 // kind 'ram' was REDLINE's ramming (it slowed the tank more; issue #20: two ships colliding), 'bullet' a plane's or an anti-aircraft
 // gun's (issue #14), 'shell' and 'torp' a ship's (issue #20); msg: what the toast says (the original fell back to REDLINE's texts)
+// World of DODO, issue #24: nothing counts in the break after a round (G.hold); a teammate's hit never gets here (its callers ask
+// game/teams.ts friendly, they know the shooter)
 export function hitPlayer(kind: 'shot' | 'ram' | 'bullet' | 'shell' | 'torp', sign: number, msg: string): boolean {
   const veh = VEH[car.k], w = HIT_W[veh][kind];
-  if (car.immT > 0 || car.topT > 0 || G.state !== 'drive' || !w) return false;
+  if (car.immT > 0 || car.topT > 0 || G.state !== 'drive' || G.hold || !w) return false;
   const t = now(); car.hitLog = car.hitLog.filter(x => t - x[0] < HIT_WIN[veh]); car.hitLog.push([t, w]);
   if (car.k === 0 && kind !== 'bullet') { car.slowT = Math.max(car.slowT, 2.4); car.v *= kind === 'ram' ? 0.6 : 0.7; }
   if (car.hitLog.reduce((s, x) => s + x[1], 0) >= 2.999) toppleCar(sign); else flash(msg);
@@ -197,13 +206,18 @@ export function reset() {
 // World of DODO, issue #16: the places are the map's spawn points (client/shared/map.ts SPAWNS: about 40 spots on the real streets'
 // centre lines, away from junctions and walls, spread over Karlín, facing along the street towards the middle; tram streets only
 // where the others do not give enough). The browser still picks its own spot, as before; the depot's yard when none is free.
+// World of DODO, issue #24: at my team's spawn points (client/shared/rules.ts TEAM_SPAWNS: in its half, A the west, B the east, none
+// in a zone), as far from the enemy as it allows (my teammates are about my half anyway); at any if none of those is free
 export function spawnPoint(): { x: number; z: number; h: number } {
   let best: { x: number; z: number; h: number } | null = null, bs = -1;
-  for (const s of SPAWNS) {
-    // not into another tank, a tree or a lamp, not next to the tram or a moving car, not onto a parked one
-    if (blockedAt(s.x, s.z, s.h) || tramNear(s.x, s.z, 14) || ALLCARS.some(c => Math.hypot(c.x - s.x, c.z - s.z) < (c.parked ? 3.5 : 10))) continue;
-    let d = 800; for (const o of NET.others.values()) if (o.on) d = Math.min(d, Math.hypot(o.x - s.x, o.z - s.z));
-    const sc = d + Math.random() * 60; if (sc > bs) { bs = sc; best = s; }
+  const mine = NET.team === 0 || NET.team === 1 ? TEAM_SPAWNS[NET.team] : SPAWNS;
+  for (let pass = 0; pass < 2 && !best; pass++) {
+    for (const s of pass ? SPAWNS : mine) {
+      // not into another tank, a tree or a lamp, not next to the tram or a moving car, not onto a parked one
+      if (blockedAt(s.x, s.z, s.h) || tramNear(s.x, s.z, 14) || ALLCARS.some(c => Math.hypot(c.x - s.x, c.z - s.z) < (c.parked ? 3.5 : 10))) continue;
+      let d = 800; for (const o of NET.others.values()) if (o.on && !friendly(o.id)) d = Math.min(d, Math.hypot(o.x - s.x, o.z - s.z));
+      const sc = d + Math.random() * 60; if (sc > bs) { bs = sc; best = s; }
+    }
   }
   const p = best || DEPOT.park; return { x: p.x, z: p.z, h: p.h };
 }
@@ -248,6 +262,7 @@ export function tankPen(x: number, z: number, h: number): { nx: number; nz: numb
   const take = (nx: number, nz: number, pen: number) => { if (pen > 1e-4 && (!best || pen > best.pen)) best = { nx, nz, pen }; };
   for (const j of TANK_C) {
     const px = x + fx * j, pz = z + fz * j, w = solidPush(px, pz, TANK_CR); if (w) take(w.nx, w.nz, w.pen);
+    const dp = depotPush(px, pz, TANK_CR); if (dp) take(dp.nx, dp.nz, dp.pen);                // World of DODO, issue #24: a standing supply depot
     for (const p of propsNear(px, pz)) { if (p.state !== 'up') continue; const dx = px - p.x, dz = pz - p.z, d = Math.hypot(dx, dz); if (d > 1e-6) take(dx / d, dz / d, p.r + TANK_CR - d); }
     for (const o of NET.others.values()) {
       if (!o.on || o.k !== 0 || Math.abs(o.x - px) > 5 || Math.abs(o.z - pz) > 5) continue;    // another tank: its two circles
@@ -345,14 +360,14 @@ export function breakProps(x: number, z: number, h: number) {
 }
 // World of DODO, issue #14: the anti-aircraft gun on the turret (E, the right mouse button, the touch button). It aims itself at the
 // nearest plane in reach and in sight as drawn here (the shooter decides a bullet's hits, game/bullets.ts), leading it by the bullet's
-// flight, with some spread; with no plane about it fires up and ahead.
+// flight, with some spread; with no plane about it fires up and ahead. World of DODO, issue #24: only at the enemy's planes.
 const AA_RATE = 1 / 7, AA_R = 130, AA_ERR = 0.035, AA_Y = 2.3;
 let aaCd = 0;
 function fireAA() {
   if (aaCd > 0) return; aaCd = AA_RATE;
   const ox = car.x, oy = car.gy + AA_Y, oz = car.z; let best: NetOther | null = null, bd = AA_R;
   for (const o of NET.others.values()) {
-    if (!o.on || o.k !== 1 || o.s === 2) continue;
+    if (!o.on || o.k !== 1 || o.s === 2 || friendly(o.id)) continue;
     const d = Math.hypot(o.x - ox, o.y - oy, o.z - oz); if (d < bd && segHit(ox, oy, oz, o.x, o.y, o.z) >= 1) { bd = d; best = o; }
   }
   let dx = Math.sin(car.h) * 0.8, dy = 0.6, dz = Math.cos(car.h) * 0.8;
@@ -366,7 +381,7 @@ function fireAA() {
 }
 export function updateDrive(dt: number) {
   carStatus(dt); if (car.k !== 0) return;                          // switched to a plane or a ship (carStatus respawned)
-  const dead = car.topT > 0, busy = car.swT > 0;                   // destroyed: no driving, no firing; switching vehicles: no firing
+  const dead = car.topT > 0, busy = car.swT > 0 || G.hold;         // destroyed: no driving, no firing; switching vehicles (or the break after a round, issue #24): no firing
   aaCd = Math.max(0, aaCd - dt);
   if (K.fire && !dead && !busy) fireShot();
   if ((HELD.has('KeyE') || input.rmb || K.alt) && !dead && !busy) fireAA();

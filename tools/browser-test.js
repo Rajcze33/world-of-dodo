@@ -3,6 +3,9 @@
 // is his for the other too, one shoots the other, the points show in both scoreboards, and a hit that destroys
 // the tank brings it back somewhere else, then he takes a plane, flies, and the other's anti-aircraft gun hits it; then both take
 // a ship on the Vltava (issue #20), one's shells hit the other's ship, and a hit 15 s old still counts towards sinking it.
+// Issue #24, the teams: Rosta plays for A and Petr for B (each picks it in the join form); each sees the other in the other team's
+// colour and the bots in both teams; a third player, Tereza, joins Rosta's team and her parcels do him no harm; Rosta's tank in a
+// zone captures it in both players' HUDs; his parcels damage a depot of B in both players' views.
 // Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
@@ -19,6 +22,7 @@ const fs = require('node:fs');
 const puppeteer = require('puppeteer-core');
 const M = require('../server/city');               // issue #16: the map of the real Karlín (client/shared/map.ts), as the server loads it
 const NV = require('../client/shared/naval.ts');   // issue #20: the Vltava (where a ship may be, which way the river runs)
+const RU = require('../client/shared/rules.ts');   // issue #24: the teams, the zones, the depots
 
 // ---------- World of DODO, issue #16: real places in Karlín for the scenes below, found in the map ----------
 const r2 = v => Math.round(v * 100) / 100;
@@ -33,6 +37,8 @@ const DUEL = (() => {
       for (let t = 10; t + 36 <= L; t += 4) {
         const x0 = ax + ux * t, z0 = az + uz * t, x1 = x0 + ux * 26, z1 = z0 + uz * 26, d = Math.hypot(x0, z0);
         if (best && d >= best.d) continue;
+        // issue #24: not by a ground zone, where the bots' tanks gather and would shove the two about
+        if (RU.ZONES.some(q => !q.sea && Math.min(Math.hypot(x0 - q.x, z0 - q.z), Math.hypot(x1 - q.x, z1 - q.z)) < q.r + 30)) continue;
         if ([e.a, e.b].some(n => Math.min(Math.hypot(x0 - M.NODES[n].x, z0 - M.NODES[n].z), Math.hypot(x1 - M.NODES[n].x, z1 - M.NODES[n].z)) < 12)) continue;
         if (!M.onRoad(x0, z0, 1) || !M.onRoad(x1, z1, 1) || !M.freeAt(x0, z0, 2.5) || !M.freeAt(x1, z1, 2.5)) continue;
         if (M.segHit(x0, 1.5, z0, x1, 1.5, z1) < 1 || M.segHit(x0 - ux * 11.5, 5.4, z0 - uz * 11.5, x1, 1.3, z1) < 1 || M.segHit(x1 + ux * 11.5, 5.4, z1 + uz * 11.5, x0, 1.3, z0) < 1) continue;
@@ -77,6 +83,15 @@ const HIDE = (() => {
   }
   return null;
 })();
+// Issue #24: for each of B's supply depots a place 18 in front of it for Rosta's tank, clear to the depot and behind it (for the camera),
+// facing it: his parcels fly into it (the test takes one that stands)
+const AT_DEPOT = RU.DEPOTS.filter(d => d.team === 1).map(d => {
+  for (let a = 0; a < 360; a += 15) {
+    const ux = Math.sin(a * Math.PI / 180), uz = Math.cos(a * Math.PI / 180), x = d.x + ux * 18, z = d.z + uz * 18;
+    if (M.freeAt(x, z, 2.5) && M.segHit(x, 1.8, z, d.x, 1.8, d.z) >= 1 && M.segHit(x, 1.6, z, x + ux * 11.5, 5.4, z + uz * 11.5) >= 1) return { i: d.i, x: r2(x), z: r2(z), h: Math.atan2(-ux, -uz) };
+  }
+  return null;
+}).filter(Boolean);
 
 const BASE = (process.argv[2] || 'http://localhost:3400').replace(/\/$/, '');
 const OUT = process.argv[3] || path.join(process.cwd(), 'test-shots');
@@ -86,7 +101,8 @@ const BLUE = 2, BLUE_HEX = 0x4d8dff;           // the third swatch
 let failed = 0;
 const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) failed++; };
 
-async function player(browser, name, viewport, color) {
+// team (issue #24): 0 A, 1 B, or nothing for the form's default (automatic)
+async function player(browser, name, viewport, color, team) {
   const ctx = await browser.createBrowserContext();   // its own storage, like another person's browser
   const page = await ctx.newPage();
   await page.setViewport(viewport || { width: 960, height: 600 });
@@ -98,6 +114,7 @@ async function player(browser, name, viewport, color) {
   if (name) {
     await page.type('#nameIn', name);
     if (color !== undefined) await page.click(`#swatches input[value="${color}"]`);
+    if (team !== undefined) await page.click(`input[name=team][value="${team}"]`);
     await page.click('#startBtn');
     await page.waitForFunction(() => window.WOD && WOD.state === 'drive', SLOW);
   }
@@ -112,6 +129,16 @@ const fresh = (page, hits = 0) => page.evaluate(n => Object.assign(WOD.car, { im
 const row = (page, name) => page.$$eval('#board li', (lis, name) => lis.map(li => [li.querySelector('.nm').textContent, li.querySelector('b').textContent]).find(r => r[0] === name), name);
 // wait until this page draws the other player's tank near (x,z)
 const seesAt = (page, x, z) => page.waitForFunction((x, z) => [...WOD.NET.others.values()].some(o => !o.bot && o.on && Math.hypot(o.x - x, o.z - z) < 1), SLOW, x, z);
+// put two players at their places until each page draws the other there (issue #24: a passing bot's tank may shove one aside)
+async function meet(p, px, pz, ph, q, qx, qz, qh) {
+  const near = (pg, x, z) => pg.evaluate((x, z) => [...WOD.NET.others.values()].some(o => !o.bot && o.on && Math.hypot(o.x - x, o.z - z) < 1.5), x, z);
+  for (let i = 0; i < 40; i++) {
+    await place(p, px, pz, ph); await place(q, qx, qz, qh);
+    await Promise.all([frames(p, 3), frames(q, 3)]);
+    if (await near(p, qx, qz) && await near(q, px, pz)) return true;
+  }
+  return false;
+}
 // a few rendered frames, so the camera and the HUD catch up
 const frames = (page, n) => page.evaluate(n => new Promise(r => { const f = () => (--n > 0 ? requestAnimationFrame(f) : r()); requestAnimationFrame(f); }), n);
 
@@ -141,20 +168,34 @@ async function shoot(a, b, petrHits) {
     await frames(intro, 3);
     await intro.screenshot({ path: path.join(OUT, '1-intro.png') });
     check((await intro.$$('#swatches input')).length === 12, 'the join form offers 12 tank colours');
+    check((await intro.$$eval('input[name=team]', l => l.map(i => i.value + (i.checked ? '*' : '')).join())) === 'auto*,0,1', 'issue #24: the join form offers a team, automatic by default, A or B');
     await intro.close();
 
-    const a = await player(browser, 'Rosta', null, BLUE);
-    // issue #16: he starts at one of the map's spawn points, on a street of Karlín (or, with all of them taken, in the depot's yard)
+    const a = await player(browser, 'Rosta', null, BLUE, 0);
+    // issue #16: he starts at one of the map's spawn points, on a street of Karlín (or, with all of them taken, in the depot's yard);
+    // issue #24: in his team's half (A: the west)
     const s0 = await a.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z }));
-    check(M.SPAWNS.some(p => Math.hypot(p.x - s0.x, p.z - s0.z) < 0.5) && M.onRoad(s0.x, s0.z) || Math.hypot(M.DEPOT.park.x - s0.x, M.DEPOT.park.z - s0.z) < 0.5,
-      `Rosta starts on a street, at one of the map's spawn points (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)})`);
-    const b = await player(browser, 'Petr');
+    check(M.SPAWNS.some(p => Math.hypot(p.x - s0.x, p.z - s0.z) < 0.5) && M.onRoad(s0.x, s0.z) && RU.homeSide(0, s0.x) || Math.hypot(M.DEPOT.park.x - s0.x, M.DEPOT.park.z - s0.z) < 0.5,
+      `Rosta starts on a street, at one of the map's spawn points, in A's half (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)})`);
+    const b = await player(browser, 'Petr', null, undefined, 1);
     check((await a.evaluate(() => WOD.NET.color)) === BLUE_HEX, 'Rosta drives the blue tank he picked');
     await a.waitForFunction(() => [...WOD.NET.others.values()].some(o => o.name === 'Petr' && o.on), SLOW);
     check(true, 'Rosta sees Petr\'s tank in the city');
-    const botsSeen = await a.evaluate(() => [...WOD.NET.others.values()].filter(o => o.bot).map(o => o.name).sort().join());
-    check(botsSeen === 'BOT1,BOT2,BOT3', `Rosta sees the bots (${botsSeen})`);
+    // issue #24: the bots fill both teams (TEAM_SIZE a team, the people counted)
+    const botsSeen = await a.evaluate(() => [...WOD.NET.others.values()].filter(o => o.bot).map(o => o.name + ':' + 'AB'[o.team]).sort().join());
+    check(/:A/.test(botsSeen) && /:B/.test(botsSeen) && botsSeen.split(',').every(s => /^BOT\d+:[AB]$/.test(s)), `Rosta sees the bots, in both teams (${botsSeen})`);
     check((await a.$eval('#online', e => e.textContent)) === '2 online', 'the HUD says 2 online (the bots do not count)');
+    // issue #24: Rosta plays for A and Petr for B, as they picked; each sees the other's name glow in the other team's colour, and the
+    // scoreboard lists his own team first
+    const hex = c => '#' + c.toString(16).padStart(6, '0');
+    const teams = await Promise.all([a, b].map(p => p.evaluate(() => WOD.NET.team)));
+    check(teams[0] === 0 && teams[1] === 1, `Rosta is in team A and Petr in team B (${teams})`);
+    const tagOf = (p, name) => p.evaluate(n => { const o = [...WOD.NET.others.values()].find(q => q.name === n); return o && o.team + ' ' + o.tag.style.getPropertyValue('--c'); }, name);
+    const [ta, tb] = [await tagOf(a, 'Petr'), await tagOf(b, 'Rosta')];
+    check(ta === '1 ' + hex(RU.TEAM_COL[1]) && tb === '0 ' + hex(RU.TEAM_COL[0]), `each sees the other in the other team's colour (Rosta sees Petr: ${ta}; Petr sees Rosta: ${tb})`);
+    const firstTeam = p => p.$eval('#board li.team', e => e.className);
+    check((await firstTeam(a)) === 'team t0' && (await firstTeam(b)) === 'team t1', 'each one\'s scoreboard lists his own team first');
+    check(!(await a.$eval('#teamBar', e => e.hidden)), 'the team bar shows the round');
 
     // the shared city: at the same moment of the server's clock both have every car and pedestrian in the same place. (Comparing
     // what the two windows show right now would measure headless Chrome, which draws a frame every few hundred ms, not the game.)
@@ -214,9 +255,7 @@ async function shoot(a, b, petrHits) {
 
     // Rosta and Petr on a street near the middle of the city (issue #16: DUEL, found in the map), 26 units apart, facing each other
     console.log(`     the duel: ${DUEL.name}, (${DUEL.ax}, ${DUEL.az}) and (${DUEL.bx}, ${DUEL.bz})`);
-    await place(a, DUEL.ax, DUEL.az, DUEL.h);
-    await place(b, DUEL.bx, DUEL.bz, DUEL.h + Math.PI);
-    await Promise.all([seesAt(a, DUEL.bx, DUEL.bz), seesAt(b, DUEL.ax, DUEL.az)]);
+    await meet(a, DUEL.ax, DUEL.az, DUEL.h, b, DUEL.bx, DUEL.bz, DUEL.h + Math.PI);
     await Promise.all([frames(a, 12), frames(b, 12)]);
     await a.screenshot({ path: path.join(OUT, '2-rosta-sees-petr.png') });
     await b.screenshot({ path: path.join(OUT, '3-petr-sees-rosta.png') });
@@ -227,8 +266,10 @@ async function shoot(a, b, petrHits) {
     await a.waitForFunction(`(${petr})().tag.visible`, SLOW);
     check(true, 'Petr\'s name shows while he is in plain sight');
     check(!!HIDE, 'two spawn points with houses between them');
-    await place(b, HIDE.bx, HIDE.bz, HIDE.bh);
-    await seesAt(a, HIDE.bx, HIDE.bz);
+    for (let i = 0; i < 40; i++) {                                              // (a bot's tank may shove Petr aside, issue #24)
+      await place(b, HIDE.bx, HIDE.bz, HIDE.bh); await frames(a, 3);
+      if (await a.evaluate((x, z) => [...WOD.NET.others.values()].some(o => !o.bot && o.on && Math.hypot(o.x - x, o.z - z) < 1.5), HIDE.bx, HIDE.bz)) break;
+    }
     await place(a, HIDE.ax, HIDE.az, HIDE.ah);
     await a.waitForFunction(`!(${petr})().tag.visible && !(${petr})().seen`, SLOW);
     check(true, 'behind a block of houses his name is gone');
@@ -257,10 +298,73 @@ async function shoot(a, b, petrHits) {
     await Promise.all([frames(a, 3), frames(b, 3)]);
     await a.screenshot({ path: path.join(OUT, '4-rosta-destroys-petr.png') });
     await b.waitForFunction(d => WOD.car.topT === 0 && Math.hypot(WOD.car.x - d.bx, WOD.car.z - d.bz) > 20, SLOW, DUEL);
-    check(true, 'Petr comes back at another place');
+    check(RU.homeSide(1, await b.evaluate(() => WOD.car.x)), 'Petr comes back at another place, in B\'s half (issue #24)');
     check(await b.evaluate(() => WOD.car.immT > 0), 'and is immune for a moment after it');
     await frames(b, 4);
     await b.screenshot({ path: path.join(OUT, '5-petr-respawned.png') });
+
+    // issue #24, friendly fire: Tereza joins Rosta's team and stands where Rosta stood in the duel, Rosta where Petr stood. Her parcels
+    // bounce off his tank and do nothing there: his browser applies no hit and reports none of hers (the server would not score one
+    // either), and she scores nothing. (A bot's parcel may still hit Rosta meanwhile: the test watches for hits by Tereza.)
+    const t = await player(browser, 'Tereza', null, undefined, 0);
+    const terezaId = await t.evaluate(() => WOD.NET.id);
+    check((await t.evaluate(() => WOD.NET.team)) === 0, 'Tereza joins team A');
+    await a.evaluate(() => {                                                       // Rosta's page notes every hit it reports
+      const ws = WOD.NET.ws, send = ws.send.bind(ws); window.HITS = [];
+      ws.send = d => { try { const m = JSON.parse(d); if (m.t === 'hit') HITS.push(m.by); } catch (_) { /* not JSON */ } return send(d); };
+    });
+    await meet(t, DUEL.ax, DUEL.az, DUEL.h, a, DUEL.bx, DUEL.bz, DUEL.h + Math.PI);
+    for (let i = 0; i < 3; i++) {
+      await place(t, DUEL.ax, DUEL.az, DUEL.h); await place(a, DUEL.bx, DUEL.bz, DUEL.h + Math.PI); await fresh(a, 0);
+      const sid = await t.evaluate(() => WOD.NET.sid);
+      await t.evaluate(() => { WOD.K.fire = true; });
+      await t.waitForFunction(s => WOD.NET.sid > s, SLOW, sid);
+      await t.evaluate(() => { WOD.K.fire = false; });
+      await frames(a, 25);
+    }
+    const byTereza = await a.evaluate(id => HITS.filter(b => b === id).length, terezaId);
+    check(byTereza === 0 && (await t.evaluate(() => WOD.NET.pts)) === 0 && await a.evaluate(id => WOD.teams.friendly(id), terezaId),
+      `Tereza's parcels do her teammate Rosta no harm and score nothing (${byTereza} hit(s) reported)`);
+    await t.close();
+
+    // issue #24, a zone: Rosta's tank stands in Viadukt (in A's half); the capture runs towards A, and both his HUD and Petr's show it
+    // (the zone's chip in the team bar); his own HUD shows the capture meter
+    const Z = RU.ZONES[0], ze = M.nearestEdge(Z.x, Z.z), zat = M.edgePos(ze.e, ze.s, 0);
+    await place(a, Z.x, Z.z, Math.atan2(zat.hx, zat.hz));
+    await a.waitForFunction(() => !document.getElementById('cap').hidden, SLOW);
+    check(true, 'in the zone, Rosta\'s HUD shows the capture meter');
+    const capA = await a.waitForFunction(() => WOD.teams.TM.z[0][0] === 0 || WOD.teams.TM.z[0][1] > 30, { timeout: 240000 }).then(() => true, () => false);
+    const capB = await b.waitForFunction(() => WOD.teams.TM.z[0][0] === 0 || WOD.teams.TM.z[0][1] > 30, { timeout: 60000 }).then(() => true, () => false);
+    // the zone's chip: held by A (class o0), or its capture bar over 30 % in A's colour
+    const chip = p => p.$eval('#zones .zc', e => { const i = e.querySelector('i'); return { o0: e.classList.contains('o0'), w: parseFloat(i.style.width) || 0, c: i.style.getPropertyValue('--pc') }; });
+    const chipA = c => c.o0 || (c.w > 30 && c.c === hex(RU.TEAM_COL[0]));
+    const [ca, cb] = [await chip(a), await chip(b)];
+    check(capA && capB && chipA(ca) && chipA(cb) && (await b.$eval('#cap', e => e.hidden)),
+      `Rosta captures Viadukt for A, in his HUD (${JSON.stringify(ca)}) and in Petr's (${JSON.stringify(cb)})`);
+    await frames(a, 4);
+    await a.screenshot({ path: path.join(OUT, '5a-rosta-captures.png') });
+
+    // issue #24, a depot: Rosta's parcels hit one of B's supply depots that stands; his browser reports it (thit), the server takes the
+    // damage, and both see it
+    const dep = await a.evaluate(l => l.find(p => WOD.teams.TM.d[p.i][0] > 0) || null, AT_DEPOT);
+    check(!!dep, `one of B's depots stands, with a clear shot at it (${AT_DEPOT.length} places found in the map)`);
+    if (dep) {
+      const hp0 = await a.evaluate(i => WOD.teams.TM.d[i][0], dep.i);
+      let dmg = false;
+      for (let i = 0; i < 6 && !dmg; i++) {
+        await place(a, dep.x, dep.z, dep.h); await fresh(a, 0);
+        const sid = await a.evaluate(() => WOD.NET.sid);
+        await a.evaluate(() => { WOD.K.fire = true; });
+        await a.waitForFunction(s => WOD.NET.sid > s, SLOW, sid);
+        await a.evaluate(() => { WOD.K.fire = false; });
+        dmg = await a.waitForFunction((i, h) => WOD.teams.TM.d[i][0] < h, { timeout: 30000 }, dep.i, hp0).then(() => true, () => false);
+        console.log(`     parcel ${i + 1} at depot ${dep.i}: ${dmg ? 'hit' : 'no damage yet'}`);
+      }
+      const seen = dmg && await b.waitForFunction((i, h) => WOD.teams.TM.d[i][0] < h, { timeout: 30000 }, dep.i, hp0).then(() => true, () => false);
+      check(dmg && seen, `Rosta's parcels damage B's depot ${dep.i}, in his view and in Petr's`);
+      await frames(a, 6);
+      await a.screenshot({ path: path.join(OUT, '5b-rosta-hits-depot.png') });
+    }
 
     // issue #14: Petr switches to a plane (V); it comes in at the edge of the airspace and flies; Rosta sees a plane; Petr is put
     // 30 units up and 25 ahead of Rosta, down the street (issue #16: Karlín's houses beside it would hide him), and Rosta's

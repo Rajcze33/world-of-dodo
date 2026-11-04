@@ -369,7 +369,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 @media (max-width:760px),(pointer:coarse) and (max-width:1024px){
   .board{gap:var(--space-1)}
   .board li{font-size:var(--fs-caption)}
-  .board li:nth-child(n+4):not(.me){display:none}
+  .board li.x{display:none}                                                  /* issue #24: by teams, the rows renderBoard marks */
 }
 /* World of DODO, issue #20: the ship's aim cross (placed over the canvas every frame) with the shells' flight time and the range under
    it, the turrets' marks (where their guns point now: green on target, amber turning, grey loading), the binoculars' frame, and the
@@ -399,6 +399,73 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 .chip.turn b{background:#b8862b}
 .chip.block b{background:#8a4b45}
 @media (max-width:760px),(pointer:coarse) and (max-width:1024px){.sea .lbl{display:none}.sea{gap:var(--space-1) var(--space-3)}}
+/* World of DODO, issue #24: the teams. --team0 / --team1 come from client/shared/rules.ts (TEAM_COL, set by game/teams.ts). The team bar
+   at the top (the scores, the round's clock, a bar each towards the round's points, a chip per zone: its letter on its owner's colour,
+   under it how far the capture has got), the capture meter over the toast while your vehicle stands in a zone, the scoreboard by
+   teams, the round's banner, the team choice in the join form. On a phone the bar spans the top and the corners move under it. */
+:root{--team0:#1fc8a0;--team1:#ff8a1f;--teamN:#adb1b0}
+.teambar{position:absolute;left:50%;transform:translateX(-50%);top:calc(16px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:6px;padding:8px 14px 9px;min-width:300px;box-sizing:border-box}
+.tb-top{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)}
+.tb-sc{display:flex;align-items:center;gap:8px;min-width:0}
+.tb-sc b{font-size:var(--fs-h4);font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.tb-sc .tb-sw{flex:none;width:12px;height:12px;border-radius:3px;background:var(--tc)}
+.tb-nm{font:600 var(--fs-caption)/1 var(--font-secondary);letter-spacing:.06em;color:var(--tc)}
+.tb-sc.me .tb-nm{text-decoration:underline;text-underline-offset:3px}
+#tbS0{--tc:var(--team0)}#tbS1{--tc:var(--team1)}
+.tb-clock{color:var(--dodo-white);font-size:var(--fs-body-sm);letter-spacing:.04em}
+.tb-bar{position:relative;height:4px;border-radius:2px;background:var(--dodo-charcoal-80);overflow:hidden}
+.tb-bar i{position:absolute;top:0;bottom:0;width:0;transition:width 600ms var(--ease)}
+#tbB0{left:0;background:var(--team0)}#tbB1{right:0;background:var(--team1)}
+.zones{display:flex;justify-content:center;gap:6px}
+.zc{position:relative;display:grid;place-items:center;width:30px;height:24px;border-radius:7px;background:var(--dodo-charcoal-80);border:2px solid var(--oc,var(--dodo-charcoal-80));box-sizing:border-box;overflow:hidden;font:600 11px/1 var(--font-secondary);color:var(--dodo-white)}
+.zc.o0{--oc:var(--team0);background:color-mix(in srgb,var(--team0) 45%,var(--dodo-charcoal))}
+.zc.o1{--oc:var(--team1);background:color-mix(in srgb,var(--team1) 45%,var(--dodo-charcoal))}
+.zc.sea{border-radius:12px}
+.zc i{position:absolute;left:0;bottom:0;height:3px;width:0;background:var(--pc,var(--teamN))}
+.zc.mine{outline:2px solid var(--dodo-white);outline-offset:1px}
+.cap{display:flex;flex-direction:column;gap:6px;padding:var(--space-2) var(--space-4);min-width:220px;box-sizing:border-box}
+.cap-hd{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-3)}
+.cap-hd b{font-size:var(--fs-body-sm);font-weight:600}
+.cap-hd .meta{color:var(--dodo-light-grey);text-transform:none;letter-spacing:.02em}
+.cap-bar{position:relative;display:block;height:8px;border-radius:4px;background:var(--dodo-charcoal-80);overflow:hidden}
+.cap-bar::after{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--dodo-grey)}
+.cap-bar i{position:absolute;top:0;bottom:0;left:50%;width:0;background:var(--pc,var(--teamN))}
+.board li.team{margin-top:var(--space-1);padding-top:var(--space-1);border-top:1px solid var(--dodo-charcoal-80);font-family:var(--font-secondary);font-size:var(--fs-caption);font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--tc)}
+.board li.team:first-child{margin-top:0;padding-top:0;border-top:0}
+.board li.team i{border-radius:3px;background:var(--tc)}
+.board li.team b{color:var(--tc)}
+.board li.team.t0{--tc:var(--team0)}.board li.team.t1{--tc:var(--team1)}
+.rend{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:var(--space-2);padding:var(--space-5) var(--space-6);width:min(360px,calc(100vw - 32px));box-sizing:border-box;text-align:center;pointer-events:none;background:rgba(30,35,34,.94)}
+@media (min-width:761px){.rend{left:max(50%,calc(16px + 300px + 16px + 180px))}}   /* right of the status card (its scoreboard stays readable) */
+.rend h2{color:var(--wc,var(--dodo-white))}
+.rend p{margin:0}
+.re-you{font-size:var(--fs-body);font-weight:600}
+.re-sc{display:flex;gap:var(--space-3);align-items:baseline;font-size:var(--fs-h3);font-weight:700;font-variant-numeric:tabular-nums}
+#reA{color:var(--team0)}#reB{color:var(--team1)}
+.re-lbl{color:var(--dodo-light-teal);margin-top:var(--space-2)!important}
+.re-best{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;min-width:220px}
+.re-best li{display:flex;align-items:center;gap:var(--space-2);font-size:var(--fs-body-sm)}
+.re-best li i{flex:none;width:10px;height:10px;border-radius:3px;background:var(--tc)}
+.re-best li b{margin-left:auto;font-variant-numeric:tabular-nums}
+.re-next{color:var(--dodo-light-grey)}
+.tdot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.tdot.t0{background:var(--team0)}.tdot.t1{background:var(--team1)}
+@media (min-width:761px) and (max-height:720px){.board{gap:2px}.board li{font-size:var(--fs-caption)}.status{gap:var(--space-2)}}   /* two teams of six on a short window */
+@media (min-width:761px) and (max-width:1040px) and (pointer:fine){   /* between the status card (300) and the map (176) */
+  .teambar{left:calc(16px + 300px + 16px);right:calc(16px + 176px + 16px);transform:none;min-width:0;padding:8px 10px}
+  .tb-sc b{font-size:var(--fs-body)}
+}
+@media (max-width:760px),(pointer:coarse) and (max-width:1024px){
+  .teambar{left:calc(16px + env(safe-area-inset-left,0px));right:calc(16px + env(safe-area-inset-right,0px));transform:none;min-width:0;padding:6px 10px 7px;gap:5px}
+  .tb-sc b{font-size:var(--fs-body)}
+  .zones{gap:5px}
+  .zc{width:28px;height:20px}
+  .tl,.tr{top:calc(16px + 76px + 8px + env(safe-area-inset-top,0px))}
+  .cap{min-width:0;width:100%;padding:var(--space-2) var(--space-3)}
+  body:has(#touch:not([hidden])) .cap{width:calc(100vw - 2 * (16px + 72px + 8px));max-width:100%}   /* clear of the touch buttons on the right */
+  .cap-hd{flex-wrap:wrap;row-gap:2px}
+  .rend{padding:var(--space-4)}
+}
 </style>
 
 <canvas id="gl" data-ta="glAria"></canvas>
@@ -406,6 +473,16 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
 <div class="scope" id="scope" hidden></div><div class="tmark" id="tm0" hidden></div><div class="tmark" id="tm1" hidden></div><div class="shipx" id="shipX" hidden><span id="shipT"></span></div>
 
 <div id="hud" hidden>
+  <!-- World of DODO, issue #24: the team bar (the scores, the round's clock, the zones), filled by ui/teamhud.ts -->
+  <div class="card teambar" id="teamBar" role="group" data-ta="tbAria" hidden>
+    <div class="tb-top">
+      <span class="tb-sc" id="tbS0"><i class="tb-sw"></i><span class="tb-nm" id="tbN0">A</span><b id="tbP0">0</b></span>
+      <span class="tb-clock meta" id="tbClock">15:00</span>
+      <span class="tb-sc r" id="tbS1"><b id="tbP1">0</b><span class="tb-nm" id="tbN1">B</span><i class="tb-sw"></i></span>
+    </div>
+    <div class="tb-bar"><i id="tbB0"></i><i id="tbB1"></i></div>
+    <div class="zones" id="zones"></div>
+  </div>
   <div class="tl">
     <div class="card status">
       <div class="status-top"><span class="logos"><img id="hudLogo" alt="DODO"></span><span class="meta" id="online"></span></div>
@@ -433,6 +510,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   </div>
   <div class="bc">
     <div class="card pick" id="pick" hidden><span class="meta" data-t="pickLbl"></span><button class="camBtn" type="button" data-v="0">1 · <span data-t="vehTank"></span></button><button class="camBtn" type="button" data-v="1">2 · <span data-t="vehPlane"></span></button><button class="camBtn" type="button" data-v="2">3 · <span data-t="vehShip"></span></button></div>
+    <div class="card cap" id="cap" hidden><span class="cap-hd"><b id="capNm"></b><span class="meta" id="capSt"></span></span><span class="cap-bar"><i id="capFill"></i></span></div><!-- issue #24: the zone you stand in -->
     <div id="toast" class="off"></div>
     <div class="card sea" id="sea" hidden>
       <div class="grp"><span class="meta lbl" data-t="telLbl"></span><div class="tel"><span id="tel0"></span><span id="tel1"></span><span id="tel2"></span><span id="tel3"></span><span id="tel4"></span></div></div>
@@ -447,6 +525,17 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <div><b id="myPts">0</b> <span class="meta" data-t="ptsUnit"></span></div>
     </div>
   </div>
+</div>
+
+<!-- World of DODO, issue #24: the end of a round: the winner and the best players, until the next round starts -->
+<div class="card rend" id="roundEnd" hidden aria-live="polite">
+  <p class="overline" data-t="roundOver"></p>
+  <h2 id="reWin"></h2>
+  <p class="re-you" id="reYou"></p>
+  <p class="re-sc"><span id="reA"></span><span class="meta">:</span><span id="reB"></span></p>
+  <p class="mono re-lbl" data-t="roundBest"></p>
+  <ol class="re-best" id="reBest"></ol>
+  <p class="meta re-next" id="reNext"></p>
 </div>
 
 <div id="touch" hidden>
@@ -487,6 +576,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <input id="nameIn" name="name" type="text" maxlength="16" autocomplete="nickname" autocapitalize="words" spellcheck="false" enterkeyhint="go" data-tp="namePh">
       <fieldset class="swatches"><legend class="mono" data-t="colorLbl"></legend><div class="sw-row" id="swatches"></div></fieldset>
       <fieldset class="vehs"><legend class="mono" data-t="vehLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="veh" value="0" checked><span data-t="vehTank"></span></label><label class="veh"><input type="radio" name="veh" value="1"><span data-t="vehPlane"></span></label><label class="veh"><input type="radio" name="veh" value="2"><span data-t="vehShip"></span></label></div></fieldset>
+      <fieldset class="vehs teams"><legend class="mono" data-t="teamLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="team" value="auto" checked><span data-t="teamAuto"></span></label><label class="veh"><input type="radio" name="team" value="0"><span><i class="tdot t0"></i>A</span></label><label class="veh"><input type="radio" name="team" value="1"><span><i class="tdot t1"></i>B</span></label></div></fieldset>
       <button class="cta" id="startBtn" type="submit" disabled><span id="startLbl" data-t="loading"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
       <p class="err" id="joinErr" role="alert" hidden></p>
     </form>

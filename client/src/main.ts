@@ -32,6 +32,10 @@ import { NET, netUpdate, netConnect, netLeave, cleanName, botName, joinErr, TANK
 import { toast, flashMsg, flashUntil } from './ui/hud';
 import { now } from './core/util';
 import { WORLD, worldUpdate, worldAt, BODIES, buildNet } from './net/world';
+import { buildObjectives, updateObjectives } from './world/objectives';
+import { buildTeamHud, teamHud } from './ui/teamhud';
+import { TM, teamsWelcome, flagTeam, friendly, zoneP } from './game/teams';
+import { ZONES, DEPOTS, zoneAt } from '../shared/rules.ts';
 
 // ---------- loop ----------
 // camLook (game/tank.ts): the point the camera looks at, eased like the camera itself; reset and respawn put it on the tank
@@ -50,7 +54,7 @@ function frame() {
   // World of DODO: a tank, a plane (#14) or a ship (#20)
   if (G.state === 'drive') { if (car.k === 1) updateFly(dt); else if (car.k === 2) updateShip(dt); else updateDrive(dt); G.realSec += dt; }
   if (WORLD.on) worldUpdate(dt, tnow); else { updateTraffic(dt); updatePeds(dt); }   // World of DODO: once you play, the city comes from the server
-  updateShots(dt); updateBullets(dt); updateShells(dt); updateProps(dt);
+  updateShots(dt); updateBullets(dt); updateShells(dt); updateProps(dt); updateObjectives(dt, tnow);   // (issue #24: the zones' flags, the depots)
   // the player's tank (still called van, as in the original); makeTank keeps its wheels (none spin any more) and the body that rolls
   // with the steering in metadata (three's userData)
   const van = view.van!, parts = van.metadata as { wheels?: TransformNode[]; body?: TransformNode } | null;
@@ -94,8 +98,9 @@ function frame() {
   netUpdate(dt, tnow);
   if (G.state === 'drive') {
     $('spd').textContent = String(Math.round(Math.abs(car.v) * (air ? KMH : sea ? KNOTS : 2.2)));
-    drawMap(mctx, mini.width, { car, others: NET.others.values(), air, sea });
+    drawMap(mctx, mini.width, { car, others: NET.others.values(), air, sea, team: NET.team });
     airHud(air, sea);
+    teamHud();                                                     // issue #24: the team bar, the capture meter, the round's banner
   }
   drawReticle(G.state === 'drive'); drawShipHud(G.state === 'drive');
   updateImpactFx(dt);
@@ -153,7 +158,8 @@ export function backToMenu() {
   for (const k in K) K[k as keyof typeof K] = false;
   HELD.clear(); input.lmb = input.rmb = false; input.steerAxis = input.pitchAxis = 0;
   netLeave(); reset();
-  G.state = 'intro'; $('intro').hidden = false; $('hud').hidden = true; $('touch').hidden = true; $('pick').hidden = true;
+  NET.team = -1; teamsWelcome(undefined); for (const g of [view.van, view.plane, view.ship]) flagTeam(g, -1);   // issue #24: no team in the menu
+  G.state = 'intro'; $('intro').hidden = false; $('hud').hidden = true; $('touch').hidden = true; $('pick').hidden = true; $('roundEnd').hidden = true;
   $<HTMLButtonElement>('startBtn').disabled = false; $('startLbl').textContent = T.start; joinErr('');
   if (!COARSE) nameIn.focus();
 }
@@ -177,10 +183,18 @@ function joinForm() {
     r.checked = Number(r.value) === joinVeh;
     r.addEventListener('change', () => { joinVeh = veh(r.value); });
   });
+  // World of DODO, issue #24: the team, automatic (the server evens the teams), A or B (the server may still put you into the other one
+  // if yours has two people more), remembered too
+  const team = (v: string | null) => (v === '0' ? 0 : v === '1' ? 1 : 'auto') as 'auto' | 0 | 1;
+  try { NET.teamPick = team(localStorage.getItem('wod-team')); } catch (_) { /* storage blocked */ }
+  document.querySelectorAll<HTMLInputElement>('input[name=team]').forEach(r => {
+    r.checked = team(r.value) === NET.teamPick;
+    r.addEventListener('change', () => { NET.teamPick = team(r.value); });
+  });
   $('joinForm').addEventListener('submit', e => {
     e.preventDefault(); const b = $<HTMLButtonElement>('startBtn'); if (b.disabled) return;
     const name = cleanName(nameIn.value); if (!name || botName(name)) { joinErr(name ? T.errReserved : T.errName); nameIn.focus(); return; }
-    try { localStorage.setItem('wod-name', name); localStorage.setItem('wod-color', NET.color.toString(16)); localStorage.setItem('wod-veh', String(joinVeh)); } catch (_) { /* storage blocked: not remembered */ }
+    try { localStorage.setItem('wod-name', name); localStorage.setItem('wod-color', NET.color.toString(16)); localStorage.setItem('wod-veh', String(joinVeh)); localStorage.setItem('wod-team', String(NET.teamPick)); } catch (_) { /* storage blocked: not remembered */ }
     if (joinVeh !== 0 && !COARSE) lockMouse();                       // a plane (a ship) aims with the mouse: lock it now, while the browser allows it (a click)
     joinErr(''); b.disabled = true; $('startLbl').textContent = T.connecting; NET.name = name; NET.want = true; NET.err = ''; netConnect();
   });
@@ -196,6 +210,7 @@ function boot(): boolean {
     buildCity(); buildTraffic(); finishCity(); buildNet(); buildTank(); buildPlane(); buildShip(); buildShots(); buildBullets(); buildShells(); buildPeds(); buildFx();
     buildLand();                                                   // the land around the city (planes, #14): its own random numbers, after everything
     buildWater();                                                  // the river's effects (ships, #20)
+    buildObjectives(); buildTeamHud();                             // the zones and the supply depots, the team's HUD (teams, #24; no random numbers)
     initInput();
     joinForm();
     // automated tests (tools/browser-test.js) open the page with ?test and reach the game through this; nothing else uses it.
@@ -203,7 +218,8 @@ function boot(): boolean {
     // trees and lamps (only the page knows them).
     if (new URLSearchParams(location.search).has('test')) {
       window.WOD = { car, NET, get state() { return G.state; }, K, PERF, setQuality, scene, engine, WORLD, TRAFFIC, PARKED, BODIES, PEDS, worldAt, serverNow, moveTank,
-        HELD, input, pl, view, switchVehicle, free, sh, naval: { WATER_Y, SHIP_SPAWNS, inWater } };
+        HELD, input, pl, view, switchVehicle, free, sh, naval: { WATER_Y, SHIP_SPAWNS, inWater },
+        teams: { TM, friendly, zoneP, ZONES, DEPOTS, zoneAt } };   // issue #24: the round as this page knows it, the shared rules' places
     }
     addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', () => { paused = document.hidden; last = performance.now(); });

@@ -32,6 +32,6 @@ zerops:
           httpSupport: true
       envVariables:
         NODE_ENV: production
-        BOTS: "3"
+        TEAM_SIZE: "6"
         MAX_PLAYERS: "24"
       start: node server/server.js
