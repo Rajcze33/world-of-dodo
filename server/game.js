@@ -15,6 +15,7 @@
 'use strict';
 
 const R = require('../client/shared/rules.ts');
+const MS = require('../client/shared/monster.ts');
 
 const envNum = (k, d, lo) => { const v = Number(process.env[k]); return Number.isFinite(v) && v >= lo ? v : d; };
 const ROUND_POINTS = Math.round(envNum('ROUND_POINTS', R.ROUND_PTS, 1));
@@ -24,15 +25,17 @@ const TEAM_SIZE = Math.max(1, Math.min(16, Math.round(envNum('TEAM_SIZE', R.TEAM
 // What a hit weighs: its share of what destroys the vehicle (issue #14, #20), the same numbers as HIT_W in client/src/game/tank.ts
 // (there the parcel is 'shot'). Three parcels destroy a tank, one a plane; a ship's hits add up over 20 s (HIT_WIN in tank.ts), a tank's
 // and a plane's over 8. A person scores 10 points per unit; issue #24: a hit on a bot (any vehicle) half of that, at least 1.
+// Issue #26: the kind 'mon', an attack of Velemlok (client/shared/monster.ts MON_HIT_W, which tank.ts uses too); it scores for nobody.
 const HIT_W = {
-  tank: { parcel: 1, bullet: 0.25, shell: 1, torp: 0 },
-  plane: { parcel: 3, bullet: 0.5, shell: 3, torp: 0 },
-  ship: { parcel: 0.75, bullet: 0.08, shell: 0.35, torp: 1.5 },
+  tank: { parcel: 1, bullet: 0.25, shell: 1, torp: 0, mon: MS.MON_HIT_W.tank },
+  plane: { parcel: 3, bullet: 0.5, shell: 3, torp: 0, mon: MS.MON_HIT_W.plane },
+  ship: { parcel: 0.75, bullet: 0.08, shell: 0.35, torp: 1.5, mon: MS.MON_HIT_W.ship },
 };
 const HIT_WIN_MS = { tank: 8000, plane: 8000, ship: 20000 };
-const VEHICLE = ['tank', 'plane', 'ship'], KIND = ['parcel', 'bullet', 'shell', 'torp'];
+const VEHICLE = ['tank', 'plane', 'ship'], KIND = ['parcel', 'bullet', 'shell', 'torp', 'mon'];
 const weight = (veh, k) => HIT_W[VEHICLE[veh] || 'tank'][KIND[k] || 'parcel'];
-// the points of a hit of kind k (0 parcel, 1 bullet, 2 shell, 3 torpedo) on vehicle veh (0 tank, 1 plane, 2 ship)
+// the points of a hit of kind k (0 parcel, 1 bullet, 2 shell, 3 torpedo; 4 Velemlok's attack never scores) on vehicle veh (0 tank, 1
+// plane, 2 ship)
 function hitPoints(veh, k, bot) {
   const p = Math.round(10 * weight(veh, k));
   return bot ? Math.max(1, Math.round(p / 2)) : p;

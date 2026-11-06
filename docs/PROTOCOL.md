@@ -22,6 +22,9 @@ switch between them; the state rows say which (`k`).
 other, and the server keeps the team game (the scores, the zones, the supply depots, the rounds; see *The team
 game* below), whose rules and places are `client/shared/rules.ts`, the same file in the page and on the server.
 
+**Velemlok** (issue #26). Once in a while a giant salamander comes up in the Vltava and both teams fight it for a bonus; the server
+decides everything about it (see *Velemlok* below), its numbers, hitbox and attacks are `client/shared/monster.ts`.
+
 **Time.** The server's clock counts milliseconds since the server started. Every snapshot carries it
 (`ts`), and so does every row in it: the moment that row shows. The browser draws everything a fixed
 delay behind its estimate of that clock (`INTERP`, 150 ms; the pedestrians 200 ms), between the two
@@ -39,6 +42,7 @@ arrival delay seen from that player, so the pace of their tank survives the netw
 | `hit` | `by`, `sid`, `kill` | A parcel, shell, torpedo or bullet of player `by` hit **my** tank, plane or ship and the hit took effect (not while destroyed or immune). `kill`: it destroyed the vehicle. |
 | `shot` | `v`, `sid` | My bullet `sid` hit player or bot `v` on my screen (only bullets; see below). Counts within 400 units of `v`, and only on the other team. |
 | `thit` | `i`, `k`, `x`, `y`, `z`, `sid` | Issue #24: my projectile `sid` of kind `k` (`0` a parcel, `1` a bullet, `2` a shell) hit supply depot `i` (an index into `DEPOTS` in `client/shared/rules.ts`) at `x`, `y`, `z`: a parcel or a shell where it came down (burst, or first touched the ground) within `r + DEPOT_NEAR` of the depot's middle and no higher than its top, a bullet where it entered it (rules.ts `depotAt` says so). Send it only for the other team's depots. The server accepts it once per projectile, only for one this player fired with that kind and while it can still score, only from a living player of the other team within 120 (a parcel) or 400 (a bullet, a shell) of the point, and only where the depot is (give or take 1.5), then applies the damage. Nothing comes back but the next `obj`. |
+| `mhit` | `k`, `sid`, `x`, `y`, `z` | Issue #26: my projectile `sid` of kind `k` (`0` a parcel, `1` a bullet, `2` a shell, `3` a torpedo) hit Velemlok at `x`, `y`, `z`: a parcel, a shell or a torpedo where it touched its hitbox (monster.ts `monSphHit`), a bullet where its segment entered it (`monSphSegT`). The projectile stops there (do not send `hit` or `thit` for it). The server accepts it once per projectile, only for one this player fired with that kind and while it can still score, only while Velemlok is out (`obj.g.st` 1 or 2) and the round is on, only from a living player within 120 (a parcel) or 400 (a bullet, a shell, a torpedo) of the point, and only where its hitbox was in the last 0.6 s (give or take 3). Both teams may hit it. Nothing comes back but the next `obj` (`g.dmg`, at once). |
 | `ping` | `c` | Every 2 s, for the ping in the performance readout. `c`: any number, the client's clock. |
 | `ped` | `i`, `vx`, `vz` | My tank or my own parcel hit pedestrian `i`, pushing it along `vx`, `vz`. Counts only for a pedestrian within 80 units of my tank. |
 | `prop` | `i`, `fx`, `fz` | My tank knocked down prop `i` (a tree or a lamp, by its index in the client's list), falling towards `fx`, `fz`. |
@@ -47,14 +51,16 @@ arrival delay seen from that player, so the pace of their tank survives the netw
 
 | `t` | Fields | Meaning |
 | --- | --- | --- |
-| `welcome` | `id`, `name`, `color`, `pts`, `team`, `players[]`, `props[]`, `game` | You are in, in team `team` (issue #24). `players`: everyone else, as `{id, name, color, pts, bot, team}`. `props`: the trees and lamps down right now, as `[i, fx, fz]`. `game`: the team game's state now, as in `obj` (without `t`). |
+| `welcome` | `id`, `name`, `color`, `pts`, `team`, `players[]`, `props[]`, `game` | You are in, in team `team` (issue #24). `players`: everyone else, as `{id, name, color, pts, bot, team}`. `props`: the trees and lamps down right now, as `[i, fx, fz]`. `game`: the team game's state now, as in `obj` (without `t`; with Velemlok's `g`). |
 | `err` | `code` | `name_invalid`, `name_taken`, `name_reserved` (BOT1, BOT2, … belong to the bots) or `full`. The socket closes after it. |
 | `join` | `p` | Someone (a player or a bot) came in, as in `players[]` (with `team`). |
 | `team` | `id`, `team` | Issue #24: player `id` is in team `team` from now on (the teams evened out at a new round); also sent to that player. |
-| `obj` | `ts`, `sc[]`, `z[]`, `d[]`, `r` | Issue #24: the team game, once a second and at once (within 0.2 s) when something changed: `sc` the team scores `[A, B]`; `z` the zones (rules.ts `ZONES`: the three ground zones, then the river zone) as `[owner, progress]`, owner `-1` nobody, `0` A, `1` B, progress −100 (B) … 100 (A), whole numbers; `d` the supply depots (rules.ts `DEPOTS`: 4 of A, then 4 of B) as `[hp, upAt]`, `hp` 0 … 6 (destroyed at 0), `upAt` the moment it is rebuilt on the server's clock (as `ts`), 0 while it stands; `r` the round: `{st, left, win, to, best?}`, `st` `'play'` or `'end'` (the intermission), `left` its seconds left, `win` `-1` (none yet, or a draw) or the winning team once it has ended, `to` the points that win a round, `best` after a round the best players as `[[id, pts], …]` (up to three, people and bots). |
-| `pts` | `id`, `pts`, `gain` | Issue #24: player or bot `id` scored `gain` points outside the hits and now has `pts`: `CAP_PTS` (rules.ts) for every vehicle of the team inside a zone when the team takes it (they count for the team too), or `DEPOT_PTS` for destroying a depot (the team already has them through `obj`). |
+| `obj` | `ts`, `sc[]`, `z[]`, `d[]`, `r` | Issue #24: the team game, once a second and at once (within 0.2 s) when something changed: `sc` the team scores `[A, B]`; `z` the zones (rules.ts `ZONES`: the three ground zones, then the river zone) as `[owner, progress]`, owner `-1` nobody, `0` A, `1` B, progress −100 (B) … 100 (A), whole numbers; `d` the supply depots (rules.ts `DEPOTS`: 4 of A, then 4 of B) as `[hp, upAt]`, `hp` 0 … 6 (destroyed at 0), `upAt` the moment it is rebuilt on the server's clock (as `ts`), 0 while it stands; `r` the round: `{st, left, win, to, best?}`, `st` `'play'` or `'end'` (the intermission), `left` its seconds left, `win` `-1` (none yet, or a draw) or the winning team once it has ended, `to` the points that win a round, `best` after a round the best players as `[[id, pts], …]` (up to three, people and bots). Issue #26: `g` Velemlok, always: `{st, hp, max, dmg, next}`, `st` `0` away, `1` surfacing, `2` out, `3` leaving; `hp` its hit points (whole, rounded up) of `max`; `dmg` the damage each team has dealt it in this appearance `[A, B]` (whole); `next` a moment on the server's clock (as `ts`): while away, when it comes next (in the intermission: the next round's start plus `MON_FIRST_S`), while surfacing or out, when it leaves, while leaving, when it is gone. Its state and damage changing send `obj` at once. |
+| `pts` | `id`, `pts`, `gain` | Issue #24: player or bot `id` scored `gain` points outside the hits and now has `pts`: `CAP_PTS` (rules.ts) for every vehicle of the team inside a zone when the team takes it (they count for the team too), or `DEPOT_PTS` for destroying a depot (the team already has them through `obj`); issue #26: or its share of a fight with Velemlok, `round(damage / MON_PTS_PER)`, right after `mres` (personal only). |
+| `mon` | `a`, `i`, `v`, `x`, `y`, `z`, `r`, `at` (a jet also `t0`, `sx`, `sy`, `sz`, `vx`, `vy`, `vz`) | Issue #26: an attack of Velemlok, announced before it lands. `a`: `'slam'` (its tail on a ship: a ring of water), `'jet'` (a heavy arc of water at a tank or a ship) or `'geyser'` (a column of water under a plane); `i` its number, `v` the vehicle it was aimed at; it lands at `x`, `z` (`y`: the surface there, a geyser's base) with radius `r` at the moment `at` (the server's clock). A slam is announced `MON_SLAM_WARN` before it lands (the tail rises), a geyser `MON_GEY_WARN` (a warning ring on the water); a jet leaves its mouth at `sx`, `sy`, `sz` at `t0` (`MON_JET_WIND` after the announcement: it rears up) with velocity `vx`, `vy`, `vz`, falls at `MON_JET_G` and lands at `at` (monster.ts `monJetAt`). At `at` every browser applies it to its own vehicle when `monAtkHits` (monster.ts) says it is in it, whoever it was aimed at, both teams, as a hit of kind `mon` (`HIT_W`), and answers nothing: it scores for nobody. The server applies it to the bots. |
+| `mres` | `killed`, `dmg`, `win`, `pts`, `top`, `end` | Issue #26: Velemlok leaves: `killed` (its hit points ran out: it rolls over and sinks) or it fled (`MON_LIFE_S` after it surfaced: it dives). `dmg` the damage of A and B `[A, B]` (whole), `win` the team that dealt more (`-1` a tie), `pts` the bonus that team got (`MON_KILL_PTS` or `MON_FLEE_PTS`, already in its score; 0 on a tie), `top` the three who dealt the most as `[[id, dmg], …]` (people and bots). `end: 1`: the end of the round sent it away (it dives): no bonus, no personal points (`win` −1, `pts` 0). Then the personal points come as `pts`. |
 | `leave` | `id` | Someone left. |
-| `snap` | `ts`, `n`, `p[]`, `c[]`, `m`, `k[]`, `q[]` | 20× a second. `ts`: the server's clock, `n`: the tick (the same snapshot has the same `n` for everyone). `p`: every tank as `[id, x, z, h, v, r, s, t]`, `t` the moment of the row; a plane as `[id, x, z, h, v, r, s, t, 1, y, p]`; a ship as `[id, x, z, h, v, r, s, t, 2, y, p, fore, aft]`. `c`: the `N_CARS` cars of the traffic as `x, z, heading, speed` (flat, in the client's car order) at `ts`; `m`: the tram's place along its track. `k`: the cars players push, as `[i, owner, t, x, z, heading, speed]` (`t`: the moment of the owner's report, drawn in step with the owner's tank). `q`: parked cars pushed away from their spot and left there, as `[i, x, z, heading]`; a parked car not in `k` or `q` is on its spot. |
+| `snap` | `ts`, `n`, `p[]`, `c[]`, `m`, `k[]`, `q[]`, `g` | 20× a second. `ts`: the server's clock, `n`: the tick (the same snapshot has the same `n` for everyone). `p`: every tank as `[id, x, z, h, v, r, s, t]`, `t` the moment of the row; a plane as `[id, x, z, h, v, r, s, t, 1, y, p]`; a ship as `[id, x, z, h, v, r, s, t, 2, y, p, fore, aft]`. `c`: the `N_CARS` cars of the traffic as `x, z, heading, speed` (flat, in the client's car order) at `ts`; `m`: the tram's place along its track. `k`: the cars players push, as `[i, owner, t, x, z, heading, speed]` (`t`: the moment of the owner's report, drawn in step with the owner's tank). `q`: parked cars pushed away from their spot and left there, as `[i, x, z, heading]`; a parked car not in `k` or `q` is on its spot. Issue #26: `g` Velemlok's pose at `ts` while it is there (`st` 1, 2 or 3; absent while away) as `[x, z, h, y, st, hp, rear]`: `x`, `z` the middle of its body, `h` its heading (the head points that way), `y` how far it is under its swimming height (0 out, down to `MON_DEEP` while surfacing, diving or sinking), `st` as `obj.g.st`, `hp` its hit points (`st` 3 with `hp` 0: it was killed, it rolls over and sinks), `rear` 0…1 how far it rears up (for a jet or a geyser). Its hitbox at that pose is monster.ts `monSpheres`. |
 | `fire` | `id`, `sid`, `x`, `y`, `z`, `vx`, `vy`, `vz`, `k` | Someone else's parcel, or with `k: 1` a bullet, `k: 2` a shell, `k: 3` a torpedo: fly it in your world. |
 | `hit` | `by`, `v`, `pts`, `gain`, `kill` | `by` scored `gain` points by hitting `v` and now has `pts` (their own points; the team's come in `obj`). `kill`: the hit destroyed `v`. |
 | `dmg` | `by`, `sid` | A bullet of `by` hit you on the shooter's screen: apply it and, if it took effect, answer with `hit` as for a parcel. |
@@ -105,6 +111,11 @@ bullet 3 s, a shell 10 s, a torpedo 20 s (it runs 16).
   bot fires salvos of shells, torpedoes and anti-aircraft bursts (`server/planebot.js`, `server/shipbot.js`).
 - **A supply depot** (issue #24): the server. A player's browser reports where its parcel, shell or bullet hit one
   (`thit`), the server checks it and applies it; the bots' fire at depots is flown on the server.
+- **Velemlok** (issue #26): the server, as for a depot. A player's browser reports where its projectile hit it (`mhit`), the
+  server checks it against the poses it sent and counts it; the bots' fire at it is flown on the server, and everything the
+  server flies stops on it. **Its attacks:** the victim, as for a parcel: the server announces each (`mon`), every browser
+  applies it to its own vehicle when it lands, the server to the bots. They weigh `MON_HIT_W` (kind `mon` of `HIT_W`: a tank
+  1.5, a plane 3, a ship 0.9) and score for nobody.
 
 ## The team game (issue #24)
 
@@ -133,6 +144,40 @@ The rules, the places and the numbers are `client/shared/rules.ts`; the server's
   other, its most recently joined person goes over: a `team` message), and the bots come back on their side. Every
   browser zeroes its scoreboard and brings its own vehicle back in its half when `r.st` turns from `'end'` to
   `'play'` (no other message says so).
+
+## Velemlok (issue #26)
+
+The numbers, its hitbox and what its attacks hit are `client/shared/monster.ts`; its state machine and its mind are
+`server/monster.js`.
+
+- **When.** `MON_FIRST_S` (300 s) after a round starts, then `MON_EVERY_S` (360 s) after it has gone; never in the intermission:
+  the end of a round sends it away (an `mres` with `end: 1`, nothing for anyone), and it comes `MON_FIRST_S` after the next round
+  starts. `obj.g.next` always says the next moment, the same for everyone (the ships' HUD counts down to it). Env `MON_FIRST_S`,
+  `MON_EVERY_S`, `MON_LIFE_S` and `MON_HP` override the numbers (for tests).
+- **Where.** It surfaces (`MON_SURF_S`, `st` 1) at a random spot of the Vltava's main channel along Karlín (on the water at least
+  30 from every bank and pier, at least 150 from every ship) and swims on the water only, at most `MON_V` (6) a second, the banks
+  and the bridge piers stopping it (it goes under the bridges). About 60 long, its back some 5 over the water; it rears up to
+  about 22 for a jet or a geyser.
+- **Its hit points** `MON_HP` (900). A parcel takes 9, a shell 7, a torpedo 30, a bullet 0.6 (`MON_DMG`), whoever fired it; the
+  server keeps the damage per team and per player or bot.
+- **It defends itself.** It keeps a threat table: every vehicle's damage in the last `MON_THREAT_S` (20 s). Every `MON_ATK_S`
+  (3.5 s; `MON_RAGE_ATK_S`, 2.2 s, below half its hit points) it attacks the top threat in reach, else the nearest vehicle in
+  reach (people and bots of both teams, not one destroyed or immune); meanwhile it swims towards the top threat, or wanders along
+  the river when nobody has hurt it lately. It stands still while it winds an attack up. Reach is measured from its body
+  (monster.ts `monDist`): a **tail slam** on a ship within `MON_SLAM_REACH` (30; a ring of radius 14 where the ship will be, 1 s
+  later), a **water jet** at a tank or a ship within `MON_JET_REACH` (120; it rears up for 0.7 s, the water flies 0.7 to 2 s and
+  splashes 6 round where the vehicle will be), a **geyser** under a plane within `MON_GEY_REACH` (90) horizontally and lower than
+  `MON_GEY_BELOW` (70) whose geyser would come up from the river (radius 8, up to `MON_GEY_TOP`, 80, 0.8 s after the warning).
+- **It leaves** when its hit points run out (it rolls over and sinks, `MON_SINK_S`) or `MON_LIFE_S` (180 s) after it began to
+  surface (it dives, `MON_DIVE_S`): `mres`. The team that dealt more damage gets `MON_KILL_PTS` (150) if it was killed,
+  `MON_FLEE_PTS` (60) if it fled (a tie: nobody); every player and bot that hurt it gets `round(damage / MON_PTS_PER)` (6)
+  personal points (`pts`; not for the team).
+- **The bots fight it** while it is out: the ship bots hunt it within 650 (they sail round it at 70 to 110, in reach of its jets)
+  and their turrets take it before anything else within 300, their torpedoes too; the plane bots go for it before the depots and
+  the tanks (an enemy plane near still comes first): bombing runs on its back while they have parcels, else dives with their
+  guns, keeping above its geysers' top near it otherwise, and noticing a geyser under them half of the time; the tank bots fire
+  at it when it comes within a parcel's reach of the embankment (62) and no enemy is in range. A fight of the bots alone takes
+  1.5 to 3 minutes, about two on average (the ship bots deal nearly all of the damage; `server/shipbot.js` `MON_TORP_SLOW`).
 
 ## Who moves a car
 

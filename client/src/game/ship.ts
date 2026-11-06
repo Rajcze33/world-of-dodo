@@ -35,6 +35,7 @@ import { fireShell, fireTorp, shipBox, glow, puff, SHELL_V, SHELL_G } from './sh
 import { startImpactFx } from './fx';
 import { teamMat, friendly } from './teams';
 import { TEAM_SHIP_SPAWNS } from '../../shared/rules.ts';
+import { MON, monSeg } from './monster';
 
 // ---------- the numbers ----------
 // speed: the top speed (13 u/s, 38 knots), how fast the speed follows the telegraph (up, and down or braking), the telegraph's steps
@@ -250,6 +251,14 @@ function shipPen(x: number, z: number, h: number): typeof PEN | null {
         if (pen > PEN.pen) { PEN.nx = d > 1e-6 ? dx / d : -fx; PEN.nz = d > 1e-6 ? dz / d : -fz; PEN.pen = pen; PEN.o = o; }
       }
     }
+    // World of DODO, issue #26: Velemlok's body where it meets the water (its spheres' circles at the surface): it only bumps
+    if (MON.on && MON.pose.y > -6 && Math.abs(MON.pose.x - px) < 45 && Math.abs(MON.pose.z - pz) < 45) {
+      for (const s of MON.sph) {
+        const e = WATER_Y - s[1], rr = s[3] * s[3] - e * e; if (rr <= 0) continue;
+        const dx = px - s[0], dz = pz - s[2], d = Math.hypot(dx, dz), pen = Math.sqrt(rr) + SHIP_CR - d;
+        if (pen > PEN.pen) { PEN.nx = d > 1e-6 ? dx / d : -fx; PEN.nz = d > 1e-6 ? dz / d : -fz; PEN.pen = pen; PEN.o = null; }
+      }
+    }
   }
   return PEN.pen > 1e-4 ? PEN : null;
 }
@@ -312,6 +321,8 @@ function aimRay() {
     if (o.k === 2) for (const j of SHIP_C) t = Math.min(t, raySphere(ox, oy, oz, dx, dy, dz, o.x + o.hx * j, WATER_Y + o.y + 1.6, o.z + o.hz * j, 3));
     else t = Math.min(t, raySphere(ox, oy, oz, dx, dy, dz, o.x, groundH(o.x, o.z) + 1.1, o.z, 2));
   }
+  // World of DODO, issue #26: Velemlok (its hitbox as drawn), so the guns range on it
+  const mt = monSeg(ox, oy, oz, ox + dx * t, oy + dy * t, oz + dz * t); if (mt < 1) t *= mt;
   sh.ax = ox + dx * t; sh.ay = oy + dy * t; sh.az = oz + dz * t;
 }
 // The elevation that drops a shell from a muzzle onto a point d away (horizontally) and dy higher, the flatter of the two arcs, and

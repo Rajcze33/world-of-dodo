@@ -16,12 +16,18 @@
 // the hits (server/bots.js hitBot), or by flying into something (crashed below: the ground, the water, a building, another vehicle).
 // Then it blows up where it is (its row says destroyed, the browsers draw the blast) and comes back from its team's edge of the
 // airspace (rules.ts PLANE_SIDE_X).
+//
+// Issue #26: Velemlok (server/monster.js). While it is out a plane bot goes for it before the depots and the tanks (an enemy plane
+// near still comes first): with parcels aboard it makes bombing runs on its back as on a depot (leading it by the parcels' fall), else
+// it dives on it and fires bursts; near it, it keeps above MON_GEY_TOP + MON_ABOVE (its geysers reach up to MON_GEY_TOP) unless on a run
+// or a dive, and when a geyser is announced under it, it notices it with MON_DODGE_P and turns hard and pulls up.
 'use strict';
 
 const M = require('./city');
 const { surfaceY, WATER_Y } = require('../client/shared/naval.ts');
 const { DEPOTS, ZONES, homeSide, zoneAt, PLANE_SIDE_X } = require('../client/shared/rules.ts');
 const { shipBox } = require('./shots');
+const { MON_GEY_TOP, monSphHit } = require('../client/shared/monster.ts');
 
 // the flight, as client/src/game/plane.ts: stall speed, the best turn's speed, thrust, drag, gravity, the fastest turn (rad/s), the speed a
 // turn bleeds, the bank; the guns (seconds between bullets, where their lines meet ahead), the parcels aboard and their reload; where a
@@ -46,6 +52,10 @@ const STRAFE_UP = 22, STRAFE_NEAR = 40, EGRESS = [3, 5];
 const AVOID = 12, AVOID_T = 1.6;
 // the farthest the aim goes off the heading (radians)
 const YAW_MAX = 0.9;
+// issue #26: Velemlok: how far over its geysers' top a bot keeps within MON_NEAR of it (unless on a run or a dive); how likely it notices
+// a geyser announced under it (then it turns hard and pulls up for the warning's length and MON_JINK more); its bombing runs' error;
+// how high its back is over the water (where the parcels should come down)
+const MON_ABOVE = 8, MON_NEAR = 200, MON_DODGE_P = 0.5, MON_JINK = 0.4, MON_DROP_ERR = 4, MON_BACK = 4, MON_PULL = 34, MON_PULL_NEAR = 60;
 
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -84,6 +94,7 @@ function spawn(b, ctx) {
     x, z, h, y: Math.max(SPAWN_Y, ridge(x, z) + 25), p: 0, v: SPAWN_V, roll: 0, thr: 0.75, aimY: h, aimP: 0, stall: false,
     gunCd: 0, gun: 1, bombs: BOMBS, bombT: 0, bombCd: 0, role: 'patrol', tgt: -1, thinkT: rand(0.5, 1.5), burstT: 0, pauseT: rand(1, 2),
     berr: [0, 0], egressT: 0, chaseT: 0, offT: 0, run: false, rerr: [0, 0], dropped: 0, lookT: 0, ahead: 0, crashed: false, a0: 0, a1: 0,
+    jinkT: 0, jinkDir: 1, dodgeI: 0,
   });
 }
 
@@ -94,9 +105,15 @@ function think(b, ctx) {
     if (o.team === b.team || o.k !== 1 || o.s) continue;
     const d = Math.hypot(o.x - b.x, o.y - b.y, o.z - b.z); if (d < fd) { fd = d; foe = o; }
   }
-  const late = b.role === 'bomb' && b.run && Math.hypot(DEPOTS[b.tgt].x - b.x, DEPOTS[b.tgt].z - b.z) < 160;   // the run's last part: finish it
+  const late = b.role === 'bomb' && b.run && Math.hypot(DEPOTS[b.tgt].x - b.x, DEPOTS[b.tgt].z - b.z) < 160   // the run's last part: finish it
+    || b.role === 'mon' && b.run && ctx.mon;
   if (foe && !late && b.offT <= 0) { if (b.role !== 'chase' || b.tgt !== foe.id) { b.role = 'chase'; b.tgt = foe.id; b.chaseT = 0; } return; }
   if (b.egressT > 0 || late) return;
+  // issue #26: Velemlok is out: at it (bombs while there are parcels aboard, else the guns)
+  if (ctx.mon) {
+    if (b.role !== 'mon') { b.role = 'mon'; b.tgt = -1; b.run = false; b.dropped = 0; b.rerr = [rand(-1, 1) * MON_DROP_ERR, rand(-1, 1) * MON_DROP_ERR]; }
+    return;
+  }
   if (b.bombs > 0) {
     if (b.role === 'bomb' && ctx.depots[b.tgt].hp > 0) return;
     let best = -1, bd = Infinity;
@@ -116,10 +133,13 @@ function think(b, ctx) {
 }
 
 // the ground, the water, a building (map.ts solidNear, the margins of game/plane.ts crashed), a standing supply depot (issue #24: within
-// its r below its top, as client/src/world/objectives.ts depotBody; rules.ts DEPOT_SOLID) or another vehicle: destroyed
+// its r below its top, as client/src/world/objectives.ts depotBody; rules.ts DEPOT_SOLID), Velemlok's body (issue #26: its spheres, as
+// game/monster.ts monBody) or another vehicle: destroyed
 function crashed(b, ctx) {
   if (b.y < surfaceY(b.x, b.z) + 0.8) return 'ground';
   if (M.solidNear(b.x, b.y, b.z, 0.9, 0.6)) return 'building';
+  const m = ctx.mon;
+  if (m && b.y < 30 && m.y > -10 && Math.abs(b.x - m.x) < 42 && Math.abs(b.z - m.z) < 42 && monSphHit(m.sph, b.x, b.y, b.z)) return 'monster';
   if (b.y < 12) for (const D of DEPOTS) {
     const dx = b.x - D.x, dz = b.z - D.z;
     if (ctx.depots[D.i].hp > 0 && dx * dx + dz * dz < D.r * D.r && b.y < D.y + D.h && b.y > D.y - 1.5) return 'depot';
@@ -155,30 +175,22 @@ function step(b, dt, ctx) {
     const o = find(b.tgt), d = Math.hypot(o.x - b.x, o.y - b.y, o.z - b.z), t = d / (BUL_V + b.v * 0.7);
     tx = o.x + Math.sin(o.h) * Math.cos(o.p) * o.v * t; ty = o.y + Math.sin(o.p) * o.v * t; tz = o.z + Math.cos(o.h) * Math.cos(o.p) * o.v * t;
     thr = d > 120 ? 1 : 0.6; gunAt = o;
+  } else if (b.role === 'mon' && ctx.mon && b.bombs > 0) {
+    // issue #26: a bombing run on Velemlok's back, leading it by the parcels' fall (about RUN_Y's: 2.5 s)
+    const m = ctx.mon, lead = m.v * 2.5;
+    [tx, ty, tz, thr, clear] = bombRun(b, m.x + Math.sin(m.h) * lead + b.rerr[0], m.z + Math.cos(m.h) * lead + b.rerr[1], WATER_Y + MON_BACK, ground, out, 'mon');
+  } else if (b.role === 'mon' && ctx.mon) {
+    // issue #26: no parcels aboard: a dive on its shoulders (the biggest of its spheres), bursts, and up and away at MON_PULL over the
+    // water or MON_PULL_NEAR from it (higher and farther than from a tank: rearing up, its head stands 28 over the water)
+    const m = ctx.mon, s = m.sph[1], d = Math.hypot(s[0] - b.x, s[1] - b.y, s[2] - b.z), t = d / (BUL_V + b.v * 0.7);
+    tx = s[0] + Math.sin(m.h) * m.v * t; ty = s[1] + 1; tz = s[2] + Math.cos(m.h) * m.v * t; thr = 0.7; clear = LOW;
+    if (d < 260) gunAt = { x: tx, y: ty, z: tz };
+    const hd = Math.hypot(s[0] - b.x, s[2] - b.z);
+    if (hd > 260) ty = Math.max(ty, ground + CRUISE * 0.8, MON_GEY_TOP + MON_ABOVE);   // come in high, dive from there
+    if (b.y - topNear(b.x, b.z, 8) < MON_PULL || hd < MON_PULL_NEAR) { b.egressT = rand(...EGRESS); b.thinkT = b.egressT; }
   } else if (b.role === 'bomb' && ctx.depots[b.tgt] && ctx.depots[b.tgt].hp > 0) {
-    const D = DEPOTS[b.tgt], ax = D.x + b.rerr[0], az = D.z + b.rerr[1], hd = Math.hypot(ax - b.x, az - b.z);
-    const off = Math.abs(wrapA(Math.atan2(ax - b.x, az - b.z) - b.h));
-    tx = ax; tz = az;
-    if (!b.run) {
-      ty = Math.max(D.y + CRUISE, ground + MIN_CLEAR);
-      if (hd < RUN_R && off < 0.35) { b.run = true; b.dropped = 0; }
-      else if (hd < 120) {                                      // too close to turn onto it: fly out and come round again
-        tx = b.x + Math.sin(b.h) * 300; tz = b.z + Math.cos(b.h) * 300;
-      }
-    } else {
-      ty = D.y + RUN_Y; thr = 0.65; clear = LOW;
-      // where a parcel dropped now lands (game/plane.ts's bomb sight: the parcels' gravity, the plane's speed)
-      const [mx, my, mz] = fwd(b.h, b.p), vy = my * b.v, H = Math.max(0, b.y - 1 - D.y), t = (vy + Math.sqrt(vy * vy + 2 * SHOT_G * H)) / SHOT_G;
-      const lx = b.x + mx * b.v * t, lz = b.z + mz * b.v * t, miss = Math.hypot(lx - ax, lz - az);
-      const along = ((ax - lx) * mx + (az - lz) * mz) / (Math.hypot(mx, mz) || 1);     // > 0: it would land short of it
-      if (miss < DROP_OK + 2.5 * b.dropped && b.bombs > 0 && b.bombCd <= 0 && b.y - D.y < RUN_Y + 40) {
-        b.bombs--; b.bombCd = BOMB_CD; b.dropped++;
-        out.push({ k: 0, x: r2(b.x), y: r2(b.y - 1), z: r2(b.z), vx: r2(mx * b.v), vy: r2(my * b.v), vz: r2(mz * b.v) });
-      }
-      if (b.dropped >= 3 || (b.dropped && along < -8) || along < -30 || !b.bombs || off > 1.2) {   // done, or past it: away and round again
-        b.run = false; b.egressT = rand(...EGRESS); b.thinkT = b.egressT; b.role = b.bombs ? 'bomb' : 'patrol';
-      }
-    }
+    const D = DEPOTS[b.tgt];
+    [tx, ty, tz, thr, clear] = bombRun(b, D.x + b.rerr[0], D.z + b.rerr[1], D.y, ground, out, 'bomb');
   } else if (b.role === 'strafe' && find(b.tgt)) {
     const o = find(b.tgt), gy = M.groundH(o.x, o.z), d = Math.hypot(o.x - b.x, gy + 1 - b.y, o.z - b.z), t = d / (BUL_V + b.v * 0.7);
     tx = o.x + Math.sin(o.h) * o.v * t; ty = gy + 1; tz = o.z + Math.cos(o.h) * o.v * t; thr = 0.7; clear = LOW;
@@ -191,13 +203,24 @@ function step(b, dt, ctx) {
     const q = ZONES[1], a = Math.atan2(b.x - q.x, b.z - q.z) + 0.6;
     tx = q.x + Math.sin(a) * 220; tz = q.z + Math.cos(a) * 220; ty = ground + CRUISE + 20;
   }
+  // issue #26: near Velemlok (and not on a run or a dive at it), over its geysers; one announced under it: maybe noticed (see the top)
+  const mon = ctx.mon;
+  if (mon) {
+    const diving = b.run || (b.role === 'mon' && !b.bombs && b.egressT <= 0) || b.role === 'chase';
+    if (!diving && Math.hypot(mon.x - b.x, mon.z - b.z) < MON_NEAR) ty = Math.max(ty, MON_GEY_TOP + MON_ABOVE);
+    for (const A of mon.atk) if (A.a === 'geyser' && A.v === b.id && A.i !== b.dodgeI) {
+      b.dodgeI = A.i;
+      if (Math.random() < MON_DODGE_P) { b.jinkT = A.inS + MON_JINK; b.jinkDir = Math.random() < 0.5 ? -1 : 1; }
+    }
+  }
   // the aim: towards the point; never steeper than a shallow dive unless strafing; kept over the ground ahead; under AIR_TOP
   b.goal = [tx, ty, tz, clear];
   const hd = Math.hypot(tx - b.x, tz - b.z);
   // (the nose turns towards the aim along the great circle, game/plane.ts: an aim far behind would take it through a loop or a dive,
   // so the aim stays within YAW_MAX of the heading, as the keys keep a player's)
   b.aimY = b.h + clamp(wrapA(Math.atan2(tx - b.x, tz - b.z) + b.berr[0] * (b.burstT > 0 ? 1 : 0) - b.h), -YAW_MAX, YAW_MAX);
-  b.aimP = clamp(Math.atan2(ty - b.y, Math.max(hd, 1)) + b.berr[1] * (b.burstT > 0 ? 1 : 0), b.role === 'strafe' ? -0.6 : -0.38, 0.5);
+  b.aimP = clamp(Math.atan2(ty - b.y, Math.max(hd, 1)) + b.berr[1] * (b.burstT > 0 ? 1 : 0), b.role === 'strafe' || b.role === 'mon' && !b.bombs ? -0.6 : -0.38, 0.5);
+  if ((b.jinkT -= dt) > 0) { b.aimY = b.h + b.jinkDir * YAW_MAX; b.aimP = clamp(b.aimP + 0.35, 0.1, 0.5); thr = 1; b.burstT = 0; }
   // no steeper climb than the speed allows (a slow plane stalls: game/plane.ts): level out under 26, nose down a little under 18
   b.aimP = Math.min(b.aimP, clamp((b.v - 18) / 16, -0.12, 0.5));
   if (b.v < 26) thr = 1;
@@ -239,6 +262,35 @@ function step(b, dt, ctx) {
   }
   if (b.gunCd < 0) b.gunCd = 0;
   return out;
+}
+
+// A bombing run on (ax, az) at height ay: come in at CRUISE, turn onto it, go down to RUN_Y over it in a shallow dive, drop the parcels
+// where the bomb sight says they land on it, pull up and away; then the next run (role `again` while there are parcels aboard).
+// Returns the aim point, the throttle and the clearance [tx, ty, tz, thr, clear]; what it drops goes into out.
+function bombRun(b, ax, az, ay, ground, out, again) {
+  const hd = Math.hypot(ax - b.x, az - b.z), off = Math.abs(wrapA(Math.atan2(ax - b.x, az - b.z) - b.h));
+  let tx = ax, tz = az, ty, thr = 0.75, clear = MIN_CLEAR;
+  if (!b.run) {
+    ty = Math.max(ay + CRUISE, ground + MIN_CLEAR);
+    if (hd < RUN_R && off < 0.35) { b.run = true; b.dropped = 0; }
+    else if (hd < 120) {                                      // too close to turn onto it: fly out and come round again
+      tx = b.x + Math.sin(b.h) * 300; tz = b.z + Math.cos(b.h) * 300;
+    }
+  } else {
+    ty = ay + RUN_Y; thr = 0.65; clear = LOW;
+    // where a parcel dropped now lands (game/plane.ts's bomb sight: the parcels' gravity, the plane's speed)
+    const [mx, my, mz] = fwd(b.h, b.p), vy = my * b.v, H = Math.max(0, b.y - 1 - ay), t = (vy + Math.sqrt(vy * vy + 2 * SHOT_G * H)) / SHOT_G;
+    const lx = b.x + mx * b.v * t, lz = b.z + mz * b.v * t, miss = Math.hypot(lx - ax, lz - az);
+    const along = ((ax - lx) * mx + (az - lz) * mz) / (Math.hypot(mx, mz) || 1);     // > 0: it would land short of it
+    if (miss < DROP_OK + 2.5 * b.dropped && b.bombs > 0 && b.bombCd <= 0 && b.y - ay < RUN_Y + 40) {
+      b.bombs--; b.bombCd = BOMB_CD; b.dropped++;
+      out.push({ k: 0, x: r2(b.x), y: r2(b.y - 1), z: r2(b.z), vx: r2(mx * b.v), vy: r2(my * b.v), vz: r2(mz * b.v) });
+    }
+    if (b.dropped >= 3 || (b.dropped && along < -8) || along < -30 || !b.bombs || off > 1.2) {   // done, or past it: away and round again
+      b.run = false; b.egressT = rand(...EGRESS); b.thinkT = b.egressT; b.role = b.bombs || again === 'mon' ? again : 'patrol';
+    }
+  }
+  return [tx, ty, tz, thr, clear];
 }
 
 // the flight, as game/plane.ts updateFly: the nose turns towards the aim along the great circle, as fast as the speed allows; the bank;

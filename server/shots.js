@@ -12,11 +12,14 @@
 // client/src/game/shells.ts; it bursts on the ground, the water or a building), a torpedo running on the water (TORP_RUN, until a bank
 // or a pier), a bullet straight (BUL_LIFE, client/src/game/bullets.ts). The hit shapes are the browsers': a tank's box (TANK_L, TANK_W,
 // TANK_H), a plane's sphere (PLANE_R), a ship's box (shipBox, as game/shells.ts) and for a bullet its three spheres (SHIP_R).
+// Issue #26: and Velemlok, when it is out (client/shared/monster.ts, its spheres): everything flown here stops on it, as in the browsers,
+// and the server counts the bots' hits on it (the people report theirs, mhit).
 'use strict';
 
 const { solidAt, groundH, segHit, inArena } = require('./city');
 const { surfaceY, inWater, WATER_Y } = require('../client/shared/naval.ts');
 const { DEPOTS, depotAt } = require('../client/shared/rules.ts');
+const { monSphHit, monSphSegT } = require('../client/shared/monster.ts');
 
 const SHOT_G = 14, SHOT_E = 0.4, PARCEL_LIFE = 6;
 const SHELL_G = 38, SHELL_LIFE = 8;                         // (SHELL_G: the same as client/src/game/shells.ts)
@@ -73,8 +76,10 @@ function depotT(ax, ay, az, dx, dy, dz, D) {
 // One step of every projectile in list (removed when it is done). s: { k (0 parcel, 1 bullet, 2 shell, 3 torpedo), by, team, sid, bot
 // (fired by a bot), x, y, z, vx, vy, vz, age, lag (ms; a person's), run (a torpedo's) }.
 // targets(lag): the bots as { b, kind, team, x, y, z, h } where they were lag ms ago (the living ones that can be hit); onBot(b, s) when
-// s reaches bot b of another team, onDepot(i, s) when a bot's s reaches depot i of another team. Returns nothing.
-function fly(list, dt, targets, onBot, onDepot) {
+// s reaches bot b of another team, onDepot(i, s) when a bot's s reaches depot i of another team. Issue #26: mon, Velemlok while it is
+// out ({ x, z, sph: its spheres this tick (monster.ts monSpheres), hit(s) when s reaches it }), or null. Returns nothing.
+function fly(list, dt, targets, onBot, onDepot, mon = null) {
+  MON = mon;
   const cache = new Map();                                  // lag -> the bots then (the people's shots share a few lags)
   const at = lag => { const k = Math.round(lag / 25); let v = cache.get(k); if (!v) { v = targets(k * 25); cache.set(k, v); } return v; };
   for (let i = list.length - 1; i >= 0; i--) {
@@ -84,6 +89,11 @@ function fly(list, dt, targets, onBot, onDepot) {
     if (!alive || s.age > (s.k === SHELL ? SHELL_LIFE : s.k === BULLET ? BUL_LIFE : s.k === TORP ? 30 : PARCEL_LIFE)) list.splice(i, 1);
   }
 }
+// issue #26: Velemlok this step (or null), and is (x, y, z) in it? (a quick box round its body first: its spheres reach about 35 from
+// the middle of its body and 30 over the water)
+let MON = null;
+const MON_BOX = 42;
+const inMon = (x, y, z) => MON !== null && Math.abs(x - MON.x) < MON_BOX && Math.abs(z - MON.z) < MON_BOX && y < WATER_Y + 32 && monSphHit(MON.sph, x, y, z);
 // a bot's projectile that came down (or burst) at x, y, z: on a depot of the other team?
 function depotHit(s, x, y, z, onDepot) {
   if (!s.bot) return false;
@@ -98,6 +108,7 @@ function ballStep(s, dt, foes, onBot, onDepot) {
     s.vy -= (shell ? SHELL_G : SHOT_G) * h; s.x += s.vx * h; s.y += s.vy * h; s.z += s.vz * h;
     if (Math.abs(s.x) > 800 || Math.abs(s.z) > 800) return false;
     if (solidAt(s.x, s.y, s.z)) { depotHit(s, s.x, s.y, s.z, onDepot); return false; }   // a building stops it (in the game a parcel bounces off)
+    if (inMon(s.x, s.y, s.z)) { MON.hit(s); return false; }
     for (const p of foes) if ((!shell || p.kind !== 1) && inside(p, s.x, s.y, s.z)) { onBot(p.b, s); return false; }   // (shells fly through planes)
     if (depotHit(s, s.x, s.y, s.z, onDepot)) return false;
     const g = surfaceY(s.x, s.z), wet = g === WATER_Y && !inArena(s.x, s.z);
@@ -119,6 +130,7 @@ function torpStep(s, dt, foes, onBot) {
   for (let k = 0; k < n; k++) {
     s.x += hx * d; s.z += hz * d; s.run = (s.run || 0) + d;
     if (!inWater(s.x, s.z, 0.3) || s.run >= TORP_RUN) return false;
+    if (inMon(s.x, WATER_Y + 0.3, s.z)) { MON.hit(s); return false; }
     for (const p of foes) if (p.kind === 2 && shipBox(s.x, WATER_Y + 0.3, s.z, p.x, p.y, p.z, p.h)) { onBot(p.b, s); return false; }
   }
   return true;
@@ -126,7 +138,7 @@ function torpStep(s, dt, foes, onBot) {
 // a bullet: straight, stopped by the first building, the ground or the water, a vehicle of the other team or (a bot's) a depot
 function bulletStep(s, dt, foes, onBot, onDepot) {
   const dx = s.vx * dt, dy = s.vy * dt, dz = s.vz * dt;
-  let t = segHit(s.x, s.y, s.z, s.x + dx, s.y + dy, s.z + dz), who = null, dep = -1;
+  let t = segHit(s.x, s.y, s.z, s.x + dx, s.y + dy, s.z + dz), who = null, dep = -1, mon = false;
   const ge = surfaceY(s.x + dx, s.z + dz) + 0.05;
   if (s.y + dy < ge) { const u = dy < 0 ? Math.max(0, (s.y - ge) / -dy) : 0; if (u < t) t = u; }
   const ex = s.x + dx / 2, ez = s.z + dz / 2, reach = Math.hypot(dx, dz) / 2 + 14;
@@ -138,9 +150,12 @@ function bulletStep(s, dt, foes, onBot, onDepot) {
     if (D.team === s.team || Math.abs(D.x - ex) > reach || Math.abs(D.z - ez) > reach) continue;
     const u = depotT(s.x, s.y, s.z, dx, dy, dz, D); if (u < t) { t = u; who = null; dep = D.i; }
   }
+  if (MON !== null && Math.abs(MON.x - ex) < reach + MON_BOX && Math.abs(MON.z - ez) < reach + MON_BOX) {
+    const u = monSphSegT(MON.sph, s.x, s.y, s.z, s.x + dx, s.y + dy, s.z + dz); if (u < t) { t = u; who = null; dep = -1; mon = true; }
+  }
   s.x += dx * Math.min(1, t); s.y += dy * Math.min(1, t); s.z += dz * Math.min(1, t);
   if (t >= 1) return true;
-  if (who) onBot(who.b, s); else if (dep >= 0) onDepot(dep, s);
+  if (mon) MON.hit(s); else if (who) onBot(who.b, s); else if (dep >= 0) onDepot(dep, s);
   return false;
 }
 

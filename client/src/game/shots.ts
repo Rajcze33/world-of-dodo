@@ -23,6 +23,7 @@ import { PLANE_R } from './bullets';
 import { shipBox, SHIP_HH, burst } from './shells';
 import { friendly, teamOf } from './teams';
 import { depotBody, depotHitAt } from '../world/objectives';
+import { monBody, monReport, monSpark } from './monster';
 
 export const SHOT_MAX = 64, SHOT_G = 14;
 const SHOT_SPEED = 45, SHOT_UP = 4, SHOT_CD = 0.28, SHOT_LIFE = 14, SHOT_E = 0.4;
@@ -155,6 +156,12 @@ export function updateShots(dt: number) {
       // which decides the damage (net/net.ts netThit: not for my own team's depots)
       const di = depotBody(s.x, s.y, s.z);
       if (di >= 0) { depotBurst(s, di); break; }
+      // World of DODO, issue #26: one that runs into Velemlok bursts on it, on every screen; mine reports it (mhit, k 0)
+      if (monBody(s.x, s.y, s.z)) {
+        burst(s.x, s.y, s.z, 0.7); monSpark(s.x, s.y, s.z, 0);
+        if (s.owner === 'p') monReport(0, s.sid, s.x, s.y, s.z);
+        s.on = false; s.vis = false; break;
+      }
       const hit = shotHit(s.x, s.y, s.z, px, py, pz, s.owner);
       if (hit) {
         if (hit.top !== undefined) { s.y = hit.top + 0.25; s.vx = s.vy = s.vz = 0; s.rest = true; s.g.rotation.x = s.g.rotation.z = 0; break; } // lands on a roof

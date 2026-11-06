@@ -24,6 +24,7 @@ import { hitPlayer } from './tank';
 import { fx } from './fx';
 import { friendly } from './teams';
 import { depotBody, depotHitAt } from '../world/objectives';
+import { monBody, monReport, monSpark } from './monster';
 
 // muzzle speed and gravity of a shell (server/bots.js has the same SHELL_G): at 45° it reaches SHELL_V² / SHELL_G, about 320
 export const SHELL_V = 110, SHELL_G = 38;
@@ -143,6 +144,8 @@ function shellStep(s: Shell) {
     if (!o.on || o.id === s.by || Math.abs(o.x - x) > 12 || Math.abs(o.z - z) > 12) continue;
     if (o.k === 2 ? o.s !== 2 && shipBox(x, y, z, o.x, o.y, o.z, o.h) : o.k === 0 && tankBox(x, y, z, o.x, groundH(o.x, o.z), o.z, o.h)) return boom(s, 1.1);
   }
+  // World of DODO, issue #26: Velemlok: it bursts on it on every screen, mine reports it (mhit, k 2)
+  if (monBody(x, y, z)) { burst(x, y, z, 1.1); monSpark(x, y, z, 2); if (s.mine) monReport(2, s.sid, x, y, z); s.on = false; return; }
   if (depotBody(x, y, z) >= 0) return boom(s, 1.3);              // World of DODO, issue #24: a standing supply depot
   if (solidAt(x, y, z)) return boom(s, 1.3);                     // a building (the viaduct, a bridge's deck or pier)
   const g = surfaceY(x, z);                                       // the river's surface or the ground (client/shared/naval.ts)
@@ -184,6 +187,8 @@ function torpBoom(t: Torp, size: number) { splash(t.x, t.z, size); burst(t.x, WA
 function torpStep(t: Torp) {
   const x = t.x, z = t.z;
   if (!inWater(x, z, 0.3)) return torpBoom(t, 1.6);               // a bank or a bridge pier
+  // World of DODO, issue #26: Velemlok's body in the water (mine reports it, mhit k 3)
+  if (monBody(x, WATER_Y + 0.3, z)) { monSpark(x, WATER_Y + 0.8, z, 3); if (t.mine) monReport(3, t.sid, x, WATER_Y + 0.3, z); return torpBoom(t, 2.4); }
   if (!t.mine && car.k === 2 && car.topT <= 0 && shipBox(x, WATER_Y + 0.3, z, car.x, car.y, car.z, car.h)) {
     const side = (x - car.x) * Math.cos(car.h) - (z - car.z) * Math.sin(car.h) > 0 ? 1 : -1;   // hit on the port (+x) side: it lists that way
     if (!friendly(t.by) && hitPlayer('torp', side, T.torpBy(netName(t.by)))) {   // (issue #24: a teammate's torpedo bursts harmlessly)

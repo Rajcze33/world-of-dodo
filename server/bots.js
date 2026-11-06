@@ -10,7 +10,8 @@
 // tank is in; client/shared/rules.ts ZONES) and stops inside it while it captures it; then on to the next. An enemy tank or ship within
 // HUNT_R draws it away (it takes the turns that bring it closer), and when one is in range with no building in between it fires a parcel
 // with some lead and some aim error, so a moving target can dodge; with none about it fires at an enemy depot it passes within range.
-// It fires its anti-aircraft gun at an enemy plane flying low and close.
+// It fires its anti-aircraft gun at an enemy plane flying low and close. Issue #26: with no enemy in range, it fires at Velemlok when it
+// is out within a parcel's reach of the embankment (MON_FIRE_R, with a clear line).
 //
 // World of DODO, issue #16: the streets are the real Karlín's street graph (client/shared/map.ts through server/city.js: NODES,
 // EDGES, route), no longer the 7 × 7 grid's junctions. A bot follows a street's centre line from node to node; at a junction it picks
@@ -31,6 +32,7 @@ const {
 } = require('./city');
 const { ZONES, DEPOTS, DEPOT_SOLID, TEAM_SPAWNS } = require('../client/shared/rules.ts');
 const { HIT_W, HIT_WIN_MS } = require('./game');
+const { WATER_Y } = require('../client/shared/naval.ts');
 const plane = require('./planebot');
 const ship = require('./shipbot');
 
@@ -40,6 +42,8 @@ const AIM_ERR = 0.2, FIRE_CD = [2.5, 4.5];   // radians of random aim error, sec
 const AHEAD = 7, BLOCK_W = 2.6, BLOCK_T = 1.5;   // a tank this close in front stops the bot; after BLOCK_T s it turns back
 const SHOT_UP = 4, LEAD_T = 0.79;
 const LEAD_SHIP = 1.05;               // issue #20: a parcel's flight down to a ship's deck
+// issue #26: Velemlok: how far a parcel reaches it from the embankment (the flight down to its back over the river, LEAD_MON s)
+const MON_FIRE_R = 62, LEAD_MON = 1;
 const SLOW_T = 2.4, DEAD_T = 3.2, SINK_T = 4.6, SPAWN_IMMUNE_T = 3;   // the same numbers as the players' vehicles (game/tank.ts)
 // anti-aircraft: reach, the highest plane, seconds between bullets, a burst and the pause after it, aim error (radians), bullet speed.
 // A nuisance for a plane that stays low near a bot, not a threat to one that keeps moving.
@@ -51,7 +55,7 @@ const END_M = 4, BOT_C = [-1.55, 0, 1.55], BOT_CR = 1.0, TURN_SLOW = 0.5, TURN_S
 // issue #24: a tank bot stops this far inside its zone's edge (or, passing through it, where it gets no nearer the middle); it thinks
 // again about which zone to take every ZONE_T s; more than ZONE_CROWD teammates heading for a zone make it look for another
 const ZONE_IN = 4, ZONE_T = 2.5, ZONE_CROWD = 3;
-const VEH = ['tank', 'plane', 'ship'], KIND = ['parcel', 'bullet', 'shell', 'torp'];
+const VEH = ['tank', 'plane', 'ship'], KIND = ['parcel', 'bullet', 'shell', 'torp', 'mon'];   // issue #26: 4 Velemlok's attack
 
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 const r2 = v => Math.round(v * 100) / 100;
@@ -148,8 +152,9 @@ function stepBot(bot, dt, ctx) {
   return out;
 }
 
-// A parcel (k 0), a bullet (1), a shell (2) or a torpedo (3) reached the bot: false if it did not take effect (destroyed already, just
-// back and immune, or a kind that does nothing to this vehicle), 'kill' if it destroyed it, otherwise true
+// A parcel (k 0), a bullet (1), a shell (2) or a torpedo (3) reached the bot (issue #26: or 4, an attack of Velemlok, which scores for
+// nobody): false if it did not take effect (destroyed already, just back and immune, or a kind that does nothing to this vehicle),
+// 'kill' if it destroyed it, otherwise true
 function hitBot(bot, k = 0) {
   const veh = VEH[bot.kind || 0], w = HIT_W[veh][KIND[k] || 'parcel'];
   if (bot.deadT > 0 || bot.immT > 0 || !w) return false;
@@ -320,6 +325,12 @@ function stepTank(bot, dt, ctx) {
   if (target && td >= FIRE_MIN && td <= FIRE_MAX && clearLine(bot.x, bot.z, target.x, target.z)) {
     const lead = target.k === 2 ? LEAD_SHIP : LEAD_T;
     return [parcelAt(bot, target.x + Math.sin(target.h) * target.v * lead, target.z + Math.cos(target.h) * target.v * lead, lead)];
+  }
+  const m = ctx.mon;
+  if (m) {                                                                 // issue #26: the nearest of Velemlok's spheres in reach
+    let best = null, bd = MON_FIRE_R;
+    for (const s of m.sph) { const d = Math.hypot(s[0] - bot.x, s[2] - bot.z); if (d < bd && d >= FIRE_MIN && s[1] + s[3] > WATER_Y) { bd = d; best = s; } }
+    if (best && clearLine(bot.x, bot.z, best[0], best[2])) return [parcelAt(bot, best[0] + Math.sin(m.h) * m.v * LEAD_MON, best[2] + Math.cos(m.h) * m.v * LEAD_MON, LEAD_MON)];
   }
   for (const D of DEPOTS) {
     if (D.team === bot.team || ctx.depots[D.i].hp <= 0) continue;
