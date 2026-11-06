@@ -7,6 +7,12 @@
 // World of DODO, issue #20 (warships): the road bridges over the Vltava stand on their decks and piers (map.ts's 'roaddeck' and 'pier'
 // solids: high enough for a ship to pass under), the trams cross on them; the viaduct's arches span the river between its new piers;
 // whatever lies on the land out there never dips under it (the river's banks: client/shared/naval.ts LAND_MIN).
+// World of DODO, issue #27: real materials (core/matlib.ts) instead of flat colours: the streets dry asphalt that the weather turns to
+// trodden snow (or wet), the pavements the Prague mosaic with granite kerbs (a granite strip on top of the kerb's edge too), the squares
+// setts, the parks a winter lawn under the snow, the tram's track in the street set in concrete with its grooved rails (one strip of
+// the rails texture along it), out of the street a gravel bed under the rails, the bridges' piers, arches and the viaduct sandstone,
+// the road bridges' decks concrete. The snow lies on all of it as the weather says (matlib's setWeatherLook), nothing is baked in.
+// The vertex colours stay as they were where they shade a material (the viaduct's darker underside, the bridges' fascia), else white.
 // Replaces the original's 7 × 7 grid of roads and rounded blocks.
 import {
   DATA, ARENA, NODES, EDGES, BLOCKS, SOLIDS, TRAM_LOOP, VIADUCT_W, PIER_STEP, PIER_L, groundH, paved, inArena, edgePos,
@@ -15,16 +21,20 @@ import {
 import { polylineCum, polylineAt, polyCentroid, distSeg2, pointInPoly, closestOnPoly, type At } from '../../shared/geom.ts';
 import { inRiver, landY } from '../../shared/naval.ts';
 import { TRAM_PATH, TRAM_STOP_AT } from '../../shared/tram.ts';
-import { Bucket, quad, boxB, bake, geoMesh, rotateX, planeGeo, type P3 } from '../core/geo';
-import { lambert, M } from '../core/mat';
+import { Bucket, quad, tri, boxB, bake, geoMesh, rotateX, planeGeo, type P3, type P2 } from '../core/geo';
+import { lambert } from '../core/mat';
 import { COL } from '../core/colors';
-import { wall, capUp, faceN, prism, orient } from './poly';
-import { tileB } from './tiles';
+import { matTex } from '../core/matlib';
+import { wall, capUp, capDown, faceN, prism, orient, grow } from './poly';
+import { tileB, tileKind } from './tiles';
 import { shade } from './buildings';
 
-const KERB = 0xb4b8b6, PAVE = 0xe4e7e6, PLAZA = 0xdcd8cf, PARK = 0xf7f9f8, MARK = COL.c20, RAIL = COL.grey, BED = 0x9a9893,
-  STONE = 0xb8ad9a, STONE_D = 0x8f8778, STEEL = 0x5f6866, FAR_ROAD = 0x5b6260;
+// (issue #27: the pavements', kerbs', squares', parks' and roads' colours are their materials' tints now, core/matlib.ts)
+const MARK = COL.c20, RAIL = COL.grey, BED = 0x9a9893, STONE = 0xb8ad9a, STONE_D = 0x8f8778, STEEL = 0x5f6866, WHITE = 0xffffff;
 const RAIL_HALF = 0.55;                                       // half the track gauge (a little wider than 1.435 m: cartoon)
+// issue #27: the tram's track in the street is one tile of the rails texture across (Rails001: its two grooved rails 0.56 of a tile
+// apart, round the middle), as wide as puts them where the trams' wheels run; the granite strip along the top of a kerb
+const TRACK_W = 2 * RAIL_HALF / 0.56, KERB_TOP = 0.22;
 const CONCRETE = 0xa7aaa5, FASCIA = 0x7d827f;                  // the road bridges' decks (issue #20)
 // World of DODO, issue #20: out of the arena things lie on the land as it is drawn (naval.ts landY, world/land.ts): the coarse terrain
 // grid dips towards the river bed by the banks, a road or a track along the embankment must not
@@ -40,18 +50,41 @@ function deckTop(x: number, z: number, r: number): number {
 }
 export const SHELTERS: { x: number; z: number; a: number }[] = [];   // the tram stops' shelters (city.ts keeps lamps and trees off them)
 
-// the buckets of this module (baked at the end of buildRoads)
-let PV = Bucket(), DECO = Bucket(), MK = Bucket();
+// the buckets of this module (baked at the end of buildRoads). Issue #27: one per material: PV the pavements' tops, KB the kerbs'
+// faces, KT the granite strips on the kerbs' edges, SQ the squares, PK the parks, MK the marks and the steel rails, TR the tram's
+// track in the street, BD the gravel beds, FR the roads round the arena
+let PV = Bucket(), KB = Bucket(), KT = Bucket(), SQ = Bucket(), PK = Bucket(), MK = Bucket(), TR = Bucket(), BD = Bucket(), FR = Bucket();
+// issue #27: the tile kinds of the bridges and the viaduct (world/tiles.ts): sandstone (piers, arches, the viaduct's stone), concrete
+// (the road bridges' decks), the gravel on top of a railway deck; white tints, the vertex colours shade them as before
+let KINDS = false;
+function kinds() {
+  if (KINDS) return; KINDS = true;
+  tileKind('stone', matTex('sandstone', { tint: WHITE }));
+  tileKind('concrete', matTex('concrete', { tint: WHITE }));
+  tileKind('ballast', matTex('gravel', { tint: WHITE }), { cast: false });
+}
+// issue #27: the streets' material (zOffset: lying on the terrain, the roads round the arena)
+const STREET = (zOffset: number) => matTex('asphalt', { alt: 'asphaltSnow', macro: 0.3, snow: 0, zOffset });
 // the material for things lying on another surface: drawn in front of it (polygon offset), so they never flicker far off
 const decal = (units: number) => { const m = lambert(0xffffff); m.zOffset = -units / 4; m.zOffsetUnits = -units; return m; };
 
 // a flat strip lying on the ground along the polyline pts (pairs), from offset o0 to o1 to the right of it, dy above the ground
-function strip(bk: Bucket, pts: [number, number][], o0: number, o1: number, dy: number, col: number, gy: (x: number, z: number) => number = groundH) {
+// (issue #27: uv: uvs in game units, u along the polyline from its start, v the offset from o0: a texture laid along it)
+function strip(bk: Bucket, pts: [number, number][], o0: number, o1: number, dy: number, col: number, gy: (x: number, z: number) => number = groundH, uv = false) {
+  let s = 0;
   for (let i = 0; i + 1 < pts.length; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[i + 1], dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz); if (l < 1e-6) continue;
     const rx = -dz / l, rz = dx / l, P = (x: number, z: number, o: number): P3 => { const X = x + rx * o, Z = z + rz * o; return [X, gy(X, Z) + dy, Z]; };
-    faceN(bk, [P(ax, az, o0), P(bx, bz, o0), P(bx, bz, o1), P(ax, az, o1)], [0, 1, 0], col);
+    if (uv) quadUp(bk, P(ax, az, o0), P(bx, bz, o0), P(bx, bz, o1), P(ax, az, o1), col, [[s, 0], [s + l, 0], [s + l, o1 - o0], [s, o1 - o0]]);
+    else faceN(bk, [P(ax, az, o0), P(bx, bz, o0), P(bx, bz, o1), P(ax, az, o1)], [0, 1, 0], col);
+    s += l;
   }
+}
+// issue #27: a quad a, b, c, d with uvs, turned to face up
+function quadUp(bk: Bucket, a: P3, b: P3, c: P3, d: P3, col: number, uv: P2[]) {
+  const up = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]) > 0;   // the y of (b - a) × (c - a)
+  if (up) { tri(bk, a, b, c, col, uv[0], uv[1], uv[2]); tri(bk, a, c, d, col, uv[0], uv[2], uv[3]); }
+  else { tri(bk, a, c, b, col, uv[0], uv[2], uv[1]); tri(bk, a, d, c, col, uv[0], uv[3], uv[2]); }
 }
 // the polyline (flat or pairs) cut into pieces of at most step, as pairs (so a strip on the ground follows it)
 function dense(p: ArrayLike<number> | [number, number][], step: number, closed = false): [number, number][] {
@@ -66,39 +99,53 @@ function dense(p: ArrayLike<number> | [number, number][], step: number, closed =
   if (pts.length) out.push(pts[pts.length - 1]);
   return out;
 }
-// two rails (and a gravel bed under them when bed) along a dense polyline
+// two rails (and a gravel bed under them when bed) along a dense polyline (issue #27: the bed in the gravel material)
 function rails(pts: [number, number][], dy: number, bed: boolean, gy?: (x: number, z: number) => number) {
-  if (bed) strip(MK, pts, -1.6, 1.6, dy, BED, gy);
+  if (bed) strip(BD, pts, -1.6, 1.6, dy, WHITE, gy);
   strip(MK, pts, -RAIL_HALF - 0.08, -RAIL_HALF + 0.08, dy + 0.03, RAIL, gy); strip(MK, pts, RAIL_HALF - 0.08, RAIL_HALF + 0.08, dy + 0.03, RAIL, gy);
 }
+// issue #27: a tram track set in the street: one strip of the rails texture along it
+const trackIn = (pts: [number, number][], dy: number, gy?: (x: number, z: number) => number) => strip(TR, pts, -TRACK_W / 2, TRACK_W / 2, dy, WHITE, gy, true);
 
 export function buildRoads() {
-  PV = Bucket(); DECO = Bucket(); MK = Bucket(); SHELTERS.length = 0;
-  // the carriageways: one plane over the arena at 0 (the terrain outside it lies a hair lower, land.ts)
-  const A = ARENA, asphalt = geoMesh('streets', rotateX(planeGeo(A.x1 - A.x0, A.z1 - A.z0), -Math.PI / 2), M.road, false, true);
+  PV = Bucket(); KB = Bucket(); KT = Bucket(); SQ = Bucket(); PK = Bucket(); MK = Bucket(); TR = Bucket(); BD = Bucket(); FR = Bucket(); SHELTERS.length = 0;
+  kinds();
+  // the carriageways: one plane over the arena at 0 (the terrain outside it lies a hair lower, land.ts). Issue #27: dry asphalt; under
+  // the weather's snow the trodden snow of asphaltSnow, its low parts last; large patches against the repeat. No snow layer of its own
+  // (snow 0): the asphalt has no joints to fill, asphaltSnow is its snow, and the street is most of the picture: a texture read less
+  const A = ARENA, asphalt = geoMesh('streets', rotateX(planeGeo(A.x1 - A.x0, A.z1 - A.z0), -Math.PI / 2), STREET(0), false, true);
   asphalt.position.set((A.x0 + A.x1) / 2, 0, (A.z0 + A.z1) / 2); asphalt.freezeWorldMatrix();
-  // the pavements: every block raised to 0.3 with its kerb
+  // the pavements: every block raised to 0.3 with its kerb (issue #27: mosaic on top, granite kerbs with a granite strip on their edge)
   for (const B of BLOCKS) {
-    const p = B.p, n = p.length;
-    for (let i = 0; i < n; i += 2) { const j = (i + 2) % n; wall(PV, p[i], p[i + 1], p[j], p[j + 1], 0, 0.3, KERB); }
-    capUp(PV, p, 0.3, PAVE);
+    const p = B.p, n = p.length, g = grow(p, -KERB_TOP);
+    for (let i = 0; i < n; i += 2) {
+      const j = (i + 2) % n; wall(KB, p[i], p[i + 1], p[j], p[j + 1], 0, 0.3, WHITE);
+      faceN(KT, [[p[i], 0.3, p[i + 1]], [p[j], 0.3, p[j + 1]], [g[j], 0.3, g[j + 1]], [g[i], 0.3, g[i + 1]]], [0, 1, 0], WHITE);
+    }
+    capUp(PV, p, 0.3, WHITE);
   }
-  // the squares (paved, a little warmer than the pavements) and the parks lying on the blocks (fresh snow)
-  for (const q of DATA.plazas) capUp(DECO, orient(q), 0.315, PLAZA);
-  for (const q of DATA.parks) if (onBlocks(q)) capUp(DECO, orient(q), 0.33, PARK);
+  // the squares (setts) and the parks lying on the blocks (a winter lawn under the snow)
+  for (const q of DATA.plazas) capUp(SQ, orient(q), 0.315, WHITE);
+  for (const q of DATA.parks) if (onBlocks(q)) capUp(PK, orient(q), 0.33, WHITE);
   // World of DODO, issue #16 (4. 11.): the streets of Prague round the arena, for the planes: strips lying on the terrain (or on a
   // bridge's deck), going on where the arena's streets leave it
   // (issue #20: a bridge over the river lies on its deck slab, its top at y; the others float as before)
   for (const r of DATA.farRoads || []) {
     const y = r.y, onDeck = y !== undefined && deckTop((r.pts[0] + r.pts[2]) / 2, (r.pts[1] + r.pts[3]) / 2, 0.1) === y;
     const gy = y === undefined ? landY : () => y;
-    strip(MK, dense(r.pts, 5), -r.w / 2, r.w / 2, y === undefined ? 0.06 : onDeck ? 0.03 : 0.25, FAR_ROAD, gy);
+    strip(FR, dense(r.pts, 5), -r.w / 2, r.w / 2, y === undefined ? 0.06 : onDeck ? 0.03 : 0.25, WHITE, gy);
   }
   laneDashes(); zebras(); tram(); railway();
-  bake('pavements', PV, lambert(0xffffff), false);
-  bake('squares', DECO, decal(4), false);
+  bake('pavements', PV, matTex('mosaic', { macro: 0.2 }), false);
+  bake('kerbs', KB, matTex('granite'), false);
+  bake('kerbTops', KT, matTex('granite', { zOffset: 3 }), false);
+  bake('squares', SQ, matTex('setts', { zOffset: 4, macro: 0.2 }), false);
+  bake('parks', PK, matTex('gravel', { tint: 0x5e6553, scale: 2.5, zOffset: 4, macro: 0.45, wet: 0.5 }), false);
   bake('roadMarks', MK, decal(8), false);
-  PV = Bucket(); DECO = Bucket(); MK = Bucket();
+  bake('tramTrack', TR, matTex('rails', { uv: 'mesh', scale: TRACK_W / 1.9, zOffset: 6, snow: 0.3 }), false);
+  bake('trackBeds', BD, matTex('gravel', { zOffset: 6 }), false);
+  bake('farRoads', FR, STREET(2), false);
+  PV = Bucket(); KB = Bucket(); KT = Bucket(); SQ = Bucket(); PK = Bucket(); MK = Bucket(); TR = Bucket(); BD = Bucket(); FR = Bucket();
 }
 // a park polygon is drawn only where it lies wholly on the raised blocks (else it would cover a street at the wrong height)
 function onBlocks(q: number[]): boolean {
@@ -146,20 +193,24 @@ function tram() {
   const P = TRAM_PATH.pts; if (P.length < 2) return;
   const track: [number, number][] = []; for (let i = 0; i < P.length; i += 2) track.push(P[i]);   // a point every ~2 units is enough
   track.push(P[0]);
-  rails(track, 0.035, false);
-  const out: [number, number][][] = []; let cur: [number, number][] = [];
-  for (const q of track) { if (!inArena(q[0], q[1], -2)) cur.push(q); else if (cur.length) { out.push(cur); cur = []; } }
-  if (cur.length) out.push(cur);
-  for (const c of out) if (c.length > 1) strip(MK, c, -1.5, 1.5, 0.02, BED);
+  // issue #27: in the arena the track is set in the street (the rails texture), out of it the rails lie on a gravel bed
+  for (const r of runs(track, q => inArena(q[0], q[1], -2))) {
+    if (r.on) trackIn(r.pts, 0.035); else { strip(BD, r.pts, -1.5, 1.5, 0.02, WHITE); rails(r.pts, 0.035, false); }
+  }
   // the other tracks: segments at least 3.5 from the loop (TRAM_LOOP: the data's own Sokolovská tracks are near it)
   const L = TRAM_LOOP, near = (x: number, z: number) => { for (let i = 0; i < L.pts.length; i++) { const a = L.pts[i], b = L.pts[(i + 1) % L.pts.length]; if (distSeg2(x, z, a[0], a[1], b[0], b[1]) < 12.25) return true; } return false; };
   // (issue #20: out of the arena on the land as drawn, over the river on a road bridge's deck; none under the water)
   const trackY = (x: number, z: number) => { if (inArena(x, z)) return groundH(x, z); const d = deckTop(x, z, 2.5); return d === d ? d : landY(x, z); };
   const wetTrack = (x: number, z: number) => !inArena(x, z) && inRiver(x, z) && deckTop(x, z, 2.5) !== deckTop(x, z, 2.5);
+  // (issue #27: set in the street in the arena and on a bridge's deck, on a gravel bed out on the land)
+  const setIn = (q: [number, number]) => inArena(q[0], q[1]) || deckTop(q[0], q[1], 2.5) === deckTop(q[0], q[1], 2.5);
+  const other = (run: [number, number][]) => {
+    for (const r of runs(run, setIn)) { if (r.on) trackIn(r.pts, 0.06, trackY); else { strip(BD, r.pts, -1.5, 1.5, 0.04, WHITE, trackY); rails(r.pts, 0.06, false, trackY); } }
+  };
   for (const t of DATA.tram.tracks) {
     const d = dense(t, 3); let run: [number, number][] = [];
-    for (const q of d) { if (!near(q[0], q[1]) && !wetTrack(q[0], q[1])) run.push(q); else { if (run.length > 1) rails(run, 0.06, false, trackY); run = []; } }
-    if (run.length > 1) rails(run, 0.06, false, trackY);
+    for (const q of d) { if (!near(q[0], q[1]) && !wetTrack(q[0], q[1])) run.push(q); else { if (run.length > 1) other(run); run = []; } }
+    if (run.length > 1) other(run);
   }
   // the shelters: on the pavement beyond the kerb to the right of the stop (tram.ts TRAM_STOP_AT), facing the track, moved along it
   // a little where a house or a lamp's corner is in the way
@@ -173,6 +224,15 @@ function tram() {
       shelter(x, z, Math.atan2(rx, rz)); break;
     }
   }
+}
+// issue #27: a polyline cut into the runs where on(point) is the same (each run starts at the last point of the one before)
+function runs(pts: [number, number][], on: (q: [number, number]) => boolean): { on: boolean; pts: [number, number][] }[] {
+  const out: { on: boolean; pts: [number, number][] }[] = [];
+  for (const q of pts) {
+    const v = on(q), r = out[out.length - 1];
+    if (r && r.on === v) r.pts.push(q); else out.push({ on: v, pts: r ? [r.pts[r.pts.length - 1], q] : [q] });
+  }
+  return out.filter(r => r.pts.length > 1);
 }
 // a tram shelter at (x, z) whose back faces the heading a (sin a, cos a): roof, lit glass back panel, posts, a stop sign
 function shelter(x: number, z: number, a: number) {
@@ -197,12 +257,14 @@ function railway() {
   }
   for (const s of SOLIDS) {
     if (s.kind !== 'deck' && s.kind !== 'pier' && s.kind !== 'roaddeck') continue;
-    const [cx, cz] = polyCentroid(s.p), VC = tileB('vc', cx, cz), stone = s.h <= 6.41 && s.h >= 5.39 || s.kind === 'pier';
+    // (issue #27: the stone in the sandstone material, the road decks concrete, the track's bed on a deck gravel: tiles.ts kinds)
+    const [cx, cz] = polyCentroid(s.p), stone = s.h <= 6.41 && s.h >= 5.39 || s.kind === 'pier', VC = tileB(stone ? 'stone' : 'vc', cx, cz);
     if (s.kind === 'pier') { prism(VC, s.p, s.y0, s.h, STONE); continue; }
-    if (s.kind === 'roaddeck') { roadDeck(VC, s.p, s.y0, s.h); continue; }
+    if (s.kind === 'roaddeck') { roadDeck(tileB('concrete', cx, cz), s.p, s.y0, s.h); continue; }
     // the slab (the two tracks of a viaduct are two overlapping decks: their tops a hair apart, so they do not flicker)
-    const top = s.h + (s.i % 3) * 0.012;
-    prism(VC, s.p, s.y0, top, stone ? shade(STONE, 1.08) : STEEL, BED, true);
+    const top = s.h + (s.i % 3) * 0.012, sc = stone ? shade(STONE, 1.08) : STEEL;
+    for (let i = 0; i < s.p.length; i += 2) { const j = (i + 2) % s.p.length; wall(VC, s.p[i], s.p[i + 1], s.p[j], s.p[j + 1], s.y0, top, sc); }
+    capUp(tileB('ballast', cx, cz), s.p, top, BED); capDown(VC, s.p, s.y0, sc);
     // the parapets along the deck's two long sides (map.ts's strips: edges 0→1 and 2→3); on the viaduct a deeper stone face below
     // them (drawn only: nothing solid hangs below the deck), so that the slab reads as a stone viaduct where it has no piers
     const p = s.p;
@@ -254,7 +316,7 @@ function arch(P: number[], cum: number[], s0: number, s1: number, yd: number) {
     pts.push({ x: at.x, z: at.z, rx: -at.hz, rz: at.hx, y: ys + (yd - 0.05 - ys) * Math.sin(Math.PI * t) });
   }
   polylineAt(P, cum, (s0 + s1) / 2, at);
-  const C: P3 = [at.x, ys - (s1 - s0) / 2, at.z], VC = tileB('vc', at.x, at.z);
+  const C: P3 = [at.x, ys - (s1 - s0) / 2, at.z], VC = tileB('stone', at.x, at.z);
   for (let k = 0; k < N; k++) {
     const a = pts[k], b = pts[k + 1];
     const L = (q: typeof a, sg: number, y: number): P3 => [q.x + q.rx * W * sg, y, q.z + q.rz * W * sg];

@@ -1,0 +1,711 @@
+{
+ "version": 1,
+ "about": "World of DODO material library (issue #27): made by tools/assets/materials.py, read by client/src/core/matlib.ts. texel: game units one tile covers; mean: the colour map's average (0..1); rough: the average roughness; files: the sizes of <size>/<key>_c.webp (colour) and <size>/<key>_n.webp (normal, height in alpha).",
+ "keys": {
+  "asphalt": {
+   "site": "Poly Haven",
+   "id": "asphalt_02",
+   "url": "https://polyhaven.com/a/asphalt_02",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.4851,
+    0.4815,
+    0.4531
+   ],
+   "rough": 0.77,
+   "raw": false,
+   "height": false,
+   "use": "streets, dry and wet",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "asphaltSnow": {
+   "site": "Poly Haven",
+   "id": "asphalt_snow",
+   "url": "https://polyhaven.com/a/asphalt_snow",
+   "licence": "CC0 1.0",
+   "metres": 2.0,
+   "texel": 2.0,
+   "mean": [
+    0.514,
+    0.4916,
+    0.5054
+   ],
+   "rough": 0.87,
+   "raw": false,
+   "height": false,
+   "use": "streets under trodden snow (blended in by the weather)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "mosaic": {
+   "site": "ambientCG",
+   "id": "PavingStones151",
+   "url": "https://ambientcg.com/view?id=PavingStones151",
+   "licence": "CC0 1.0",
+   "metres": 2.4,
+   "texel": 2.4,
+   "mean": [
+    0.5313,
+    0.495,
+    0.4427
+   ],
+   "rough": 0.508,
+   "raw": false,
+   "height": true,
+   "use": "pavements: the Prague mosaic",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "slabs": {
+   "site": "Poly Haven",
+   "id": "concrete_pavement",
+   "url": "https://polyhaven.com/a/concrete_pavement",
+   "licence": "CC0 1.0",
+   "metres": 2.6,
+   "texel": 2.6,
+   "mean": [
+    0.5153,
+    0.4969,
+    0.4734
+   ],
+   "rough": 0.862,
+   "raw": false,
+   "height": true,
+   "use": "pavements: concrete slabs, tram stops",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "setts": {
+   "site": "Poly Haven",
+   "id": "square_cobblestone",
+   "url": "https://polyhaven.com/a/square_cobblestone",
+   "licence": "CC0 1.0",
+   "metres": 1.7,
+   "texel": 1.7,
+   "mean": [
+    0.5548,
+    0.4951,
+    0.3793
+   ],
+   "rough": 0.897,
+   "raw": false,
+   "height": true,
+   "use": "squares: granite setts; the tram track in the street",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "granite": {
+   "site": "Poly Haven",
+   "id": "granite_tile_03",
+   "url": "https://polyhaven.com/a/granite_tile_03",
+   "licence": "CC0 1.0",
+   "metres": 1.6,
+   "texel": 1.6,
+   "mean": [
+    0.5409,
+    0.49,
+    0.4429
+   ],
+   "rough": 0.9,
+   "raw": false,
+   "height": true,
+   "use": "kerbs, plinths",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "gravel": {
+   "site": "Poly Haven",
+   "id": "gravel_stones",
+   "url": "https://polyhaven.com/a/gravel_stones",
+   "licence": "CC0 1.0",
+   "metres": 1.3,
+   "texel": 1.3,
+   "mean": [
+    0.4754,
+    0.4726,
+    0.4595
+   ],
+   "rough": 0.78,
+   "raw": false,
+   "height": false,
+   "use": "the tracks' gravel bed",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "rails": {
+   "site": "ambientCG",
+   "id": "Rails001",
+   "url": "https://ambientcg.com/view?id=Rails001",
+   "licence": "CC0 1.0",
+   "metres": 1.9,
+   "texel": 1.9,
+   "mean": [
+    0.5203,
+    0.5002,
+    0.4473
+   ],
+   "rough": 0.502,
+   "raw": false,
+   "height": true,
+   "use": "tram rails set in the street (one tile = one track across)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "snow": {
+   "site": "Poly Haven",
+   "id": "snow_02",
+   "url": "https://polyhaven.com/a/snow_02",
+   "licence": "CC0 1.0",
+   "metres": 3.5,
+   "texel": 3.5,
+   "mean": [
+    0.5003,
+    0.5,
+    0.5004
+   ],
+   "rough": 0.801,
+   "raw": false,
+   "height": false,
+   "use": "the snow layer on everything facing up; snowy land",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "snowTracks": {
+   "site": "Poly Haven",
+   "id": "snow_04",
+   "url": "https://polyhaven.com/a/snow_04",
+   "licence": "CC0 1.0",
+   "metres": 4.0,
+   "texel": 4.0,
+   "mean": [
+    0.5004,
+    0.5,
+    0.495
+   ],
+   "rough": 0.883,
+   "raw": false,
+   "height": false,
+   "use": "snow with wheel tracks (side streets, yards)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "ice": {
+   "site": "ambientCG",
+   "id": "Ice002",
+   "url": "https://ambientcg.com/view?id=Ice002",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.4451,
+    0.4809,
+    0.4659
+   ],
+   "rough": 0.208,
+   "raw": false,
+   "height": false,
+   "use": "river floes and frozen ponds (only in frost)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "plaster": {
+   "site": "Poly Haven",
+   "id": "plastered_wall_02",
+   "url": "https://polyhaven.com/a/plastered_wall_02",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.5031,
+    0.5001,
+    0.4972
+   ],
+   "rough": 0.907,
+   "raw": false,
+   "height": false,
+   "use": "facades: smooth plaster",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "plasterYellow": {
+   "site": "Poly Haven",
+   "id": "yellow_plaster_02",
+   "url": "https://polyhaven.com/a/yellow_plaster_02",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.5111,
+    0.5,
+    0.4883
+   ],
+   "rough": 0.881,
+   "raw": false,
+   "height": false,
+   "use": "facades: plaster with lesenes",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "plasterBeige": {
+   "site": "Poly Haven",
+   "id": "beige_wall_001",
+   "url": "https://polyhaven.com/a/beige_wall_001",
+   "licence": "CC0 1.0",
+   "metres": 2.5,
+   "texel": 2.5,
+   "mean": [
+    0.5076,
+    0.4998,
+    0.492
+   ],
+   "rough": 0.621,
+   "raw": false,
+   "height": false,
+   "use": "facades: fine plaster",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "stucco": {
+   "site": "Poly Haven",
+   "id": "white_stucco",
+   "url": "https://polyhaven.com/a/white_stucco",
+   "licence": "CC0 1.0",
+   "metres": 2.5,
+   "texel": 2.5,
+   "mean": [
+    0.5021,
+    0.4999,
+    0.4996
+   ],
+   "rough": 0.881,
+   "raw": false,
+   "height": false,
+   "use": "facades: stucco",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "plasterGrey": {
+   "site": "Poly Haven",
+   "id": "grey_plaster_02",
+   "url": "https://polyhaven.com/a/grey_plaster_02",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.5088,
+    0.4989,
+    0.483
+   ],
+   "rough": 0.799,
+   "raw": false,
+   "height": false,
+   "use": "facades: weathered plaster",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "plasterWorn": {
+   "site": "Poly Haven",
+   "id": "worn_plaster_wall",
+   "url": "https://polyhaven.com/a/worn_plaster_wall",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.5114,
+    0.4991,
+    0.4758
+   ],
+   "rough": 0.971,
+   "raw": false,
+   "height": false,
+   "use": "facades: worn plaster (yards, firewalls)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "sandstone": {
+   "site": "Poly Haven",
+   "id": "large_sandstone_blocks",
+   "url": "https://polyhaven.com/a/large_sandstone_blocks",
+   "licence": "CC0 1.0",
+   "metres": 3.5,
+   "texel": 3.5,
+   "mean": [
+    0.5167,
+    0.5012,
+    0.45
+   ],
+   "rough": 0.822,
+   "raw": false,
+   "height": true,
+   "use": "embankment walls, plinths, bridge piers",
+   "files": {
+    "c": [
+     1024,
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "sandstoneOld": {
+   "site": "Poly Haven",
+   "id": "old_sandstone_02",
+   "url": "https://polyhaven.com/a/old_sandstone_02",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.6261,
+    0.4773,
+    0.2836
+   ],
+   "rough": 0.838,
+   "raw": false,
+   "height": true,
+   "use": "rusticated plinths, the church, the viaduct",
+   "files": {
+    "c": [
+     1024,
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "brick": {
+   "site": "Poly Haven",
+   "id": "brick_wall_10",
+   "url": "https://polyhaven.com/a/brick_wall_10",
+   "licence": "CC0 1.0",
+   "metres": 2.0,
+   "texel": 2.0,
+   "mean": [
+    0.6026,
+    0.4614,
+    0.4226
+   ],
+   "rough": 0.787,
+   "raw": false,
+   "height": true,
+   "use": "brick buildings, the synagogue, chimneys",
+   "files": {
+    "c": [
+     1024,
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "concrete": {
+   "site": "Poly Haven",
+   "id": "concrete_wall_008",
+   "url": "https://polyhaven.com/a/concrete_wall_008",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.5067,
+    0.4992,
+    0.4756
+   ],
+   "rough": 0.737,
+   "raw": false,
+   "height": false,
+   "use": "bridge decks, modern buildings",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "concreteTiles": {
+   "site": "Poly Haven",
+   "id": "concrete_tile_facade",
+   "url": "https://polyhaven.com/a/concrete_tile_facade",
+   "licence": "CC0 1.0",
+   "metres": 3.0,
+   "texel": 3.0,
+   "mean": [
+    0.4894,
+    0.4998,
+    0.5167
+   ],
+   "rough": 0.508,
+   "raw": false,
+   "height": true,
+   "use": "modern facades (panels)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "glassOffice": {
+   "site": "ambientCG",
+   "id": "Facade009",
+   "url": "https://ambientcg.com/view?id=Facade009",
+   "licence": "CC0 1.0",
+   "metres": 30.0,
+   "texel": 30.0,
+   "mean": [
+    0.1169,
+    0.1398,
+    0.1256
+   ],
+   "rough": 0.151,
+   "raw": true,
+   "height": false,
+   "use": "glass office facade, its lit offices (the colour is also the glow)",
+   "files": {
+    "c": [
+     1024,
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "glassOffice2": {
+   "site": "ambientCG",
+   "id": "Facade011",
+   "url": "https://ambientcg.com/view?id=Facade011",
+   "licence": "CC0 1.0",
+   "metres": 30.0,
+   "texel": 30.0,
+   "mean": [
+    0.0591,
+    0.0654,
+    0.0513
+   ],
+   "rough": 0.131,
+   "raw": true,
+   "height": false,
+   "use": "glass office facade, finer (the colour is also the glow)",
+   "files": {
+    "c": [
+     1024,
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "roofClay": {
+   "site": "Poly Haven",
+   "id": "clay_roof_tiles_02",
+   "url": "https://polyhaven.com/a/clay_roof_tiles_02",
+   "licence": "CC0 1.0",
+   "metres": 2.6,
+   "texel": 2.6,
+   "mean": [
+    0.741,
+    0.4186,
+    0.2255
+   ],
+   "rough": 0.915,
+   "raw": false,
+   "height": true,
+   "use": "roofs: red clay tiles",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "roofSlate": {
+   "site": "Poly Haven",
+   "id": "roof_slates_02",
+   "url": "https://polyhaven.com/a/roof_slates_02",
+   "licence": "CC0 1.0",
+   "metres": 2.2,
+   "texel": 2.2,
+   "mean": [
+    0.5326,
+    0.4953,
+    0.4365
+   ],
+   "rough": 0.845,
+   "raw": false,
+   "height": true,
+   "use": "roofs: slate (mansards)",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "roofTiles": {
+   "site": "Poly Haven",
+   "id": "grey_roof_tiles",
+   "url": "https://polyhaven.com/a/grey_roof_tiles",
+   "licence": "CC0 1.0",
+   "metres": 2.4,
+   "texel": 2.4,
+   "mean": [
+    0.5287,
+    0.5027,
+    0.4111
+   ],
+   "rough": 0.518,
+   "raw": false,
+   "height": true,
+   "use": "roofs: old grey tiles",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  },
+  "corrugated": {
+   "site": "Poly Haven",
+   "id": "corrugated_iron",
+   "url": "https://polyhaven.com/a/corrugated_iron",
+   "licence": "CC0 1.0",
+   "metres": 2.2,
+   "texel": 2.2,
+   "mean": [
+    0.4838,
+    0.5088,
+    0.4968
+   ],
+   "rough": 0.703,
+   "raw": false,
+   "height": true,
+   "use": "roofs and walls of sheds, garages, yards",
+   "files": {
+    "c": [
+     512
+    ],
+    "n": [
+     512
+    ]
+   }
+  }
+ }
+}

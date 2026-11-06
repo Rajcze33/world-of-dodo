@@ -422,19 +422,29 @@ async function shoot(a, b, petrHits) {
     check(yawSeen, `Rosta sees Petr's fore turret turned as Petr turned it (${yaw.toFixed(2)} rad)`);
     await a.keyboard.press('Digit3');
     await a.waitForFunction(() => WOD.car.k === 2 && WOD.car.topT === 0, SLOW);
-    const pp = await b.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z }));
-    let spot = null;
-    for (const d of [90, -90, 75, -75, 60, -60]) {
-      const h = NV.riverDir(pp.x, pp.z), x = pp.x + Math.sin(h) * d, z = pp.z + Math.cos(h) * d;
-      if (NV.inWater(x, z, 10)) { spot = { x, z, h: Math.atan2(pp.x - x, pp.z - z) }; break; }
-    }
-    check(!!spot, 'a place on the river 60 to 90 from Petr\'s ship for Rosta\'s');
-    await a.evaluate(s => { Object.assign(WOD.car, { x: s.x, z: s.z, h: s.h, v: 0, immT: 0 }); WOD.sh.tel = 1; }, spot);
-    await seesAt(b, spot.x, spot.z);
-    await seesAt(a, pp.x, pp.z);
+    // Rosta's ship goes 60 to 90 down or up the river from Petr's. Velemlok or a bot may sink Petr's ship meanwhile (it comes back at
+    // another spawn point, out of Rosta's range), so before each salvo Rosta is put near it again if it is far (issue #27: the heavier
+    // city makes the test slower, and Velemlok was often out at this point).
+    let pp = null;
+    const shipSpot = async () => {
+      pp = await b.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z }));
+      let spot = null;
+      for (const d of [90, -90, 75, -75, 60, -60]) {
+        const h = NV.riverDir(pp.x, pp.z), x = pp.x + Math.sin(h) * d, z = pp.z + Math.cos(h) * d;
+        if (NV.inWater(x, z, 10)) { spot = { x, z, h: Math.atan2(pp.x - x, pp.z - z) }; break; }
+      }
+      if (!spot) return false;
+      await a.evaluate(s => { Object.assign(WOD.car, { x: s.x, z: s.z, h: s.h, v: 0, immT: 0 }); WOD.sh.tel = 1; }, spot);
+      await seesAt(b, spot.x, spot.z);
+      await seesAt(a, pp.x, pp.z);
+      return true;
+    };
+    check(await shipSpot(), 'a place on the river 60 to 90 from Petr\'s ship for Rosta\'s');
+    const shipsApart = async () => { const [p, q] = await Promise.all([a, b].map(g => g.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z })))); return Math.hypot(p.x - q.x, p.z - q.z); };
     const aimAtPetr = () => a.evaluate(f => { const o = eval(f)(), c = WOD.car, d = Math.hypot(o.x - c.x, o.z - c.z); WOD.sh.aimY = Math.atan2(o.x - c.x, o.z - c.z); WOD.sh.aimP = -Math.atan2(5.4, d); }, `(${petrShip})`);
     // one salvo at Petr's ship (both turrets loaded); true when Petr's ship registers a hit and Rosta scores at least `gain`
     const salvo = async (pretend, gain) => {
+      if (await shipsApart() > 100) { await b.waitForFunction(() => WOD.car.k === 2 && WOD.car.topT === 0, SLOW); await shipSpot(); console.log('     (Petr\'s ship was moved: Rosta is put near it again)'); }
       await b.evaluate(p => Object.assign(WOD.car, { immT: 0, topT: 0, hitLog: p ? [[performance.now() - 15000, p]] : [] }), pretend);
       await aimAtPetr();
       await a.waitForFunction(() => WOD.sh.tur.every(t => t.st === 'ok' || t.st === 'block') && WOD.sh.tur.some(t => t.st === 'ok'), { timeout: 240000 });   // (the first time the turrets swing round: 4 s of game time)

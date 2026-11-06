@@ -15,6 +15,7 @@ import {
   circleGeo, octaGeo, translate, rotateX, rotateY, rotateZ, type Geo,
 } from '../core/geo';
 import { M, lambert, basic, VC_MAT, VC_GLOW } from '../core/mat';
+import { weatherMat } from '../core/matlib';
 import { poolTex, logoTex, canvasTex } from '../core/tex';
 import { COL } from '../core/colors';
 import { DATA, ARENA, BLOCKS, NODES, SITE, DEPOT, SOLIDS, groundH, freeAt, inArena, nearestEdge, edgePos } from '../../shared/map.ts';
@@ -228,7 +229,12 @@ export function finishCity() {
     im.update();
   }
   // ---------- finalize merged meshes ----------
-  bakeTiles({ fac: facadeMat(), vc: lambert(0xffffff, { double: true }), glow: basic(0xffffff, { double: true }) });
+  // World of DODO, issue #27: the lit tiles follow the weather (core/matlib.ts setWeatherLook): their vertex colours already show today's
+  // snowy night, so the library's 'baked' mode adds no snow layer (no change at the default weather) but thaws what is snow-white and
+  // faces up (the snow on the far roofs, on cornices, ledges and shelters) to a bare grey as the snow goes, and the rain darkens all of
+  // it (cornices, the shop band, frames, pediments) with a sheen. The glow tiles stay as they are: they are lights (lit windows, shop
+  // windows, signs, the clocks), which neither snow nor rain changes.
+  bakeTiles({ fac: facadeMat(), vc: weatherMat({ tint: 0xffffff, double: true, baked: true, snow: 1, wet: 0.6 }), glow: basic(0xffffff, { double: true }) });
   bake('floodlit', FLOOD, lambert(0xffffff, { emissive: 0x3e4240, emissiveIntensity: 1 }), true);   // the church and the memorial
   const dm = lambert(0xffffff); dm.zOffset = -1; dm.zOffsetUnits = -6;
   bake('siteDirt', DIRT, dm, false);

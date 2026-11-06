@@ -75,7 +75,13 @@ export function setFog(air: boolean) {
 const casters: AbstractMesh[] = [];
 export let shadow: ShadowGenerator | null = null;
 function makeShadow(size: number) {
+  const had = !!shadow;
   shadow?.dispose(); shadow = null;
+  // World of DODO, issue #27: shadows off (the low quality level): every mesh's shader is rebuilt without the shadow map, and Babylon
+  // keeps drawing with the old shader until the new one has compiled, its shadow sampler then bound to a plain texture (Chrome logs
+  // "GL_INVALID_OPERATION: Mismatch between texture format and sampler type (shadow)" for every such draw). Marked as for a disposed
+  // light, a mesh is not drawn with the old shader but waits for its new one (a frame or so, once).
+  if (had && !size) for (const m of scene.meshes) (m as unknown as { _markSubMeshesAsLightDirty?: (dispose: boolean) => void })._markSubMeshesAsLightDirty?.(true);
   if (!size) return;
   shadow = new ShadowGenerator(size, moon);
   shadow.usePercentageCloserFiltering = true;      // soft edges, as the original's PCF soft shadows

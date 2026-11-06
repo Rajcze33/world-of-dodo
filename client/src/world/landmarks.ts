@@ -5,6 +5,7 @@
 // turrets), the Hudební divadlo Karlín just outside the arena (its fly tower), and the Národní památník na Vítkově on the hill with
 // the equestrian statue of Jan Žižka, floodlit, seen from everywhere. Each model keeps within its footprint, which stays the solid
 // (map.ts); what rises above the solid (towers, the statue) is in EXTRA for the planes (land.ts landHit).
+// World of DODO, issue #27: the barracks and the theatre are houses of buildings.ts, with their facades and roofs.
 import { DATA, terrainH, nearestEdge } from '../../shared/map.ts';
 import { polyCentroid, pointInPoly } from '../../shared/geom.ts';
 import { Bucket, type P3 } from '../core/geo';
@@ -29,14 +30,14 @@ class Fr {
     prism(bk, this.poly([[s0, t0], [s1, t0], [s1, t1], [s0, t1]]), this.y0 + y0, this.y0 + y1, col, top);
   }
   // a gable roof over s0..s1 × t0..t1 from the walls' top yw to the ridge yr, the ridge along s (or along t)
-  gable(bk: Bucket, s0: number, s1: number, t0: number, t1: number, yw: number, yr: number, alongS: boolean, roof: number, end: number) {
+  gable(bk: Bucket, s0: number, s1: number, t0: number, t1: number, yw: number, yr: number, alongS: boolean, roof: number, end: number, rb: Bucket = bk) {
     if (alongS) {
       const tm = (t0 + t1) / 2, hw = (t1 - t0) / 2, rise = yr - yw;
-      for (const [ta, sg] of [[t0, -1], [t1, 1]] as [number, number][]) faceN(bk, [this.p(s0, yw, ta), this.p(s1, yw, ta), this.p(s1, yr, tm), this.p(s0, yr, tm)], this.n(0, hw, sg * rise), roof);
+      for (const [ta, sg] of [[t0, -1], [t1, 1]] as [number, number][]) faceN(rb, [this.p(s0, yw, ta), this.p(s1, yw, ta), this.p(s1, yr, tm), this.p(s0, yr, tm)], this.n(0, hw, sg * rise), roof);
       for (const [sa, sg] of [[s0, -1], [s1, 1]] as [number, number][]) faceN(bk, [this.p(sa, yw, t0), this.p(sa, yw, t1), this.p(sa, yr, tm)], this.n(sg, 0, 0), end);
     } else {
       const sm = (s0 + s1) / 2, hw = (s1 - s0) / 2, rise = yr - yw;
-      for (const [sa, sg] of [[s0, -1], [s1, 1]] as [number, number][]) faceN(bk, [this.p(sa, yw, t0), this.p(sa, yw, t1), this.p(sm, yr, t1), this.p(sm, yr, t0)], this.n(sg * rise, hw, 0), roof);
+      for (const [sa, sg] of [[s0, -1], [s1, 1]] as [number, number][]) faceN(rb, [this.p(sa, yw, t0), this.p(sa, yw, t1), this.p(sm, yr, t1), this.p(sm, yr, t0)], this.n(sg * rise, hw, 0), roof);
       for (const [ta, sg] of [[t0, -1], [t1, 1]] as [number, number][]) faceN(bk, [this.p(s0, yw, ta), this.p(s1, yw, ta), this.p(sm, yr, ta)], this.n(0, 0, sg), end);
     }
   }
@@ -46,9 +47,9 @@ class Fr {
     for (let k = 0; k < 4; k++) faceN(bk, [c[k], c[(k + 1) % 4], a], m[k], col);
   }
   // a lean-to roof from the outer wall (t = to, height yo) up to an inner wall (t = ti, height yi), over s0..s1
-  lean(bk: Bucket, s0: number, s1: number, to: number, ti: number, yo: number, yi: number, col: number, end: number) {
+  lean(bk: Bucket, s0: number, s1: number, to: number, ti: number, yo: number, yi: number, col: number, end: number, rb: Bucket = bk) {
     const sg = to < ti ? -1 : 1;
-    faceN(bk, [this.p(s0, yo, to), this.p(s1, yo, to), this.p(s1, yi, ti), this.p(s0, yi, ti)], this.n(0, Math.abs(ti - to), sg * (yi - yo)), col);
+    faceN(rb, [this.p(s0, yo, to), this.p(s1, yo, to), this.p(s1, yi, ti), this.p(s0, yi, ti)], this.n(0, Math.abs(ti - to), sg * (yi - yo)), col);
     for (const [sa, ns] of [[s0, -1], [s1, 1]] as [number, number][]) faceN(bk, [this.p(sa, yo, to), this.p(sa, yo, ti), this.p(sa, yi, ti)], this.n(ns, 0, 0), end);
   }
   // an arched window (lit) on the face s = sf (facing ns) or t = tf, centre c along the face, from y0 to y1, w wide
@@ -99,18 +100,21 @@ type B = Bld;
 function church(b: B, rot: number) {
   const p = orient(b.p);
   const { F, L, W } = frameOf(p, rot, (e, ux, uz) => widthAt(p, ux, uz, e[0], e[0] + 0.06 * (e[1] - e[0])) >= widthAt(p, ux, uz, e[1] - 0.06 * (e[1] - e[0]), e[1]));
-  const [cx, cz] = polyCentroid(p), VC = FLOOD, GL = tileB('glow', cx, cz);         // floodlit, as the real one at night
+  // floodlit, as the real one at night; World of DODO, issue #27: its roofs and spires in the city's vertex colours (their snow thaws
+  // with the weather, core/matlib.ts baked). (A sandstone texture on its walls was tried: one more shader to compile at the start,
+  // which on a weak device cost more than it showed.)
+  const [cx, cz] = polyCentroid(p), VC = FLOOD, RB = tileB('vc', cx, cz), GL = tileB('glow', cx, cz);
   const Wb = 0.93 * W, ts = 0.3 * Wb, tw = Wb / 2, nw = 0.2 * Wb, sA = 0.85 * L, sT0 = 0.63 * L, sT1 = 0.75 * L;
   const WALL = 0xe9dcc0, TRIM = 0xf6f1e4, ROOF = shade(SNOW, 0.97), SPIRE = 0x55605d;
   const HN = 19, RN = 26, HA = 11, RA = 14.5, HT = 38, HB = 45, HS = 58;
   // the nave (and the choir) and its roof; the aisles with lean-to roofs; the transept across
-  F.box(VC, ts * 0.5, sA, -nw, nw, 0, HN, WALL); F.gable(VC, ts * 0.5, sA, -nw, nw, HN, RN, true, ROOF, WALL);
+  F.box(VC, ts * 0.5, sA, -nw, nw, 0, HN, WALL); F.gable(VC, ts * 0.5, sA, -nw, nw, HN, RN, true, ROOF, WALL, RB);
   for (const sg of [-1, 1]) {
     F.box(VC, ts, sT0, sg > 0 ? nw : -tw, sg > 0 ? tw : -nw, 0, HA, WALL);
-    F.lean(VC, ts, sT0, sg * tw, sg * nw, HA, RA, ROOF, WALL);
+    F.lean(VC, ts, sT0, sg * tw, sg * nw, HA, RA, ROOF, WALL, RB);
     for (let s = ts + 2.5; s < sT0 - 1.5; s += 4) { F.archT(GL, sg * tw, sg, s, 1.3, 3, 8.5, WARM); F.archT(GL, sg * nw, sg, s, 1.1, RA + 0.8, HN - 1.2, WARM); }
   }
-  F.box(VC, sT0, sT1, -W / 2, W / 2, 0, HN, WALL); F.gable(VC, sT0, sT1, -W / 2, W / 2, HN, RN, false, ROOF, WALL);
+  F.box(VC, sT0, sT1, -W / 2, W / 2, 0, HN, WALL); F.gable(VC, sT0, sT1, -W / 2, W / 2, HN, RN, false, ROOF, WALL, RB);
   for (const sg of [-1, 1]) { F.discT(VC, sg * W / 2, sg, (sT0 + sT1) / 2, 13, 2.7, TRIM, 14); F.discT(GL, sg * W / 2 + sg * 0.1, sg, (sT0 + sT1) / 2, 13, 2.1, WARM, 14); }
   // the apse: a half circle (stretched along) with a half-cone roof
   {
@@ -119,7 +123,7 @@ function church(b: B, rot: number) {
     for (let k = 0; k < n; k++) {
       const [s0, t0] = ring[k], [s1, t1] = ring[k + 1], A = F.p(s0, 0, t0), Bq = F.p(s1, 0, t1), mid = F.n((s0 + s1) / 2 - sA, 0, (t0 + t1) / 2);
       faceN(VC, [A, Bq, F.p(s1, 13, t1), F.p(s0, 13, t0)], mid, WALL);
-      faceN(VC, [F.p(s0, 13, t0), F.p(s1, 13, t1), F.p(sA, 18.5, 0)], [mid[0], 1.2, mid[2]], ROOF);
+      faceN(RB, [F.p(s0, 13, t0), F.p(s1, 13, t1), F.p(sA, 18.5, 0)], [mid[0], 1.2, mid[2]], ROOF);
     }
     for (const a of [-0.5, 0, 0.5]) {                                                // three tall windows round the apse
       const c = Math.cos(a), sn = Math.sin(a), s = sA + (rs + 0.06) * c, t = (rt + 0.06) * sn, N = F.n(c, 0, sn);
@@ -130,7 +134,7 @@ function church(b: B, rot: number) {
   F.box(VC, 0, ts * 0.5 + 0.2, -tw + ts, tw - ts, 0, HN, WALL);
   faceN(VC, [F.p(0, HN, -nw - 0.4), F.p(0, HN, nw + 0.4), F.p(0, RN + 1.5, 0)], F.n(-1, 0, 0), WALL);
   faceN(VC, [F.p(ts * 0.5, HN, -nw - 0.4), F.p(ts * 0.5, HN, nw + 0.4), F.p(ts * 0.5, RN + 1.5, 0)], F.n(1, 0, 0), WALL);
-  for (const sg of [-1, 1]) faceN(VC, [F.p(0, HN, sg * (nw + 0.4)), F.p(ts * 0.5, HN, sg * (nw + 0.4)), F.p(ts * 0.5, RN + 1.5, 0), F.p(0, RN + 1.5, 0)], F.n(0, nw, sg * (RN + 1.5 - HN)), ROOF);
+  for (const sg of [-1, 1]) faceN(RB, [F.p(0, HN, sg * (nw + 0.4)), F.p(ts * 0.5, HN, sg * (nw + 0.4)), F.p(ts * 0.5, RN + 1.5, 0), F.p(0, RN + 1.5, 0)], F.n(0, nw, sg * (RN + 1.5 - HN)), ROOF);
   F.disc(VC, 0, -1, 0, 13.2, 2.9, TRIM, 16); F.disc(GL, -0.12, -1, 0, 13.2, 2.3, WARM, 16);   // the rose window in its frame
   F.archS(VC, 0, -1, 0, 3.4, 0, 6.6, 0x4b3a2c); F.archS(GL, -0.04, -1, 0, 2.6, 0, 5.8, WARM);
   F.box(VC, -0.3, 0.2, -0.25, 0.25, RN + 1.5, RN + 4.2, TRIM); F.box(VC, -0.3, 0.2, -1.1, 1.1, RN + 2.9, RN + 3.4, TRIM);   // the cross
@@ -139,7 +143,7 @@ function church(b: B, rot: number) {
     const t0 = sg > 0 ? tw - ts : -tw, t1 = sg > 0 ? tw : -tw + ts, tc = (t0 + t1) / 2;
     F.box(VC, 0, ts, t0, t1, 0, HT, WALL, TRIM); F.box(VC, -0.25, ts + 0.25, t0 - 0.25, t1 + 0.25, HT, HT + 0.7, TRIM);
     F.box(VC, 0.2, ts - 0.2, t0 + 0.2, t1 - 0.2, HT + 0.7, HB, WALL); F.box(VC, -0.3, ts + 0.3, t0 - 0.3, t1 + 0.3, HB, HB + 0.6, TRIM);
-    F.pyramid(VC, -0.1, ts + 0.1, t0 - 0.1, t1 + 0.1, HB + 0.6, HS, SPIRE);
+    F.pyramid(RB, -0.1, ts + 0.1, t0 - 0.1, t1 + 0.1, HB + 0.6, HS, SPIRE);
     F.box(VC, ts / 2 - 0.15, ts / 2 + 0.15, tc - 0.15, tc + 0.15, HS - 0.3, HS + 2.6, TRIM); F.box(VC, ts / 2 - 0.15, ts / 2 + 0.15, tc - 0.9, tc + 0.9, HS + 1.4, HS + 1.8, TRIM);
     for (const w of [-1, 1]) { F.archS(GL, 0.2, -1, tc + w * 1.1, 1.2, HT + 2, HB - 1.2, WARM); F.archS(GL, ts - 0.2, 1, tc + w * 1.1, 1.2, HT + 2, HB - 1.2, WARM); F.archT(GL, sg > 0 ? t1 - 0.2 : t0 + 0.2, sg, ts / 2 + w * 1.1, 1.2, HT + 2, HB - 1.2, WARM); }
     for (const y of [10, 20, 29]) F.archS(GL, 0, -1, tc, 1.1, y, y + 3.4, WARM);
@@ -173,16 +177,16 @@ function synagogue(b: B, rot: number) {
     const g = (s: number) => { const tm = (e[2] + e[3]) / 2, x = ux * s - uz * tm, z = uz * s + ux * tm, ne = nearestEdge(x, z); return ne ? ne.d : 99; };
     return g(e[0] - 3) <= g(e[1] + 3);
   };
-  const { F, L, W } = frameOf(p, rot, fr), [cx, cz] = polyCentroid(p), VC = tileB('vc', cx, cz), GL = tileB('glow', cx, cz);
+  const { F, L, W } = frameOf(p, rot, fr), [cx, cz] = polyCentroid(p), VC = tileB('vc', cx, cz), RB = VC, GL = tileB('glow', cx, cz);
   const WALL = 0xf0e6cf, TRIM = 0xfbf7ee, h = b.h, r = h + Math.max(3, b.rh), hw = W / 2;
-  F.box(VC, 0, L, -hw, hw, 0, h, WALL); F.gable(VC, 0.3, L, -hw, hw, h, r, true, shade(SNOW, 0.97), WALL);
+  F.box(VC, 0, L, -hw, hw, 0, h, WALL); F.gable(VC, 0.3, L, -hw, hw, h, r, true, shade(SNOW, 0.97), WALL, RB);
   faceN(VC, [F.p(0, h, -hw), F.p(0, h, hw), F.p(0, r + 1.6, 0)], F.n(-1, 0, 0), WALL); faceN(VC, [F.p(0.3, h, -hw), F.p(0.3, h, hw), F.p(0.3, r + 1.6, 0)], F.n(1, 0, 0), WALL);
   for (const sg of [-1, 1]) faceN(VC, [F.p(0, h, sg * hw), F.p(0.3, h, sg * hw), F.p(0.3, r + 1.6, 0), F.p(0, r + 1.6, 0)], F.n(0, hw, sg * (r + 1.6 - h)), TRIM);
   F.disc(VC, 0, -1, 0, h * 0.62, Math.min(2.3, hw * 0.5), TRIM, 16); F.disc(GL, -0.12, -1, 0, h * 0.62, Math.min(1.8, hw * 0.4), WARM, 16);
   F.archS(GL, 0, -1, 0, 1.6, 0, 3.2, 0xf6cf8a);
   for (const sg of [-1, 1]) {
     const t0 = sg * hw - (sg > 0 ? 1.1 : 0), t1 = t0 + 1.1;
-    F.box(VC, -0.2, 0.9, t0, t1, 0, r + 1.2, TRIM); F.pyramid(VC, -0.3, 1.0, t0 - 0.1, t1 + 0.1, r + 1.2, r + 3.6, 0x55605d);
+    F.box(VC, -0.2, 0.9, t0, t1, 0, r + 1.2, TRIM); F.pyramid(RB, -0.3, 1.0, t0 - 0.1, t1 + 0.1, r + 1.2, r + 3.6, 0x55605d);
     for (let s = 3; s < L - 1.5; s += 3.2) F.archT(GL, sg * hw, sg, s, 1.1, 1.6, h - 1.2, WARM);
     F.extra(-0.2, 0.9, t0, t1, h, r + 3.6);
   }
