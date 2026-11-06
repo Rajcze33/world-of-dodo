@@ -8,6 +8,10 @@
 // Fresnel sky, the fog); stone embankment walls with a coping and a parapet run along every bank from the land down into the water;
 // ice floes drift slowly downstream along the banks. The ponds stay frozen. The terrain is drawn up to the bank exactly (the 10 u
 // grid's quads that the bank crosses in 1 u cells), never under LAND_MIN on land.
+// World of DODO, issue #27: real materials (core/matlib.ts): the land a winter lawn of gravel and soil under the weather's snow (the
+// snow is the library's layer, not the vertex colours: it grows and melts with setWeatherLook, the steep slopes keep less of it), the
+// embankment walls sandstone blocks (their coping and parapet granite-pale as before, by the vertex colours), the floes and the frozen
+// ponds the ice material; both only while it freezes (WEATHER.frost; without it the ponds are dark water and no floe drifts).
 //
 // It draws from no random numbers (hashes only; the floes' drifting has its own small generator). Built last (main.ts), after
 // everything else. Few draw calls: the terrain is one mesh, the embankment one, the river one, the ponds one, the floes one
@@ -22,7 +26,7 @@ import { Hash, pointInPoly, polyBox, polyCentroid } from '../../shared/geom.ts';
 import { scene, engine, camera } from '../core/engine';
 import { Bucket, tri, quad, cylGeo, translate, addGeo, bake, geoMesh, Inst, Dummy, type P3, type Geo } from '../core/geo';
 import { lambert } from '../core/mat';
-import { canvasTex } from '../core/tex';
+import { matTex, onWeather } from '../core/matlib';
 import { COL } from '../core/colors';
 import { COARSE } from '../core/dom';
 import { earClip, orient, hash01, faceN } from './poly';
@@ -291,7 +295,7 @@ function floeGeo(): Geo {
   for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2, r = 0.72 + 0.28 * hash01(i, 41); top.push([Math.sin(a) * r, Math.cos(a) * r]); }
   for (let i = 0; i < n; i++) {
     const [ax, az] = top[i], [bx, bz] = top[(i + 1) % n];
-    tri(g, [0, 0.16, 0], [ax, 0.16, az], [bx, 0.16, bz], 0xe8f0f0);                // the top, facing up
+    tri(g, [0, 0.16, 0], [ax, 0.16, az], [bx, 0.16, bz], 0xe8f0f0, [0, 0], [ax * 1.6, az * 1.6], [bx * 1.6, bz * 1.6]);   // the top, facing up (issue #27: uvs for the ice)
     quad(g, [ax, 0.16, az], [ax, -0.12, az], [bx, -0.12, bz], [bx, 0.16, bz], 0xa9bfc0);   // the sides, facing out
   }
   return g;
@@ -299,7 +303,8 @@ function floeGeo(): Geo {
 function buildFloes() {
   FLOES.length = 0;
   for (let i = 0; i < FLOE_N; i++) { const f: Floe = { x: 0, z: 0, r: 1, sx: 1, sz: 1, rot: 0, w: 0, v: 0, trip: 0 }; if (floeAt(f, false)) FLOES.push(f); }
-  floeInst = new Inst('floes', floeGeo(), lambert(0xffffff), FLOES.length, { receive: false });
+  // (issue #27: the ice material, its uvs the floe's own: a floe drifts, world uvs would slide over it)
+  floeInst = new Inst('floes', floeGeo(), matTex('ice', { uv: 'mesh', tint: 0xffffff, snow: 0.55 }), FLOES.length, { receive: false });
   placeFloes();
 }
 const FD = new Dummy();
@@ -320,33 +325,20 @@ function driftFloes(dt: number) {
       f.x = px + ex / d * m; f.z = pz + ez / d * m;
     }
   });
-  for (const f of FLOES) {
-    const h = riverDir(f.x, f.z), d = f.v * dt;
-    f.x += Math.sin(h) * d; f.z += Math.cos(h) * d; f.rot += f.w * dt; f.trip += d;
+  // World of DODO, issue #27: a third of the floes a frame, each moved by three frames' drift (its steps, some 0.04 units, never show):
+  // the river's queries for all of them every frame were a few per cent of the frame
+  FLOE_PHASE = (FLOE_PHASE + 1) % 3;
+  for (let i = FLOE_PHASE; i < FLOES.length; i += 3) {
+    const f = FLOES[i], h = riverDir(f.x, f.z), d = f.v * dt * 3;
+    f.x += Math.sin(h) * d; f.z += Math.cos(h) * d; f.rot += f.w * dt * 3; f.trip += d;
     const p = waterPush(f.x, f.z, f.r * 0.9); if (p) { f.x += p.nx * p.pen; f.z += p.nz * p.pen; }
     if (f.trip > 260 || !inRiver(f.x, f.z) || bankDist(f.x, f.z) > 24) floeAt(f, true);
   }
   placeFloes();
 }
+let FLOE_PHASE = 0;
 
-// ---------- the ponds: still frozen (the old ice with snow drifts and dark cracks, a texture tiled in world units) ----------
-function iceTex() {
-  return canvasTex(256, 256, (g, w, h) => {
-    g.fillStyle = '#a9c9c6'; g.fillRect(0, 0, w, h);
-    for (let k = 0; k < 26; k++) {                                                  // snow drifts
-      const x = hash01(k, 1) * w, y = hash01(k, 2) * h, r = 10 + hash01(k, 3) * 34, grd = g.createRadialGradient(x, y, 0, x, y, r);
-      grd.addColorStop(0, 'rgba(245,247,246,0.85)'); grd.addColorStop(1, 'rgba(245,247,246,0)'); g.fillStyle = grd;
-      for (const [dx, dy] of [[0, 0], [w, 0], [-w, 0], [0, h], [0, -h]]) { g.save(); g.translate(dx, dy); g.fillRect(x - r, y - r, 2 * r, 2 * r); g.restore(); }
-    }
-    g.strokeStyle = 'rgba(40,64,68,0.75)'; g.lineWidth = 1.4;                       // cracks: a few jagged lines, wrapping round the tile
-    for (let k = 0; k < 9; k++) {
-      let x = hash01(k, 11) * w, y = hash01(k, 12) * h, a = hash01(k, 13) * Math.PI * 2;
-      g.beginPath(); g.moveTo(x, y);
-      for (let s = 0; s < 9; s++) { a += (hash01(k * 17 + s, 14) - 0.5) * 1.6; x += Math.cos(a) * 14; y += Math.sin(a) * 14; g.lineTo(x, y); }
-      g.stroke();
-    }
-  }, { repeat: true });
-}
+// ---------- the ponds: frozen while it freezes (issue #27: the ice material and the weather's snow on it, else dark water) ----------
 function ponds(): Bucket {
   const W = Bucket(), U = 60;
   for (const q0 of DATA.water) {
@@ -398,19 +390,23 @@ function treeInst(name: string, idx: number[], mat: StandardMaterial) {
 export function buildLand() {
   const G = Bucket(), Wt = Bucket(), E = Bucket();
   terrain(G, Wt);
-  bake('landGround', G, lambert(0xffffff), false);                                  // lies on the ground: takes the tanks' shadows
+  // (lies on the ground: takes the tanks' shadows. Issue #27: a winter lawn of gravel and soil, coarse, in large patches; the snow is
+  // the weather's layer over it)
+  bake('landGround', G, matTex('gravel', { tint: 0x5e6553, scale: 3, macro: 0.45, wet: 0.5 }), false);
   // issue #20: the river, its embankments and floes; the ponds frozen as before
   river(Wt);
   const wm = riverMat(), water = geoMesh('vltava', Wt, wm, false, false); water.freezeWorldMatrix();
-  embankment(E); bake('embankment', E, lambert(0xffffff), false);
-  const ice = geoMesh('ponds', ponds(), lambert(0xffffff, { map: iceTex() }), false, true); ice.freezeWorldMatrix();
+  embankment(E); bake('embankment', E, matTex('sandstone', { tint: 0xffffff }), false);   // (issue #27: sandstone blocks)
+  const pondIce = matTex('ice'), pondWater = lambert(0x1a2426), ice = geoMesh('ponds', ponds(), pondIce, false, true); ice.freezeWorldMatrix();
   buildFloes();
+  // issue #27: the ice only while it freezes (the weather, core/matlib.ts): the ponds thaw to dark water, the floes are gone
+  onWeather(w => { ice.material = w.frost ? pondIce : pondWater; floeInst?.mesh.setEnabled(w.frost); });
   let t = 0;
   scene.onBeforeRenderObservable.add(() => {                                       // the waves move, the floes drift (every drawn frame)
     const dt = Math.min(0.05, engine.getDeltaTime() / 1000); t += dt;
     wm.setFloat('time', t); wm.setVector3('cam', camera.position);
     wm.setFloat('fogStart', scene.fogStart); wm.setFloat('fogEnd', scene.fogEnd); wm.setColor3('fogColor', scene.fogColor);
-    driftFloes(dt);
+    if (floeInst?.mesh.isEnabled()) driftFloes(dt);
   });
   woods();
   for (const e of EXTRA) solid({ k: 0, x: e.x, z: e.z, y0: e.y0, h: e.y1, a: e.a, b: e.b, ux: e.ux, uz: e.uz }, Math.hypot(e.a, e.b));

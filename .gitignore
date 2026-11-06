@@ -2,3 +2,4 @@ node_modules/
 client/dist/
 *.log
 test-shots/
+__pycache__/

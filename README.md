@@ -153,6 +153,17 @@ node tools/karlin/gen.mjs            # from the cached downloads (add --refresh 
 node tools/karlin/check.mjs          # check the file
 ```
 
+### Textures
+
+The streets, pavements, walls and roofs have real materials (issue #27): CC0 textures from [Poly Haven](https://polyhaven.com) and
+[ambientCG](https://ambientcg.com) for asphalt, the Prague mosaic, setts, granite, plaster, sandstone, brick, concrete, roof tiles
+and ice, and the roofs of Karlín cut from the orthophoto of **IPR Praha** (CC BY 4.0, "data base © IPR Praha"). They are made
+into small WebP files in `client/public/assets/` (`mat/` the materials, `roofs/` the roofs) by the scripts in
+[tools/assets/](tools/assets/README.md) from the downloaded sources, which are not in the repository; [ASSETS.md](ASSETS.md) lists
+every file, where it comes from and what it is for. The game loads only what it draws, in the size of its quality level, and the
+weather (snow, wet streets, the river's ice in frost) lies on the materials as it is set (`setWeatherLook` in
+`client/src/core/matlib.ts`), never baked into them.
+
 ## How it works
 
 ```
@@ -199,7 +210,9 @@ do it), so the network's jitter does not show. [docs/PROTOCOL.md](docs/PROTOCOL.
 The game page is TypeScript on [Babylon.js](https://www.babylonjs.com/), built with Vite
 (`npm run build`; the server sends `client/dist`). The scene is right-handed like the three.js
 original it was ported from (x east, z south, y up). The fonts and images are in `client/public`.
-The first load is about 1.3 MB of compressed script (Babylon.js and the map of Karlín), sent as brotli or gzip.
+The first load is about 1.3 MB of compressed script (Babylon.js and the map of Karlín), sent as brotli or gzip, then the textures
+of what is drawn once the page is idle (issue #27: the ground's about 1.3 MB at the high quality level, its colour maps alone at
+the medium one, at the low one only the small roof atlas), while the city already shows in their average colours.
 The server loads the same `client/shared` TypeScript directly: Node 24 strips the types, so that code
 uses only erasable TypeScript (no enums, namespaces or parameter properties) and imports with `.ts`.
 

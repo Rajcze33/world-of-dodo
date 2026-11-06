@@ -113,6 +113,8 @@ const TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.ttf': 'font/ttf',
   '.png': 'image/png',
+  '.webp': 'image/webp',                       // issue #27: the materials' and the roofs' textures (client/public/assets)
+  '.json': 'application/json; charset=utf-8',  // issue #27: their indexes
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',          // the font licenses next to the fonts
 };

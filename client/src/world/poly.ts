@@ -5,7 +5,7 @@
 // Polygons as in client/shared/geom.ts: flat [x0,z0,x1,z1,...], the interior on the RIGHT of every edge (positive shoelace), so the
 // outward normal of an edge (dx,dz) is (dz,-dx) and the inward one (-dz,dx). Babylon ships no triangulator of its own (its
 // PolygonMeshBuilder wants earcut injected), and the shapes here are small (at most ~100 points, no holes): plain ear clipping does.
-import { tri, type Bucket, type P3 } from '../core/geo';
+import { tri, type Bucket, type P3, type P2 } from '../core/geo';
 import { pointInPoly, closestOnPoly, polyArea, polyReverse, type Near } from '../../shared/geom.ts';
 
 // the polygon turned to the data's orientation if it came the other way
@@ -52,13 +52,14 @@ export function earClip(p: number[]): number[] {
 }
 
 // ---------- 3D faces (core/geo.ts: a triangle's front is where cross(b-a, c-a) points) ----------
-// the polygon as a flat cap at height y facing up (fn: the height may vary per point, for a cap on a slope)
-export function capUp(bk: Bucket, p: number[], y: number | ((x: number, z: number) => number), col: number) {
-  const t = earClip(p), Y = typeof y === 'number' ? () => y : y;
+// the polygon as a flat cap at height y facing up (fn: the height may vary per point, for a cap on a slope); World of DODO, issue #27:
+// uv (optional) gives each corner its texture coordinate from its x, z (the roof atlas)
+export function capUp(bk: Bucket, p: number[], y: number | ((x: number, z: number) => number), col: number, uv?: (x: number, z: number) => P2) {
+  const t = earClip(p), Y = typeof y === 'number' ? () => y : y, U = (k: number) => (uv ? uv(p[2 * k], p[2 * k + 1]) : undefined);
   for (let i = 0; i < t.length; i += 3) {
     const a = t[i], b = t[i + 1], c = t[i + 2];
     if (Math.abs(cross(p[2 * a], p[2 * a + 1], p[2 * b], p[2 * b + 1], p[2 * c], p[2 * c + 1])) < 1e-6) continue;
-    tri(bk, [p[2 * a], Y(p[2 * a], p[2 * a + 1]), p[2 * a + 1]], [p[2 * c], Y(p[2 * c], p[2 * c + 1]), p[2 * c + 1]], [p[2 * b], Y(p[2 * b], p[2 * b + 1]), p[2 * b + 1]], col);
+    tri(bk, [p[2 * a], Y(p[2 * a], p[2 * a + 1]), p[2 * a + 1]], [p[2 * c], Y(p[2 * c], p[2 * c + 1]), p[2 * c + 1]], [p[2 * b], Y(p[2 * b], p[2 * b + 1]), p[2 * b + 1]], col, U(a), U(c), U(b));
   }
 }
 // the same facing down (a slab's underside)
@@ -74,12 +75,13 @@ export function wall(bk: Bucket, ax: number, az: number, bx: number, bz: number,
     tri(bk, B0, A0, A1, col, [u1, v0], [u0, v0], [u0, v1]); tri(bk, B0, A1, B1, col, [u1, v0], [u0, v1], [u1, v1]);
   } else { tri(bk, B0, A0, A1, col); tri(bk, B0, A1, B1, col); }
 }
-// a quad given in any winding, turned to face along n
-export function faceN(bk: Bucket, v: P3[], n: P3, col: number) {
+// a quad given in any winding, turned to face along n (issue #27: uv, optional, from each corner's x, z as for capUp)
+export function faceN(bk: Bucket, v: P3[], n: P3, col: number, uv?: (x: number, z: number) => P2) {
   const [a, b, c] = v, ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], wx = c[0] - a[0], wy = c[1] - a[1], wz = c[2] - a[2];
   const d = (uy * wz - uz * wy) * n[0] + (uz * wx - ux * wz) * n[1] + (ux * wy - uy * wx) * n[2];
-  if (v.length === 3) { if (d >= 0) tri(bk, a, b, c, col); else tri(bk, a, c, b, col); return; }
-  if (d >= 0) { tri(bk, v[0], v[1], v[2], col); tri(bk, v[0], v[2], v[3], col); } else { tri(bk, v[0], v[2], v[1], col); tri(bk, v[0], v[3], v[2], col); }
+  const T = (q: P3, r: P3, s: P3) => tri(bk, q, r, s, col, uv && uv(q[0], q[2]), uv && uv(r[0], r[2]), uv && uv(s[0], s[2]));
+  if (v.length === 3) { if (d >= 0) T(a, b, c); else T(a, c, b); return; }
+  if (d >= 0) { T(v[0], v[1], v[2]); T(v[0], v[2], v[3]); } else { T(v[0], v[2], v[1]); T(v[0], v[3], v[2]); }
 }
 // an upright prism over polygon p from y0 to y1: walls, top, and the bottom when it floats (a deck)
 export function prism(bk: Bucket, p: number[], y0: number, y1: number, col: number, top = col, bottom = false) {
