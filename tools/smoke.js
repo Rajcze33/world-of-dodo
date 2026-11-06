@@ -7,11 +7,15 @@
 // (zones, depots), the rounds. The test ends a round itself (A's team scores up to the round's points, obj.r.to), so run it against a
 // server nobody else plays on; with ROUND_SEC under about 300 the round may end on its own in the middle of the test. It takes about
 // two and a half minutes (a depot it destroys must come back after 90 s).
+// Issue #26: Velemlok (client/shared/monster.ts, server/monster.js). The countdown is checked always; the rest needs a server that calls
+// it soon and often (MON_FIRST_S=60 MON_EVERY_S=5 MON_LIFE_S=25: the test reads the timing from the server's obj.g and skips the rest
+// when it would come later than MON_SOON s into the test). Then the test takes about three minutes.
 'use strict';
 
 const M = require('../server/city');
 const NV = require('../client/shared/naval.ts');
 const R = require('../client/shared/rules.ts');
+const MS = require('../client/shared/monster.ts');
 
 const BASE = (process.argv[2] || 'http://localhost:3400').replace(/\/$/, '');
 const WS_URL = BASE.replace(/^http/, 'ws') + '/ws';
@@ -40,6 +44,8 @@ const OFF = (() => {
 const onStreets = (x, z) => { const n = M.nearestEdge(x, z); return !!n && n.d <= n.e.w / 2 + 2; };
 // invisible characters a name must lose (built from code points, so none sits in this file)
 const RLO = String.fromCharCode(0x202e), ZWSP = String.fromCharCode(0x200b);
+// issue #26: Velemlok's part runs when it first comes at most this many seconds into the round
+const MON_SOON = 120;
 let failed = 0;
 
 function check(ok, what) {
@@ -161,6 +167,10 @@ async function join(name, team) {
   const g0 = wa && wa.game;
   check(g0 && g0.sc.join() === '0,0' && g0.z.length === 4 && g0.z.every(z => z[0] === -1 && z[1] === 0) && g0.d.length === 8 && g0.d.every(d => d[0] === R.DEPOT_HP && d[1] === 0)
     && g0.r.st === 'play' && g0.r.win === -1 && g0.r.left > 0 && g0.r.to > 0, `the welcome carries a fresh round: scores, neutral zones, depots standing (to ${g0 && g0.r.to} points, ${g0 && g0.r.left} s)`);
+  // issue #26: and Velemlok, away, coming MON_FIRST_S into the round (the first person in started the round)
+  const MON_FIRST = g0 && g0.g ? (g0.g.next - g0.ts) / 1000 : NaN, MON_ON = MON_FIRST <= MON_SOON;
+  check(g0 && g0.g && g0.g.st === 0 && g0.g.hp === g0.g.max && g0.g.max > 0 && g0.g.dmg.join() === '0,0' && MON_FIRST >= 1,
+    `the welcome carries Velemlok: away, ${g0 && g0.g && g0.g.max} hit points, it comes ${MON_FIRST} s into the round`);
   const bots0 = wa ? wa.players.filter(p => p.bot) : [], TS = (bots0.length + 1) / 2;
   check(Number.isInteger(TS) && TS >= 2 && bots0.filter(p => p.team === 0).length === TS - 1 && bots0.filter(p => p.team === 1).length === TS
     && bots0.map(p => p.name).sort().join() === bots0.map((p, i) => 'BOT' + (i + 1)).sort().join(),
@@ -585,10 +595,132 @@ async function join(name, team) {
   const ob = await A.next(m => m.t === 'obj', 1500);
   check(ob && ob.d[D.i][0] === R.DEPOT_HP && ob.d[D.i][1] === 0, `B's depot ${D.i} is rebuilt 90 s after it was destroyed`);
 
+  // issue #26: Velemlok. Both teams fight it: A (a ship) torpedoes it and reports her hits (mhit), only the valid ones count; it turns on
+  // whoever hurt it most lately; B kills it: the team with more damage gets the bonus, everyone who hurt it their personal points, and
+  // obj.g.next says when it comes and goes. Then it comes again, B (a low plane) bombs it and draws a geyser, and it flees. (Its numbers
+  // are client/shared/monster.ts's, its timing the server's: read from obj.g.)
+  const monPose = g => ({ x: g[0], z: g[1], h: g[2], y: g[3], rear: g[6] });
+  const objG = (test, ms) => A.next(m => m.t === 'obj' && test(m.g, m), ms);
+  const sOf = () => (A.snap ? A.snap.ts : 0);
+  // a spot on the water a ship fits in, between lo and hi from its body at pose P (the nearest to lo)
+  const waterNear = (P, lo, hi) => {
+    let best = null, bd = Infinity;
+    for (let dx = -150; dx <= 150; dx += 4) for (let dz = -150; dz <= 150; dz += 4) {
+      const x = P.x + dx, z = P.z + dz; if (!NV.inWater(x, z, 7)) continue;
+      const d = MS.monDist(P, x, z); if (d >= lo && d <= hi && d - lo < bd) { bd = d - lo; best = { x: Math.round(x * 100) / 100, z: Math.round(z * 100) / 100 }; }
+    }
+    return best;
+  };
+  const shipAt = (c, p, n) => c.send({ t: 'st', ct: 20000 + n, x: p.x, z: p.z, h: 0, v: 0, r: 0, s: 0, k: 2, y: 0, p: 0, a: [0, 3.14] });
+  const torp = (c, sid, from, to) => {
+    const dx = to.x - from.x, dz = to.z - from.z, l = Math.hypot(dx, dz) || 1;
+    c.send({ t: 'fire', k: 3, sid, x: from.x, y: NV.WATER_Y, z: from.z, vx: Math.round(dx / l * 2200) / 100, vy: 0, vz: Math.round(dz / l * 2200) / 100 });
+  };
+  const mhit = (c, sid, k, at) => c.send({ t: 'mhit', k, sid, x: Math.round(at[0] * 100) / 100, y: Math.round(at[1] * 100) / 100, z: Math.round(at[2] * 100) / 100 });
+  const ptsGain = (c, id, gain, ms = 2000) => c.next(m => m.t === 'pts' && m.id === id && m.gain === gain, ms);
+  const drain = async (c, t) => { while (await c.next(m => m.t === t, 20)); };   // (what an earlier appearance left in the inbox)
+  if (!MON_ON) console.log(`skip Velemlok's fight: it comes ${MON_FIRST} s into a round (start the server with MON_FIRST_S=60 MON_EVERY_S=5 MON_LIFE_S=25)`);
+  else {
+    const atks = [];                                     // every attack announced, as A heard it (with the server's time then)
+    A.ws.addEventListener('message', e => { const m = JSON.parse(e.data); if (m.t === 'mon') atks.push({ ...m, heard: sOf() }); });
+    // out with at least 15 s to go, or surfacing: then the countdown to its leaving is checked
+    let og = A.obj;
+    if (!(og.g.st === 1 || og.g.st === 2 && og.g.next - og.ts > 15000)) og = await objG(g => g.st === 1, 120000);
+    if (og && og.g.st === 1) {
+      const life = (og.g.next - og.ts) / 1000;
+      check(life >= 5 && og.g.hp === og.g.max, `Velemlok surfaces; obj.g says it leaves in ${life} s (MON_LIFE_S)`);
+      og = await objG(g => g.st === 2, 8000);
+    }
+    const sg = A.snap && A.snap.g, ok1 = og && og.g.st === 2 && sg && sg.length === 7 && (sg[4] === 1 || sg[4] === 2) && NV.inWater(sg[0], sg[1], 0);
+    check(ok1, `it is out: snap.g carries its pose on the river (${sg && sg.join(', ')}), obj.g its state (hp ${og && og.g.hp}, damage ${og && og.g.dmg.join(':')})`);
+    if (ok1) {
+      const P = monPose(A.snap.g), PA = waterNear(P, 60, 100), PB = waterNear(P, 6, 22), far = [...NV.SHIP_SPAWNS].sort((p, q) => Math.hypot(q.x - P.x, q.z - P.z) - Math.hypot(p.x - P.x, p.z - P.z))[0];
+      check(!!PA && !!PB, `A sails 60-100 from its body (${PA && PA.x}, ${PA && PA.z}), B 6-22 (${PB && PB.x}, ${PB && PB.z})`);
+      shipAt(A, PA, 1); shipAt(b, PB, 1);
+      await sleep(150);
+      // the hits A reports that must not count: a torpedo never fired, one fired but reported as a shell, one reported where it is not,
+      // one reported from 500 away; then N valid ones (and one of them again): A's personal points must come to exactly N · 30 / 6
+      const at = () => { const sp = MS.monSpheres(monPose(A.snap.g)); return [sp[1][0], sp[1][1], sp[1][2]]; };
+      const dmg0 = A.obj.g.dmg[0], hp0 = A.obj.g.hp, N = Math.max(3, Math.min(10, Math.floor((hp0 - 150) / MS.MON_DMG.torp)));
+      mhit(A, 5001, 3, at());
+      torp(A, 5002, PA, P); await sleep(30); mhit(A, 5002, 2, at());
+      torp(A, 5003, PA, P); await sleep(30); { const p = at(); mhit(A, 5003, 3, [p[0], p[1] + 30, p[2]]); }
+      torp(A, 5004, PA, P); await sleep(30); shipAt(A, far, 2); await sleep(120); mhit(A, 5004, 3, at()); await sleep(60); shipAt(A, PA, 3); await sleep(120);
+      for (let i = 0; i < N; i++) { torp(A, 5010 + i, PA, P); await sleep(25); mhit(A, 5010 + i, 3, at()); await sleep(25); }
+      mhit(A, 5010, 3, at());
+      const od1 = await objG(g => g.dmg[0] >= dmg0 + N * MS.MON_DMG.torp, 1500);
+      check(!!od1, `A's ${N} torpedoes count for team A (damage ${dmg0} -> ${od1 && od1.g.dmg[0]}, hit points ${hp0} -> ${od1 && od1.g.hp})`);
+      // it turns on A, the top threat now (B is nearer)
+      const t1 = sOf(), na = atks.length;
+      let onA = null; for (let i = 0; i < 40 && !onA; i++) { onA = atks.slice(na).find(m => m.v === aId); if (!onA) await sleep(200); }
+      check(onA && (onA.a === 'jet' || onA.a === 'slam') && onA.at > onA.heard, `it defends itself: its next attack goes at A, who hurt it most (${onA && onA.a}, ${onA && ((onA.heard - t1) / 1000).toFixed(1)} s later, B nearer)`);
+      const all = atks.every(m => ['slam', 'jet', 'geyser'].includes(m.a) && Number.isInteger(m.i) && m.r > 0 && Number.isFinite(m.x + m.y + m.z) && m.at > m.heard - 100);
+      const jet = atks.find(m => m.a === 'jet'), land = jet && MS.monJetAt(jet, jet.at);
+      check(all && atks.length > 0 && (!jet || (jet.t0 < jet.at && Math.hypot(land[0] - jet.x, land[1] - jet.y, land[2] - jet.z) < 1)),
+        `its attacks are announced before they land (${atks.length}: ${[...new Set(atks.map(m => m.a))].join(', ')}${jet ? '; a jet lands where it says' : ''})`);
+      // B finishes it off with torpedoes: the team with more damage gets MON_KILL_PTS, A her personal points for exactly her N hits
+      const sc0 = A.obj.sc.slice();
+      await drain(A, 'mres'); await drain(A, 'pts');
+      const ptsA = ptsGain(A, aId, Math.round(N * MS.MON_DMG.torp / MS.MON_PTS_PER), 60000);
+      let res = null; const resP = A.next(m => m.t === 'mres', 60000).then(m => { res = m; });
+      for (let i = 0; i < 60 && !res; i++) {
+        torp(b, 6001 + i, PB, monPose(A.snap.g)); await sleep(20);
+        const sp = MS.monSpheres(monPose(A.snap.g)); mhit(b, 6001 + i, 3, [sp[1][0], sp[1][1], sp[1][2]]); await sleep(i % 8 === 7 ? 250 : 25);
+      }
+      await resP;
+      const win = res ? (res.dmg[0] > res.dmg[1] ? 0 : res.dmg[1] > res.dmg[0] ? 1 : -1) : -2;
+      check(res && res.killed === true && res.win === win && res.pts === (win < 0 ? 0 : MS.MON_KILL_PTS) && !res.end,
+        `B kills it: mres says killed, damage ${res && res.dmg.join(':')}, the bonus ${res && res.pts} for team ${res && res.win}`);
+      const osc = res && win >= 0 ? await A.next(m => m.t === 'obj' && m.sc[win] >= sc0[win] + MS.MON_KILL_PTS, 1500) : null;
+      check(res && (win < 0 || !!osc), `the team that dealt more damage gets ${MS.MON_KILL_PTS} (${sc0.join(':')} -> ${osc ? osc.sc.join(':') : '-'})`);
+      const pa = await ptsA, tb = res && res.top.find(e => e[0] === wb.id);
+      const pb = tb ? await ptsGain(A, wb.id, Math.round(tb[1] / MS.MON_PTS_PER)) : null;
+      check(!!pa && (!tb || !!pb), `personal points: A ${pa && pa.gain} for her ${N} valid hits (not the 5 refused), B ${pb ? pb.gain : '?'} (top ${res && JSON.stringify(res.top)})`);
+      // it sinks; away, obj.g.next says when it comes again, and it does
+      const gone = await objG(g => g.st === 0, (MS.MON_SINK_S + 3) * 1000);
+      await sleep(200);
+      check(!!gone && !(A.snap && A.snap.g), `it sinks and is gone (no snap.g); it comes again in ${gone && ((gone.g.next - gone.ts) / 1000).toFixed(1)} s (MON_EVERY_S)`);
+      const up = gone && await objG(g => g.st === 1, gone.g.next - gone.ts + 3000);
+      check(!!up && Math.abs(up.ts - gone.g.next) < 1200, `and it surfaces when obj.g said (${up && up.ts - (gone && gone.g.next)} ms off)`);
+      // B, a plane low over it, bombs it (parcels, 9 each) and draws a geyser; it flees when obj.g said, B's team gets MON_FLEE_PTS
+      const leaveAt = up && up.g.next, o2 = up && await objG(g => g.st === 2, 8000);
+      if (o2) {
+        const BP = monPose(A.snap.g), dmgB0 = A.obj.g.dmg[1], NB = 25;
+        b.send({ t: 'st', ct: 30000, x: BP.x, z: BP.z, h: 0, v: 0, r: 0, s: 0, k: 1, y: 30, p: 0 });
+        await sleep(150);
+        const ptsB = ptsGain(A, wb.id, Math.round(NB * MS.MON_DMG.parcel / MS.MON_PTS_PER), 60000), nb = atks.length;
+        for (let i = 0; i < NB; i++) {
+          const sp = MS.monSpheres(monPose(A.snap.g));
+          b.send({ t: 'fire', sid: 6200 + i, x: BP.x, y: 29, z: BP.z, vx: 0, vy: -5, vz: 0 }); await sleep(20);
+          mhit(b, 6200 + i, 0, [sp[1][0], sp[1][1], sp[1][2]]); await sleep(i % 8 === 7 ? 250 : 25);
+        }
+        const od2 = await objG(g => g.dmg[1] >= dmgB0 + NB * MS.MON_DMG.parcel, 1500);
+        check(!!od2, `B's ${NB} parcels from a plane count for team B (${dmgB0} -> ${od2 && od2.g.dmg[1]})`);
+        let gey = null; for (let i = 0; i < 40 && !gey; i++) { gey = atks.slice(nb).find(m => m.v === wb.id); if (!gey) await sleep(200); }
+        check(gey && gey.a === 'geyser' && gey.r === MS.MON_GEY_R && Math.hypot(gey.x - BP.x, gey.z - BP.z) < 30, `a geyser comes up under B's low plane (${gey && gey.a})`);
+        await drain(A, 'mres');
+        const sc2 = A.obj.sc.slice(), fled = await A.next(m => m.t === 'mres', leaveAt - sOf() + 4000), heard = sOf();
+        const w2 = fled ? (fled.dmg[0] > fled.dmg[1] ? 0 : fled.dmg[1] > fled.dmg[0] ? 1 : -1) : -2;
+        check(fled && fled.killed === false && fled.win === w2 && fled.pts === (w2 < 0 ? 0 : MS.MON_FLEE_PTS) && Math.abs(heard - leaveAt) < 1200,
+          `it flees when obj.g said (${fled ? heard - leaveAt : '?'} ms off): damage ${fled && fled.dmg.join(':')}, ${fled && fled.pts} for team ${fled && fled.win}`);
+        const osc2 = fled && w2 >= 0 ? await A.next(m => m.t === 'obj' && m.sc[w2] >= sc2[w2] + MS.MON_FLEE_PTS, 1500) : null;
+        const pb2 = await ptsB;
+        check(fled && (w2 < 0 || !!osc2) && !!pb2, `the bonus is in the team's score (${sc2.join(':')} -> ${osc2 ? osc2.sc.join(':') : '-'}), B gets ${pb2 && pb2.gain} personal points`);
+      }
+      b.send({ t: 'st', ct: 40000, x: rb[1], z: rb[2], h: 0, v: 0, r: 0, s: 0 });   // B is a tank again
+      A.send({ t: 'st', ct: 40000, x: OFF.x - 4, z: OFF.z, h: 0, v: 0, r: 0, s: 0 });
+      // (the round below ends while it is out: it comes again first)
+      await objG(g => g.st === 1 || g.st === 2, 60000);
+    }
+  }
+
   // issue #24: the round. A's team scores up to the round's points (A's parcels on B): the round ends, team A wins, the best players are
   // named; in the intermission nothing is fired and nothing scores; INTER_S later a new round: scores, points, zones and depots reset, and
   // the teams evened out (A's team has 3 people, B's 1: the one of A's who came in last, A herself since she came back, goes over)
   RO = A.roster;
+  const interG = [];                                     // issue #26: obj.g from the round's end to the next round
+  A.ws.addEventListener('message', e => { const m = JSON.parse(e.data); if (m.t === 'obj' && (m.r.st === 'end' || interG.length)) interG.push(m); });
+  const outAtEnd = A.obj.g.st === 1 || A.obj.g.st === 2, mresEnd = A.next(m => m.t === 'mres' && m.end === 1, 60000);
   const o0 = await A.next(m => m.t === 'obj', 1500), to = o0.r.to;
   let sid = 1000, endObj = null;
   A.send({ t: 'fire', sid: 999, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });   // (reported only in the intermission)
@@ -609,11 +741,20 @@ async function join(name, team) {
   check(!(await A.next(m => m.t === 'hit' && m.by === aId, 600)), 'and nothing scores');
   const e1 = A.obj; await sleep(2200); const e2 = A.obj;
   check(e1.sc.join() === e2.sc.join() && e2.r.st === 'end', 'the scores stand still in the intermission');
+  // issue #26: Velemlok: out at the round's end, it dives away with nothing for anyone (mres end); it does not come in the intermission,
+  // and obj.g.next says it comes MON_FIRST_S after the next round starts
+  if (outAtEnd) { const me = await mresEnd; check(me && me.pts === 0 && me.win === -1 && !me.killed, `the round's end sends Velemlok away unrewarded (${JSON.stringify(me)})`); }
+  // (while it dives, obj.g.next is when it is gone; then, away, when it comes)
+  const restart = endObj.ts + endObj.r.left * 1000, ge = A.obj.g.st === 0 ? A.obj.g : (await objG(g => g.st === 0, 8000) || A.obj).g;
+  check(ge.st === 0 && Math.abs(ge.next - restart - MON_FIRST * 1000) <= 1500, `in the intermission obj.g.next says it comes ${MON_FIRST} s into the next round (${((ge.next - restart) / 1000).toFixed(1)})`);
   const tm = await A.next(m => m.t === 'team', (R.INTER_S + 4) * 1000);
   const nr = await A.next(m => m.t === 'obj' && m.r.st === 'play', 5000);
   check(tm && tm.id === aId && tm.team === 1, `the teams are evened out: the latest of A's three goes over to B (${JSON.stringify(tm)})`);
   check(nr && nr.sc[0] + nr.sc[1] <= 6 && nr.z.every(z => z[0] === -1 || Math.abs(z[1]) < 100) && nr.d.every(d => d[0] === R.DEPOT_HP) && nr.r.win === -1 && nr.r.left > 5,
     `then a new round: scores from nothing (${nr && nr.sc}), zones neutral, depots standing (${nr && nr.d.map(d => d[0]).join(',')})`);
+  const inter = interG.filter(m => m.r.st === 'end');
+  check(inter.length >= 5 && inter.every(m => m.g.st === 0 || m.g.st === 3) && nr && nr.g.st === 0 && Math.abs(nr.g.next - nr.ts - MON_FIRST * 1000) <= 1500,
+    `Velemlok stays away in the intermission (${inter.length} obj, states ${[...new Set(inter.map(m => m.g.st))].join(',')}), the new round calls it in ${nr && ((nr.g.next - nr.ts) / 1000).toFixed(1)} s`);
   // A (now B's) hits H1 (A's): her points start again from nothing
   A.send({ t: 'fire', sid: ++sid, x: OFF.x, y: 1.5, z: OFF.z, vx: 0, vy: 4, vz: 0 });
   await h1.c.next(m => m.t === 'fire' && m.id === aId && m.sid === sid);

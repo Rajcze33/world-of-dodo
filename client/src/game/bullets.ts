@@ -20,6 +20,7 @@ import { flash } from '../ui/hud';
 import { hitPlayer } from './tank';
 import { friendly } from './teams';
 import { depotSeg } from '../world/objectives';
+import { monSeg, monReport, monSpark } from './monster';
 
 export const BUL_V = 170, BUL_LIFE = 1.6;                  // speed (units/s, plus the shooter's own), seconds in flight
 const BUL_MAX = 192;
@@ -93,11 +94,14 @@ export function updateBullets(dt: number) {
     }
     // World of DODO, issue #24: a standing supply depot stops it too; mine tells the server (net/net.ts netThit), which decides the damage
     let dep = -1; const dh = depotSeg(b.x, b.y, b.z, dx, dy, dz); if (dh && dh.t < t) { t = dh.t; who = null; wet = false; dep = dh.i; }
+    // World of DODO, issue #26: Velemlok stops it too; mine reports it (mhit, k 1)
+    let mon = false; const mt = monSeg(b.x, b.y, b.z, b.x + dx, b.y + dy, b.z + dz); if (mt < t) { t = mt; who = null; wet = false; dep = -1; mon = true; }
     b.x += dx * Math.min(1, t); b.y += dy * Math.min(1, t); b.z += dz * Math.min(1, t);
     if (t >= 1) continue;
     b.on = false;
     if (wet) splash(b.x, b.z, 0.15);
     if (dep >= 0 && b.mine) netThit(dep, 1, b.x, b.y, b.z, b.sid);
+    if (mon) { monSpark(b.x, b.y, b.z, 1); if (b.mine) monReport(1, b.sid, b.x, b.y, b.z); }
     // a bot's bullet that took effect: scores for the bot. Issue #24: a teammate's (a bot's or, passed on as dmg, a person's) does nothing,
     // and mine in a teammate is not reported
     if (who === 'me' && b.bot && !friendly(b.by) && hitPlayer('bullet', 1, T.gunBy(netName(b.by)))) {

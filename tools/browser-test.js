@@ -6,6 +6,8 @@
 // Issue #24, the teams: Rosta plays for A and Petr for B (each picks it in the join form); each sees the other in the other team's
 // colour and the bots in both teams; a third player, Tereza, joins Rosta's team and her parcels do him no harm; Rosta's tank in a
 // zone captures it in both players' HUDs; his parcels damage a depot of B in both players' views.
+// Issue #26, Velemlok: Rosta's ship card counts down to the giant salamander; with a server that calls it soon (MON_FIRST_S=60
+// MON_EVERY_S=5 MON_LIFE_S=90) it surfaces in both players' views and Rosta's shells hit it for team A (else that part is skipped).
 // Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
@@ -23,6 +25,9 @@ const puppeteer = require('puppeteer-core');
 const M = require('../server/city');               // issue #16: the map of the real Karlín (client/shared/map.ts), as the server loads it
 const NV = require('../client/shared/naval.ts');   // issue #20: the Vltava (where a ship may be, which way the river runs)
 const RU = require('../client/shared/rules.ts');   // issue #24: the teams, the zones, the depots
+const MS = require('../client/shared/monster.ts'); // issue #26: Velemlok's numbers
+// issue #26: Velemlok's fight is tested when it comes at most this many seconds after the test reaches it
+const MON_SOON = 150;
 
 // ---------- World of DODO, issue #16: real places in Karlín for the scenes below, found in the map ----------
 const r2 = v => Math.round(v * 100) / 100;
@@ -323,7 +328,8 @@ async function shoot(a, b, petrHits) {
       await frames(a, 25);
     }
     const byTereza = await a.evaluate(id => HITS.filter(b => b === id).length, terezaId);
-    check(byTereza === 0 && (await t.evaluate(() => WOD.NET.pts)) === 0 && await a.evaluate(id => WOD.teams.friendly(id), terezaId),
+    // (her own points are not checked: a bot of B crossing the line may take a parcel; the server's side of this is in the smoke test)
+    check(byTereza === 0 && await a.evaluate(id => WOD.teams.friendly(id), terezaId),
       `Tereza's parcels do her teammate Rosta no harm and score nothing (${byTereza} hit(s) reported)`);
     await t.close();
 
@@ -457,6 +463,67 @@ async function shoot(a, b, petrHits) {
     await a.screenshot({ path: path.join(OUT, '5e-petr-sinks.png') });
     await b.waitForFunction(p => WOD.car.k === 2 && WOD.car.topT === 0 && Math.hypot(WOD.car.x - p.x, WOD.car.z - p.z) > 20, SLOW, pp);
     check(await b.evaluate(() => WOD.car.immT > 0 && WOD.naval.inWater(WOD.car.x, WOD.car.z, 0)), 'Petr\'s ship comes back elsewhere on the river, immune for a moment');
+
+    // issue #26: Velemlok, the giant salamander in the Vltava. Rosta's ship card counts down to its next appearance (obj.g.next, the
+    // server's moment, so the same for everyone). The rest needs a server that calls it soon (MON_FIRST_S=60 MON_EVERY_S=5
+    // MON_LIFE_S=90; without it the test says it skipped the rest): it surfaces and both pages draw it, Rosta's card says it is here
+    // and his team bar shows its hit points; his shells hit it, his page reports them (mhit) and the damage counts for team A in both
+    // pages. (Headless, a shell flies several times longer than the server's monster swims meanwhile: a moving Velemlok is often missed,
+    // so the test fires until one hits, also into its next appearance.)
+    {
+      const chip = await a.evaluate(() => ({ hidden: document.getElementById('seaMon').hidden, t: document.getElementById('seaMonT').textContent, st: WOD.mon.st, left: (WOD.mon.next - WOD.serverNow()) / 1000 }));
+      const mm = /(\d+):(\d\d)$/.exec(chip.t), shown = mm ? Number(mm[1]) * 60 + Number(mm[2]) : NaN;
+      check(!chip.hidden && (chip.st === 0 ? Math.abs(shown - chip.left) < 2.5 || (chip.left < 1.5 && chip.t === 'Velemlok se blíží…') : chip.st === 3 || chip.t === 'Velemlok je ve Vltavě!'),
+        `issue #26: Rosta's ship card counts down to Velemlok ("${chip.t}"; obj.g says ${chip.left.toFixed(1)} s)`);
+      if (chip.st === 0 && chip.left > MON_SOON) console.log(`     skip Velemlok's fight: it comes in ${Math.round(chip.left)} s (start the server with MON_FIRST_S=60 MON_EVERY_S=5 MON_LIFE_S=90)`);
+      else {
+        const outNow = () => WOD.mon.on && WOD.mon.dst === 2 && WOD.mon.next - WOD.serverNow() > 8000;
+        const out = await a.waitForFunction(outNow, { timeout: ((chip.st === 0 ? chip.left : 30) + 150) * 1000, polling: 500 }).then(() => true, () => false);
+        const seenB = out && await b.waitForFunction(() => WOD.mon.on && WOD.monModel().root.isEnabled(), { timeout: 30000 }).then(() => true, () => false);
+        const hud = await a.evaluate(() => ({ drawn: WOD.mon.on && WOD.monModel().root.isEnabled(), chip: document.getElementById('seaMonT').textContent, bar: !document.getElementById('tbMon').hidden, hp: document.getElementById('tbMonHp').style.width }));
+        check(out && seenB && hud.drawn && hud.chip === 'Velemlok je ve Vltavě!' && hud.bar,
+          `Velemlok surfaces: both pages draw it, Rosta's card says "${hud.chip}", his team bar shows its hit points (${hud.hp})`);
+        // Rosta's page notes the hits it reports on Velemlok; his ship 50 to 90 off its side, broadside on, the guns trained on it
+        await a.evaluate(() => {
+          const ws = WOD.NET.ws, send = ws.send.bind(ws); window.MHIT = [];
+          ws.send = d => { try { const m = JSON.parse(d); if (m.t === 'mhit') MHIT.push(m); } catch (_) { /* not JSON */ } return send(d); };
+        });
+        const nearMon = () => a.evaluate(() => {
+          const m = WOD.mon.pose, hx = Math.sin(m.h), hz = Math.cos(m.h);
+          for (const d of [75, 60, 90, 50]) for (const s of [1, -1]) for (const al of [0, 15, -15, 30, -30]) {
+            const x = m.x + hz * s * d + hx * al, z = m.z - hx * s * d + hz * al;
+            if (!WOD.naval.inWater(x, z, 8)) continue;
+            const h = Math.atan2(m.x - x, m.z - z);
+            Object.assign(WOD.car, { x, z, h: h + 1.2, v: 0, immT: 0, hitLog: [] }); WOD.sh.tel = 1;
+            WOD.sh.aimY = h; WOD.sh.aimP = -Math.atan2(3, Math.hypot(m.x - x, m.z - z)); return true;
+          }
+          return false;
+        });
+        let hit = false, counted = false, d0 = 0, d1 = 0;
+        for (let i = 0; i < 14 && !counted; i++) {
+          await a.waitForFunction(() => WOD.car.topT === 0, SLOW);                    // (its tail or its jet may sink Rosta's ship)
+          await a.waitForFunction(outNow, { timeout: 180000, polling: 500 }).catch(() => {});
+          await nearMon(); await frames(a, 2); await nearMon();
+          await a.waitForFunction(() => WOD.sh.tur.some(t => t.st === 'ok'), { timeout: 90000 }).catch(() => {});
+          await nearMon();
+          const n0 = await a.evaluate(() => MHIT.length);
+          d0 = await a.evaluate(() => WOD.mon.dmg[0]);
+          await a.evaluate(() => { WOD.input.lmb = true; });
+          await a.waitForFunction(() => WOD.sh.tur.some(t => t.st === 'load'), { timeout: 30000 }).catch(() => {});
+          await a.evaluate(() => { WOD.input.lmb = false; });
+          hit = await a.waitForFunction(n => MHIT.length > n, { timeout: 20000 }, n0).then(() => true, () => false);
+          counted = hit && await a.waitForFunction((d, s) => WOD.mon.dmg[0] >= d + s, { timeout: 10000 }, d0, MS.MON_DMG.shell).then(() => true, () => false);
+          await a.evaluate(() => WOD.sh.tur.forEach(t => { t.cd = 0; }));
+          console.log(`     salvo ${i + 1} at Velemlok: ${counted ? 'hit, counted' : hit ? 'hit, not counted (yet)' : 'missed'}`);
+        }
+        const mh = await a.evaluate(() => MHIT[MHIT.length - 1] || null);
+        const seenDmg = counted && await b.waitForFunction((d, s) => WOD.mon.dmg[0] >= d + s, { timeout: 10000 }, d0, MS.MON_DMG.shell).then(() => true, () => false);
+        d1 = await a.evaluate(() => WOD.mon.dmg[0]);
+        check(counted && seenDmg && mh && mh.k === 2, `Rosta's shell hits Velemlok (mhit k ${mh && mh.k}) and the damage counts for team A, in his page and Petr's (A ${d0} -> ${d1})`);
+        await frames(a, 3);
+        await a.screenshot({ path: path.join(OUT, '5f-rosta-shells-velemlok.png') });
+      }
+    }
 
     // names: a taken one and a bot's one are refused under the form
     const c = await player(browser, null);

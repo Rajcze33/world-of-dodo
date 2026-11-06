@@ -33,6 +33,7 @@ import { dropShot, SHOT_G } from './shots';
 import { teamMat, isTeamPart, friendly, home } from './teams';
 import { depotBody } from '../world/objectives';
 import { PLANE_SIDE_X } from '../../shared/rules.ts';
+import { monBody } from './monster';
 
 // flight: stall speed, the speed of the best turn, engine thrust, drag, gravity (arcade: stronger than real, so height costs speed),
 // the fastest turn (rad/s), the speed a hard turn bleeds, how far the plane banks into a turn
@@ -150,6 +151,7 @@ function crashed(x: number, y: number, z: number): boolean {
   if (y < 8) for (const p of propsNear(x, z)) if (p.state === 'up' && Math.hypot(x - p.x, z - p.z) < p.r + 1.2) return true;
   if (landHit(x, y, z)) return true;
   if (y < 12 && depotBody(x, y, z) >= 0) return true;                // World of DODO, issue #24: a standing supply depot
+  if (y < 30 && monBody(x, y, z)) return true;                        // World of DODO, issue #26: into Velemlok (rearing, it stands 27 high)
   for (const o of NET.others.values()) {
     if (!o.on || o.s === 2) continue;
     if (o.k === 1 ? Math.hypot(o.x - x, o.y - y, o.z - z) < PLANE_R * 1.1 : o.k === 2 ? shipBox(x, y, z, o.x, o.y, o.z, o.h) : y < 3.2 && Math.hypot(o.x - x, o.z - z) < 3) return true;

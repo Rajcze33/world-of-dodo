@@ -9,6 +9,8 @@
 // World of DODO, issue #24: two teams. hello asks for a team (or auto), welcome and join say everyone's (team moves someone later, at a
 // round's end), obj carries the round (game/teams.ts), thit reports my hit on a supply depot. A teammate's tag and paint stay theirs,
 // the tag glows in the team's colour, and the scoreboard lists the teams with their scores, mine first.
+// World of DODO, issue #26: Velemlok, the giant salamander in the Vltava (game/monster.ts): its pose in snap.g, its state in obj.g, its
+// attacks (mon) and the result when it leaves (mres); mhit reports my hit on it.
 //
 // World of DODO, timing, as most network games do it (Valve's Source engine; Gabriel Gambetta's and Glenn Fiedler's write-ups on
 // snapshot interpolation): every snapshot row says which moment of the server's clock it shows, and this browser draws the others INTERP
@@ -39,6 +41,7 @@ import { startImpactFx } from '../game/fx';
 import { flash } from '../ui/hud';
 import { PERF } from '../game/quality';
 import { start } from '../main';
+import { monSnap, monObj, monAttack, monResult, monReset } from '../game/monster';
 import { WORLD, BODIES, worldClear, worldMsg, worldSnap, propMsg, propsDown } from './world';
 
 export const NET_SEND = 1 / 20, INTERP = 150, EXTRAP = 150;   // send interval (s); the others are drawn this far (ms) behind the server's clock; at most this far past the newest row
@@ -117,6 +120,7 @@ function netMsg(m: any) {
     clockSample(m.ts);
     for (const s of m.p) { const o = NET.others.get(s[0]); if (o) pushRow(o.buf, { t: s[7] ?? m.ts, x: s[1], z: s[2], h: s[3], v: s[4], r: s[5], s: s[6], k: s[8] || 0, y: s[9] || 0, p: s[10] || 0, a: s[11] || 0, b: s[12] || 0 }); }   // t: the moment the row shows; a plane: k, y, p; a ship: k, y, p and its turrets
     worldSnap(m);
+    if (m.g) monSnap(m.g, m.ts);                                                       // issue #26: Velemlok's pose while it is in the water
   }
   else if (m.t === 'fire') netShot(m);
   else if (m.t === 'w') worldMsg(m);
@@ -132,7 +136,9 @@ function netMsg(m: any) {
   else if (m.t === 'dmg') {                                                           // issue #14: someone's bullet hit me on their screen (#24: not a teammate's)
     if (!friendly(m.by) && hitPlayer('bullet', 1, T.gunBy(netName(m.by)))) { const kill = car.topT > 0; if (kill) flash(T.killedBy(netName(m.by))); netHit({ by: m.by, sid: m.sid }, kill); }
   }
-  else if (m.t === 'obj') objMsg(m as ObjMsg);                                        // issue #24: the round, the zones, the depots
+  else if (m.t === 'obj') { objMsg(m as ObjMsg); if (m.g) monObj(m.g); }             // issue #24: the round, the zones, the depots (#26: Velemlok)
+  else if (m.t === 'mon') monAttack(m);                                               // issue #26: Velemlok attacks
+  else if (m.t === 'mres') monResult(m);                                              // issue #26: Velemlok has left: the result
   else if (m.t === 'pts') {                                                          // issue #24: points for a zone taken or a depot destroyed
     if (m.id === NET.id) NET.pts = m.pts; else { const o = NET.others.get(m.id); if (o) o.pts = m.pts; }
     renderBoard();
@@ -145,6 +151,7 @@ function netMsg(m: any) {
     NET.team = m.team === 0 || m.team === 1 ? m.team : -1; paintOwn();                // issue #24: my team, on my vehicles' flags
     NET.others.forEach(netDrop); NET.others.clear(); m.players.forEach(netAdd);
     teamsWelcome(m.game); renderBoard();                                               // issue #24: the round as it stands
+    monReset(); if (m.game?.g) monObj(m.game.g, true);                                 // issue #26: Velemlok as it stands
     NET.off = null; worldClear();                                                      // the server may have restarted: a new clock, a new city
     if (!NET.inGame) { NET.inGame = true; WORLD.on = true; start(); } else flash(T.back);
     propsDown(m.props);
@@ -160,7 +167,7 @@ export function netLeave() {
   Object.assign(NET, { ws: null, live: false, inGame: false, want: false, retry: 0, err: '' });
   if (ws) try { ws.close(); } catch (_) { /* already closing */ }
   NET.others.forEach(netDrop); NET.others.clear(); renderBoard();
-  WORLD.on = false; worldClear();
+  WORLD.on = false; worldClear(); monReset();
 }
 // another player or a bot: the tank in their paint, the name glowing above it (World of DODO, issue #24: in their team's colour, which
 // their vehicles' flags show too)

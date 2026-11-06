@@ -32,6 +32,7 @@ import { WATER_Y } from '../../shared/naval.ts';
 import { teamMat, friendly } from './teams';
 import { TEAM_SPAWNS } from '../../shared/rules.ts';
 import { depotPush } from '../world/objectives';
+import { MON_HIT_W } from '../../shared/monster.ts';
 
 // ---------- DODO colours ----------
 // the DODO teal of the delivery tanks; every player tank gets a clone in its own colour (three's Phong: a little shine)
@@ -142,10 +143,12 @@ export function buildTank() { view.van = makeTank(true, vanOwnMat); }
 // tank (and slows it), three in a plane (rare: the planes are too fast for the shells); a torpedo hits ships only. A destroyed ship
 // sinks for SINK_T before it comes back (game/ship.ts).
 export const TOPPLE_T = 3.2, SINK_T = 4.6;
+// World of DODO, issue #26: 'mon', an attack of Velemlok (client/shared/monster.ts MON_HIT_W: a tank takes two, a plane one, a ship four
+// within its 20 s); it scores for nobody
 export const HIT_W = {
-  tank: { shot: 1, ram: 1, bullet: 0.25, shell: 1, torp: 0 },
-  plane: { shot: 3, ram: 3, bullet: 0.5, shell: 3, torp: 0 },
-  ship: { shot: 0.75, ram: 0.5, bullet: 0.08, shell: 0.35, torp: 1.5 },
+  tank: { shot: 1, ram: 1, bullet: 0.25, shell: 1, torp: 0, mon: MON_HIT_W.tank },
+  plane: { shot: 3, ram: 3, bullet: 0.5, shell: 3, torp: 0, mon: MON_HIT_W.plane },
+  ship: { shot: 0.75, ram: 0.5, bullet: 0.08, shell: 0.35, torp: 1.5, mon: MON_HIT_W.ship },
 };
 export const HIT_WIN = { tank: 8000, plane: 8000, ship: 20000 };
 const VEH = ['tank', 'plane', 'ship'] as const;
@@ -171,7 +174,7 @@ export function toppleCar(sign: number) {
 // gun's (issue #14), 'shell' and 'torp' a ship's (issue #20); msg: what the toast says (the original fell back to REDLINE's texts)
 // World of DODO, issue #24: nothing counts in the break after a round (G.hold); a teammate's hit never gets here (its callers ask
 // game/teams.ts friendly, they know the shooter)
-export function hitPlayer(kind: 'shot' | 'ram' | 'bullet' | 'shell' | 'torp', sign: number, msg: string): boolean {
+export function hitPlayer(kind: 'shot' | 'ram' | 'bullet' | 'shell' | 'torp' | 'mon', sign: number, msg: string): boolean {
   const veh = VEH[car.k], w = HIT_W[veh][kind];
   if (car.immT > 0 || car.topT > 0 || G.state !== 'drive' || G.hold || !w) return false;
   const t = now(); car.hitLog = car.hitLog.filter(x => t - x[0] < HIT_WIN[veh]); car.hitLog.push([t, w]);

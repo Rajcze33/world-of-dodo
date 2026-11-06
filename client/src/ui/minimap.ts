@@ -8,6 +8,8 @@
 // World of DODO, issue #24: the zones (a circle in the colour of the team that holds it, an arc round it for how far a capture has got)
 // and the supply depots (a square in their team's colour; a destroyed one dark and crossed out), the others in their team's colour, my
 // teammates always (the enemy only once spotted), my arrow ringed in my team's colour.
+// World of DODO, issue #26: Velemlok while it is in the water: its outline in its gills' pale cyan, to scale (never smaller than a mark);
+// off the map's window, a mark on its edge towards it.
 import { DATA, ARENA, AIR_LIM, SITE, DEPOT, BLOCKS } from '../../shared/map.ts';
 import { ZONES, DEPOTS } from '../../shared/rules.ts';
 import { $ } from '../core/dom';
@@ -29,6 +31,7 @@ export interface MapOpt {
   air?: boolean;                               // flying: the whole airspace
   sea?: boolean;                               // sailing: the river round the ship (issue #20)
   team?: number;                               // my team (issue #24; -1 none)
+  mon?: { x: number; z: number; h: number } | null;   // Velemlok (issue #26), while it is in the water
 }
 // an arrow pointing along heading h, q its size
 function arrow(c: CanvasRenderingContext2D, x: number, y: number, h: number, q: number) {
@@ -101,6 +104,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, S: number, opt: MapOpt) {
   const r = Math.max(6, S / 24), team = opt.team ?? -1, teams = TM.on && (team === 0 || team === 1);
   if (!teams) { ctx.fillStyle = '#b2dcd6'; ctx.beginPath(); ctx.arc(mx(DEPOT.park.x), my(DEPOT.park.z), r * 0.7, 0, Math.PI * 2); ctx.fill(); }   // the depot's start (issue #24: no more one start)
   else objectives(ctx, mx, my, sc, r);
+  if (opt.mon) monMark(ctx, mx(opt.mon.x), my(opt.mon.z), opt.mon.h, sc, r, S);
   if (opt.others) {
     const t = now();
     for (const o of opt.others) {
@@ -119,6 +123,22 @@ export function drawMap(ctx: CanvasRenderingContext2D, S: number, opt: MapOpt) {
     const c = opt.car; ctx.fillStyle = '#ffffff'; ctx.strokeStyle = teams ? teamCss(team) : '#3d4543'; ctx.lineWidth = teams ? 2.5 : 1.5;
     (sea ? hull : arrow)(ctx, Math.max(r, Math.min(S - r, mx(c.x))), Math.max(r, Math.min(S - r, my(c.z))), c.h, r * (sea ? 0.75 : 0.9));
   }
+}
+
+// World of DODO, issue #26: Velemlok at (x, y) on the map, heading h, sc pixels per unit: a salamander's outline 60 units long (at
+// least a few marks long), its head along h; outside the window a pulsing mark on the edge
+function monMark(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, sc: number, r: number, S: number) {
+  ctx.save(); ctx.fillStyle = '#8ff0e4'; ctx.strokeStyle = '#1e2322'; ctx.lineWidth = 1.5;
+  if (x < 0 || y < 0 || x > S || y > S) {
+    const ex = Math.max(r * 0.7, Math.min(S - r * 0.7, x)), ey = Math.max(r * 0.7, Math.min(S - r * 0.7, y)), p = 0.75 + 0.25 * Math.sin(now() / 200);
+    ctx.globalAlpha = p; ctx.beginPath(); ctx.arc(ex, ey, r * 0.55, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore(); return;
+  }
+  const k = Math.max(sc, r * 2.4 / 60);                                          // pixels per unit
+  ctx.translate(x, y); ctx.rotate(-h + Math.PI); ctx.scale(k, k); ctx.lineWidth = 1.5 / k;
+  ctx.beginPath();                                                                // after the turn its head points up the screen (-y)
+  ctx.ellipse(0, -20, 7.5, 6, 0, 0, Math.PI * 2); ctx.moveTo(7.6, 2); ctx.ellipse(0, 2, 7.6, 14, 0, 0, Math.PI * 2);
+  ctx.moveTo(4, 14); ctx.quadraticCurveTo(3, 26, 0, 34); ctx.quadraticCurveTo(-3, 26, -4, 14); ctx.closePath();
+  ctx.fill(); ctx.stroke(); ctx.restore();
 }
 
 // World of DODO, issue #24: the zones and the depots on the map (mx, my: world to the map's pixels, sc its pixels per unit, r the

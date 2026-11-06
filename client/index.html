@@ -466,9 +466,46 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   .cap-hd{flex-wrap:wrap;row-gap:2px}
   .rend{padding:var(--space-4)}
 }
+/* World of DODO, issue #26: Velemlok, the giant salamander in the Vltava (ui/monhud.ts). Its hit points over it in the 3D view (placed every
+   frame, like the name tags), the chip on the ship's card (the countdown to its next appearance, or that it is here), the row in the team
+   bar while it is in the water (its hit points, the damage race A : B, the time until it swims off), the banner when it leaves. Its colour
+   is its gills' pale cyan. On a phone the corners move down under the taller team bar while the row shows. */
+:root{--mon:#8ff0e4}
+.montag{position:fixed;left:0;top:0;display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;font:600 11px/1 var(--font-secondary);letter-spacing:.14em;text-transform:uppercase;color:var(--mon);text-shadow:0 0 6px rgba(111,232,220,.7),0 1px 2px #000;will-change:transform}
+.montag i{display:block;width:132px;height:8px;border-radius:4px;background:rgba(30,35,34,.85);border:1px solid rgba(143,240,228,.55);overflow:hidden}
+.montag b{display:block;height:100%;width:100%;background:linear-gradient(90deg,#ff7a59,#f2c94c)}
+.chip.mon b{background:#2c5450;color:var(--mon)}
+.chip.mon b svg{width:15px;height:15px}
+.chip.mon.on{color:var(--mon)}
+.chip.mon.on b{background:var(--mon);color:var(--dodo-charcoal)}
+.tb-mon{display:flex;align-items:center;gap:8px}
+.tb-mn{font:600 var(--fs-caption)/1 var(--font-secondary);letter-spacing:.08em;text-transform:uppercase;color:var(--mon)}
+.tb-mhp{position:relative;flex:1;min-width:40px;height:6px;border-radius:3px;background:var(--dodo-charcoal-80);overflow:hidden}
+.tb-mhp i{position:absolute;left:0;top:0;bottom:0;width:100%;background:linear-gradient(90deg,#ff7a59,#f2c94c);transition:width 300ms var(--ease)}
+.tb-md{display:flex;gap:3px;align-items:baseline;color:var(--dodo-grey)}
+.tb-md b{font-weight:600;font-variant-numeric:tabular-nums}
+.tb-md .a{color:var(--team0)}.tb-md .b{color:var(--team1)}
+.tb-mon.lead0 .tb-md .a,.tb-mon.lead1 .tb-md .b{text-decoration:underline;text-underline-offset:3px}
+.tb-mt{color:var(--dodo-light-grey);min-width:30px;text-align:right}
+.tb-mon.gone{opacity:.6}
+.monres{position:fixed;left:50%;top:22%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;padding:var(--space-4) var(--space-5);width:min(340px,calc(100vw - 32px));box-sizing:border-box;text-align:center;pointer-events:none;background:rgba(30,35,34,.94);border-color:var(--mon)}
+.monres .overline{color:var(--mon)}
+.monres h3{margin:0;font-size:var(--fs-h4);font-weight:700}
+.monres p{margin:0}
+.mr-win{font-weight:600;color:var(--wc,var(--dodo-white))}
+.mr-sc{display:flex;gap:8px;align-items:baseline;font-size:var(--fs-h4);font-weight:700;font-variant-numeric:tabular-nums}
+.mr-sc .meta{color:var(--dodo-grey)}
+#mrA{color:var(--team0)}#mrB{color:var(--team1)}
+.mr-top{color:var(--dodo-light-grey);text-transform:none;letter-spacing:.02em}
+@media (max-width:760px),(pointer:coarse) and (max-width:1024px){
+  .tb-mon{gap:6px}
+  body:has(#tbMon:not([hidden])) .tl,body:has(#tbMon:not([hidden])) .tr{top:calc(16px + 76px + 8px + 18px + env(safe-area-inset-top,0px))}
+  .monres{top:34%}
+}
 </style>
 
 <canvas id="gl" data-ta="glAria"></canvas>
+<div class="montag" id="monTag" hidden aria-hidden="true"><span data-t="monName"></span><i><b id="monTagHp"></b></i></div>
 <div class="ret" id="aimC" hidden></div><div class="ret x" id="gunX" hidden></div>
 <div class="scope" id="scope" hidden></div><div class="tmark" id="tm0" hidden></div><div class="tmark" id="tm1" hidden></div><div class="shipx" id="shipX" hidden><span id="shipT"></span></div>
 
@@ -482,6 +519,8 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
     </div>
     <div class="tb-bar"><i id="tbB0"></i><i id="tbB1"></i></div>
     <div class="zones" id="zones"></div>
+    <!-- issue #26: Velemlok while it is in the water: its hit points, the damage of A : B, the time until it swims off (ui/monhud.ts) -->
+    <div class="tb-mon" id="tbMon" hidden><span class="tb-mn" data-t="monName"></span><span class="tb-mhp"><i id="tbMonHp"></i></span><span class="tb-md meta"><b class="a" id="tbMonA">0</b><span>:</span><b class="b" id="tbMonB">0</b></span><span class="meta tb-mt" id="tbMonT"></span></div>
   </div>
   <div class="tl">
     <div class="card status">
@@ -516,6 +555,7 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <div class="grp"><span class="meta lbl" data-t="telLbl"></span><div class="tel"><span id="tel0"></span><span id="tel1"></span><span id="tel2"></span><span id="tel3"></span><span id="tel4"></span></div></div>
       <div class="grp"><span class="meta lbl" data-t="rudLbl"></span><div class="rudder"><i id="rud"></i></div></div>
       <div class="grp"><span class="chip" id="tur0"><b>1</b><span id="turS0"></span></span><span class="chip" id="tur1"><b>2</b><span id="turS1"></span></span><span class="chip" id="torp"><b>T</b><span id="torpS"></span></span></div>
+      <div class="grp"><span class="chip mon" id="seaMon" hidden><b><svg viewBox="0 0 24 14" aria-hidden="true"><g fill="currentColor"><ellipse cx="18.6" cy="7" rx="3.6" ry="3.1"/><ellipse cx="12" cy="7" rx="5.4" ry="2.5"/><path d="M7.4 6C5 5.8 3.2 4.2.6 5c2.2.7 3.6 2.9 6.8 2.9z"/></g><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M15.3 5.2l1.4-3M15.3 8.8l1.4 3M9.2 5.2 7.6 2.4M9.2 8.8l-1.6 2.8M16.4 4.2l-1.3-1.7M16.4 9.8l-1.3 1.7"/></g></svg></b><span id="seaMonT"></span></span></div><!-- issue #26: Velemlok's countdown -->
     </div>
     <div class="card gauge">
       <div><b id="spd">0</b> <span class="meta" id="spdU" data-t="speedUnit"></span></div>
@@ -536,6 +576,15 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   <p class="mono re-lbl" data-t="roundBest"></p>
   <ol class="re-best" id="reBest"></ol>
   <p class="meta re-next" id="reNext"></p>
+</div>
+
+<!-- World of DODO, issue #26: Velemlok has left: killed or fled, the winning team and its bonus, the damage A : B, who hurt it most -->
+<div class="card monres" id="monRes" hidden aria-live="polite">
+  <p class="overline" data-t="monName"></p>
+  <h3 id="mrHead"></h3>
+  <p class="mr-win" id="mrWin"></p>
+  <p class="mr-sc"><span class="meta">A</span><b id="mrA"></b><span class="meta">:</span><b id="mrB"></b><span class="meta">B</span></p>
+  <p class="meta mr-top" id="mrTop"></p>
 </div>
 
 <div id="touch" hidden>

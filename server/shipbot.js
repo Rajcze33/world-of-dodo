@@ -11,11 +11,17 @@
 // torpedoes at an enemy ship within TORP_R whose intercept course lies within the tubes' arc on a clear run of water; its anti-aircraft
 // guns fire bursts at an enemy plane within AA_R in sight. It feels ahead for the banks and backs off when it is stuck. Sunk (server/
 // bots.js hitBot), it lists and goes down like a player's ship, and comes back at one of its team's spawn points on the river.
+//
+// Issue #26: Velemlok (server/monster.js). While it is out within MON_HUNT the ship leaves the zone and hunts it: it sails round it at
+// a distance of its own (MON_STAND: inside the reach of its water jet, out of its tail's), its turrets take it before anything else
+// within MON_SEA_R, and it launches its torpedoes at it within TORP_R. Its slams and jets hit the bot ships like the players' (decided
+// in server/monster.js); the bots do not dodge them.
 'use strict';
 
 const { segHit } = require('./city');
 const N = require('../client/shared/naval.ts');
 const { ZONES, DEPOTS, TEAM_SHIP_SPAWNS } = require('../client/shared/rules.ts');
+const { monSphDist } = require('../client/shared/monster.ts');
 
 const { WATER_Y } = N;
 // the ship, as client/src/game/ship.ts: top speed, how fast the speed follows the telegraph, its steps (astern, stop, 1/3, 2/3, full),
@@ -34,6 +40,13 @@ const SHELL_V = 110, SHELL_G = 38, TORP_V = 22, BUL_V = 170, SINK_T = 4.6;
 // salvo at the same target); its AA bursts and their extra error; how far inside the zone it circles; how often it picks a target
 const SEA_R = 300, DEPOT_R = 300, TORP_R = 250, RANGE_ERR = 0.08, RANGE_IN = 0.7, AA_BURST = [0.8, 1.4], AA_PAUSE = [1.2, 2.4], AA_BOT_ERR = 0.04;
 const CIRCLE = 22, AIM_T = 1;
+// issue #26: Velemlok: the turrets take it first within MON_SEA_R; the helm goes for it within MON_HUNT and sails round it at a distance
+// between MON_STAND (each bot its own), MON_ORBIT radians ahead of where it is on the circle
+const MON_SEA_R = 300, MON_HUNT = 650, MON_STAND = [70, 110], MON_ORBIT = 0.45;
+// after a spread at Velemlok the tubes take MON_TORP_SLOW times as long to reload (the bots spare their torpedoes a little, so that
+// people can outdo them: a fight of the bots alone with it, 11 or 12 of them, took 96 to 164 s, about 130 on average; the two ship
+// bots deal nearly all of its damage)
+const MON_TORP_SLOW = 1.5;
 
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -115,12 +128,15 @@ function spawn(b, ctx) {
     x: best.x, z: best.z, h: best.h, y: 0, p: 0, v: 0, roll: 0, tel: 4, rud: 0, yr: 0, heel: 0, pa: 0, t: Math.random() * 10,
     tur: TURRETS.map(t => ({ c: 0, cd: rand(0, 2), el: 0 })), a0: 0, a1: Math.PI, torpCd: rand(4, 10), aaCd: 0, aaOn: 0, aaOff: rand(0, 1),
     circ: Math.random() < 0.5 ? 1 : -1, backT: 0, stuckT: 0, aimT: 0, aim: null, aimId: null, rerr: RANGE_ERR, crashed: false,
+    monR: rand(...MON_STAND),
   });
 }
 
 // ---------- moving ----------
-// the deepest overlap at (x, z, h) with a bank, a pier or another ship (game/ship.ts shipPen), into PEN
+// the deepest overlap at (x, z, h) with a bank, a pier or another ship (game/ship.ts shipPen), into PEN; issue #26: or Velemlok's body
+// where it meets the water (its spheres' circles at the surface, as game/ship.ts: it only bumps), MONB while it is out
 const PEN = { nx: 0, nz: 0, pen: 0 };
+let MONB = null;
 function shipPen(b, x, z, h, ships) {
   const fx = Math.sin(h), fz = Math.cos(h); PEN.pen = 0;
   for (const j of SHIP_C) {
@@ -131,6 +147,13 @@ function shipPen(b, x, z, h, ships) {
       const ox = Math.sin(o.h), oz = Math.cos(o.h);
       for (const k of SHIP_C) {
         const dx = px - o.x - ox * k, dz = pz - o.z - oz * k, d = Math.hypot(dx, dz), pen = 2 * SHIP_CR - d;
+        if (pen > PEN.pen) { PEN.nx = d > 1e-6 ? dx / d : -fx; PEN.nz = d > 1e-6 ? dz / d : -fz; PEN.pen = pen; }
+      }
+    }
+    if (MONB && MONB.y > -6 && Math.abs(MONB.x - px) < 45 && Math.abs(MONB.z - pz) < 45) {
+      for (const s of MONB.sph) {
+        const e = WATER_Y - s[1], rr = s[3] * s[3] - e * e; if (rr <= 0) continue;
+        const dx = px - s[0], dz = pz - s[2], d = Math.hypot(dx, dz), pen = Math.sqrt(rr) + SHIP_CR - d;
         if (pen > PEN.pen) { PEN.nx = d > 1e-6 ? dx / d : -fx; PEN.nz = d > 1e-6 ? dz / d : -fz; PEN.pen = pen; }
       }
     }
@@ -166,8 +189,10 @@ function ballistic(d, dy) {
   return { el, t: d / (SHELL_V * Math.cos(el)), ok };
 }
 function turretAt(b, i) { const t = TURRETS[i]; return { x: b.x + Math.sin(b.h) * t.z, y: WATER_Y + b.y + t.y + GUN_Y, z: b.z + Math.cos(b.h) * t.z }; }
-// the turrets' target: the nearest enemy ship within SEA_R, else the nearest standing enemy depot within DEPOT_R; null: none
+// the turrets' target: Velemlok within MON_SEA_R (issue #26), else the nearest enemy ship within SEA_R, else the nearest standing enemy
+// depot within DEPOT_R; null: none
 function pickAim(b, ctx) {
+  if (ctx.mon && monSphDist(ctx.mon.sph, b.x, b.z) < MON_SEA_R) return { id: 'mon', mon: true };
   let best = null, bd = SEA_R;
   for (const o of ctx.veh) {
     if (o.team === b.team || o.k !== 2 || o.s) continue;
@@ -181,10 +206,11 @@ function pickAim(b, ctx) {
   }
   return best;
 }
-// where to aim now: the depot, or the ship where it will be when the shells get there (its speed along its heading, twice refined)
+// where to aim now: the depot, or the ship (issue #26: or Velemlok's back, the middle of its body) where it will be when the shells get
+// there (its speed along its heading, twice refined)
 function aimPoint(b, a, ctx) {
   if (a.d) return { x: a.d.x, y: a.d.y + 0.5, z: a.d.z };
-  const o = ctx.veh.find(v => v.id === a.id && v.s !== 2); if (!o) return null;
+  const o = a.mon ? ctx.mon : ctx.veh.find(v => v.id === a.id && v.s !== 2); if (!o) return null;
   const vx = Math.sin(o.h) * o.v, vz = Math.cos(o.h) * o.v, y = WATER_Y + 1.2;
   let x = o.x, z = o.z;
   for (let k = 0; k < 2; k++) { const t = ballistic(Math.hypot(x - b.x, z - b.z), y - WATER_Y - 2).t; x = o.x + vx * t; z = o.z + vz * t; }
@@ -205,15 +231,34 @@ function salvo(b, i, A, out) {
   tu.cd = RELOAD;
 }
 
+// issue #26: the point to sail for round Velemlok (into HUNT): on its circle of radius monR, MON_ORBIT ahead of where the ship is on it,
+// on the water and with water all the way there (else the other way round, else a closer circle); false: none (the bot keeps to its
+// zone, whose flow field leads along the river and back towards it)
+const HUNT = [0, 0];
+function huntAt(b, m) {
+  const a0 = Math.atan2(b.x - m.x, b.z - m.z), clear = (x, z) => {
+    for (let k = 1; k <= 4; k++) if (!N.inWater(b.x + (x - b.x) * k / 4, b.z + (z - b.z) * k / 4, 3)) return false;
+    return true;
+  };
+  for (const R of [b.monR, b.monR * 0.6]) for (const dir of [b.circ, -b.circ]) {
+    const a = a0 + MON_ORBIT * dir, x = m.x + Math.sin(a) * R, z = m.z + Math.cos(a) * R;
+    if (N.inWater(x, z, 8) && clear(x, z)) { b.circ = dir; HUNT[0] = x; HUNT[1] = z; return true; }
+  }
+  return false;
+}
+
 // ---------- the ship, every tick ----------
 function step(b, dt, ctx) {
   const out = [];
   b.t += dt; b.torpCd = Math.max(0, b.torpCd - dt); b.aaCd -= dt; b.backT -= dt;
   const ships = ctx.veh.filter(o => o.k === 2 && o.id !== b.id && o.s !== 2);
+  MONB = ctx.mon;
   // the helm: to the zone along the flow field, or round inside it; feel ahead for a bank; back off when stuck
-  const dz = Math.hypot(b.x - RZ.x, b.z - RZ.z);
+  const dz = Math.hypot(b.x - RZ.x, b.z - RZ.z), mon = ctx.mon, md = mon ? Math.hypot(mon.x - b.x, mon.z - b.z) : Infinity;
   let wx, wz, tel;
-  if (dz < RZ.r - 10) {
+  if (md < MON_HUNT && huntAt(b, mon)) {                              // issue #26: round Velemlok (huntAt sets HUNT)
+    wx = HUNT[0]; wz = HUNT[1]; tel = md > b.monR + 60 ? 4 : 3;
+  } else if (dz < RZ.r - 10) {
     const a = Math.atan2(b.x - RZ.x, b.z - RZ.z) + 0.8 * b.circ;
     wx = RZ.x + Math.sin(a) * CIRCLE; wz = RZ.z + Math.cos(a) * CIRCLE; tel = 3;
   } else {
@@ -270,10 +315,11 @@ function step(b, dt, ctx) {
   if (fired) { b.rerr = Math.max(0.02, b.rerr * RANGE_IN); b.roff = [rand(-1, 1), rand(-1, 1)]; }
   b.a0 = wrapA(TURRETS[0].rest + b.tur[0].c); b.a1 = wrapA(TURRETS[1].rest + b.tur[1].c);
 
-  // torpedoes: at an enemy ship within TORP_R whose intercept course is within the tubes' arc, on a clear run of water
+  // torpedoes: at an enemy ship within TORP_R whose intercept course is within the tubes' arc, on a clear run of water (issue #26:
+  // Velemlok first)
   if (b.torpCd <= 0) {
-    for (const o of ctx.veh) {
-      if (o.team === b.team || o.k !== 2 || o.s) continue;
+    for (const o of ctx.mon ? [ctx.mon, ...ctx.veh] : ctx.veh) {
+      if (o !== ctx.mon && (o.team === b.team || o.k !== 2 || o.s)) continue;
       const rx = o.x - b.x, rz = o.z - b.z, dist = Math.hypot(rx, rz); if (dist > TORP_R) continue;
       const vx = Math.sin(o.h) * o.v, vz = Math.cos(o.h) * o.v, qa = vx * vx + vz * vz - TORP_V * TORP_V, qb = 2 * (rx * vx + rz * vz), qc = rx * rx + rz * rz;
       const disc = qb * qb - 4 * qa * qc; if (disc < 0) continue;
@@ -288,7 +334,7 @@ function step(b, dt, ctx) {
         const h = mid + k * TORP_SPREAD;
         out.push({ k: 3, x: r2(x0 + Math.sin(mid) * k * 0.6), y: WATER_Y, z: r2(z0 + Math.cos(mid) * k * 0.6), vx: r2(Math.sin(h) * TORP_V), vy: 0, vz: r2(Math.cos(h) * TORP_V) });
       }
-      b.torpCd = TORP_RELOAD;
+      b.torpCd = o === ctx.mon ? TORP_RELOAD * MON_TORP_SLOW : TORP_RELOAD;
       break;
     }
   }
@@ -324,6 +370,7 @@ function die(b) { b.sinkT = 0; b.aim = null; }
 function dying(b, dt, ctx) {
   const tt = SINK_T - Math.max(0, b.deadT), e = a => a <= 0 ? 0 : a >= 1 ? 1 : a * a * (3 - 2 * a);
   b.v *= Math.exp(-1.2 * dt); b.yr *= Math.exp(-2 * dt);
+  MONB = null;
   move(b, b.h + b.yr * dt, b.v * dt, dt, []);
   b.roll = b.heel + (b.rollDir || 1) * 0.6 * e(tt / 2.6);
   b.p = 0.16 * e(tt / 3.2);

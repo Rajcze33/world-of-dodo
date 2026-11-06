@@ -28,6 +28,17 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
     destroys a depot gets its 30, so a bomber shows on the scoreboard as much as a gunner.
 - **Rounds.** A round ends when a team reaches **1000 points** or after **15 minutes** (the higher score
   wins). 15 s later a new round begins from nothing, the teams evened out.
+- **Velemlok.** Five minutes into a round, and then six minutes after it has gone, a colossal river
+  salamander comes up in the Vltava (*velemlok*, a nod to Karel Čapek's *Válka s mloky*) and swims along
+  Karlín for three minutes. Everyone in a ship sees the countdown to it in the ship's HUD; the others
+  hear when it surfaces and when it leaves. Both teams fight it: shells (7), torpedoes (30), parcels (9,
+  from a plane or a tank on the embankment) and bullets (0.6) take its 900 hit points. When it leaves,
+  **the team that dealt it more damage gets 150 points if it was killed, 60 if it swam away**, and
+  everyone who hurt it gets a point for every 6 of their damage. It defends itself against whoever hurt
+  it most lately (else whoever is nearest): its tail smashes ships close to it, it spits a heavy jet of
+  water at ships and at tanks on the embankment, and a geyser bursts up under a plane flying low over the
+  river (watch for the ring on the water). Below half its hit points it attacks faster. Its attacks hurt
+  both teams and score for nobody; it is easiest to hit while it rears up for a jet or a geyser.
 - **Shoot the others.** In a tank, Space (or the green button on a phone) fires a parcel and E the
   anti-aircraft gun, which aims itself at the nearest plane. A parcel in a player's tank of the other team
   is worth **10 points**; a hit on a bot (BOT1, BOT2, …) half of what it is worth on a person (a parcel in a
@@ -63,7 +74,8 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
   rest are tanks. The tanks drive Karlín's real streets to the zones and capture them, fight the other
   team's tanks and ships, and fire short bursts at a plane that flies low over them; the planes bomb the
   depots and fight the other team's planes; the ships hold the river zone and fight the other ships with
-  their guns, torpedoes and anti-aircraft guns. They fly and sail the players' own planes and ships and
+  their guns, torpedoes and anti-aircraft guns. When Velemlok is out the bot ships and planes go for it
+  (the tanks fire at it when it comes near the embankment). They fly and sail the players' own planes and ships and
   make mistakes on purpose: they can be beaten.
 - **A construction site** (off for now): sand piles, barriers, machines, a tower crane, a half-built
   house and a container yard, all of it cover. Karlín's empty lots are too small for it, so it waits
@@ -155,12 +167,14 @@ client/src/         the game in TypeScript on Babylon.js, built by Vite into cli
 client/shared/      the world, written once and run by the page and the server alike: map.ts (the solids,
                     the ground, the street graph, spawn points; from karlin.json), geom.ts, site.ts (the
                     construction site), naval.ts (the river), rules.ts (the teams, zones, depots and their
-                    numbers), the traffic, tram and pedestrian code
+                    numbers), monster.ts (Velemlok: its numbers, hitbox and attacks), the traffic, tram and
+                    pedestrian code
 server/server.js    serves the built page, relays the players over a WebSocket, keeps the score and the teams
 server/game.js      the team game: team scores, zones, depots, rounds (the rules: client/shared/rules.ts)
+server/monster.js   Velemlok: when it comes and goes, where it swims, whom it attacks, the fight's damage and points
 server/bots.js      the bots: the tanks (driving the street graph, aiming), and what happens when something hits one
 server/planebot.js  the plane bots (the players' flight model);  server/shipbot.js: the ship bots
-server/shots.js     what the server flies: the people's shots at the bots, everything the bots fire
+server/shots.js     what the server flies: the people's shots at the bots, everything the bots fire (and Velemlok in their way)
 server/world.js     the shared city life: cars, tram, pedestrians, knocked-down trees and lamps
 server/city.js      the map for the server (client/shared/map.ts, which Node 24 runs as it is)
 tools/karlin/       the map's generator (OpenStreetMap, IPR Praha, ČÚZK → client/shared/karlin.json)
@@ -174,7 +188,8 @@ hit**, because on that screen their tank is exactly where it is; **a bullet's sh
 plane would be out of reach otherwise), and the server passes the hit on. The server awards the points. The bots and the life
 of the city (cars, tram, pedestrians) run on the server, so everyone sees the same city, and the
 server decides what hits a bot. **The server keeps the team game**: the zones, the depots (a browser says
-where its parcel, shell or bullet hit one, the server checks it), the team scores and the rounds. **A car a tank shoves is that player's** until it comes to rest: their
+where its parcel, shell or bullet hit one, the server checks it), the team scores and the rounds, **and Velemlok**: the server
+moves it, announces its attacks (each browser applies them to its own vehicle) and checks the hits a browser reports on it. **A car a tank shoves is that player's** until it comes to rest: their
 browser moves it and the server passes it on.
 
 Every row of a snapshot carries the moment it shows on the server's clock, and the browsers draw the
@@ -199,6 +214,10 @@ Environment variables of the server:
 | `MAX_PLAYERS` | `24` | people at once; the bots come on top |
 | `ROUND_POINTS` | `1000` | the points that win a round (for tests) |
 | `ROUND_SEC` | `900` | a round's length in seconds (for tests) |
+| `MON_FIRST_S` | `300` | Velemlok comes this many seconds after a round starts (for tests) |
+| `MON_EVERY_S` | `360` | and again this many seconds after it has gone (for tests) |
+| `MON_LIFE_S` | `180` | how long it stays, in seconds (for tests) |
+| `MON_HP` | `900` | its hit points (for tests) |
 
 ## Tests
 
@@ -212,7 +231,11 @@ node tools/test-map.ts # the shared map core (client/shared/map.ts): collisions,
 The smoke and browser tests take their places (spawn points, a street for a duel, a house's wall) from
 the map itself, so run them against a server of the same version. The smoke test plays a whole round
 (its team scores up to the round's points, `ROUND_POINTS`), so run it against a server nobody plays on; it
-takes about two and a half minutes.
+takes about two and a half minutes. Its part on Velemlok needs a server that calls it soon and often:
+`MON_FIRST_S=60 MON_EVERY_S=5 MON_LIFE_S=25` (then the test takes about three minutes); against a server
+with the defaults it checks only the countdown and says it skipped the rest. The browser test's part on
+Velemlok (a ship player sees it come, draws it and hits it) needs `MON_FIRST_S=60 MON_EVERY_S=5
+MON_LIFE_S=90` (it stays longer, for the slow headless Chrome); otherwise that part says it skipped.
 
 There is no CI on purpose: it is a game for fun, and a push to `main` goes straight to the server
 (see Deploy). Run the checks yourself before you push.

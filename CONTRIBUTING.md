@@ -85,7 +85,14 @@ Zerops right away, so run the checks before you ask for a merge.
     rules.ts too, but the collision code is twice: `client/src/world/objectives.ts` (`depotPush`, `depotBody`)
     for the players, `server/bots.js` (`depotPush`) and `server/planebot.js` (`crashed`) for the bots;
   - the shared city's counts and row sizes (cars, pedestrians) are also at the top of `tools/smoke.js`
-    (`CITY`).
+    (`CITY`);
+  - Velemlok (issue #26) is written once, in `client/shared/monster.ts`: its numbers, its hitbox (`monSpheres`, the same
+    spheres for the page's hit tests and the server's check of `mhit`), what its attacks hit (`monAtkHits`) and how its jet
+    flies (`monJetAt`). What a hit by it weighs, the kind `mon` of `HIT_W`, is `MON_HIT_W` there, which `server/game.js` and
+    `client/src/game/tank.ts` both take; on the server the kinds of a hit are numbered (`KIND` in `server/game.js` and
+    `server/bots.js`, `mon` is 4, after the protocol's 0 to 3). The drawn salamander (`client/src/world/monster.ts`) must sit in
+    the hitbox's spheres. The bots' ways with it (their distances, how high a plane keeps over its geysers: `MON_GEY_TOP`) are in
+    `server/shipbot.js`, `server/planebot.js` and `server/bots.js`; `tools/smoke.js` reads its timing from the server.
 - **Protocol changes** go into [docs/PROTOCOL.md](docs/PROTOCOL.md) in the same pull request, and
   `tools/smoke.js` should test them.
 - **The server only relays.** Keep the players' physics in the browser; the server should stay cheap

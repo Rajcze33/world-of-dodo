@@ -26,6 +26,11 @@
 // fill both teams up to TEAM_SIZE and drive tanks (server/bots.js), fly planes (server/planebot.js) and sail ships (server/shipbot.js);
 // the server flies their fire against the other team's bots and depots (server/shots.js).
 //
+// Issue #26: Velemlok, a giant salamander in the Vltava that both teams fight (server/monster.js, client/shared/monster.ts). The server
+// decides when it comes and goes, where it swims and whom it attacks; it announces its attacks (mon) and every browser applies them to
+// its own vehicle (the bots' are decided here); a player's browser reports where its projectile hit it (mhit), the bots' fire at it is
+// flown here; the team that dealt more damage gets a bonus when it leaves (mres). Its pose goes out in snap.g, its state in obj.g.
+//
 // Timing, as in the usual snapshot interpolation of network games: every row of a snapshot carries the moment it
 // describes on this server's clock (ms since the start). A player's row gets the moment the player's browser
 // took it, mapped onto the server's clock (see state()), so the pace of their tank survives the network and
@@ -42,6 +47,7 @@ const { WebSocketServer } = require('ws');
 const B = require('./bots');
 const { fly } = require('./shots');
 const game = require('./game');
+const monster = require('./monster');                // issue #26: Velemlok
 const world = require('./world');
 const { AIR_LIM } = require('./city');
 const N = require('../client/shared/naval.ts');      // issue #20: the Vltava for the ships (the same file the page runs)
@@ -79,6 +85,9 @@ const SHIP_V = 15, SHIP_LAND = 2, SHELL_V_MAX = 125, TORP_V_MAX = 25;
 // issue #24: a depot hit (thit) counts from a shooter at most this far (parcel, bullet, shell) from where it hit, and this much off the
 // depot (the browser saw it a moment earlier, rounding)
 const THIT_RANGE = [120, 400, 400], THIT_SLACK = 1.5;
+// issue #26: a hit on Velemlok (mhit) counts from a shooter at most this far (parcel, bullet, shell, torpedo) from where it hit, and
+// where its hitbox was in the last MHIT_BACK_MS give or take MHIT_SLACK (the browser drew it a moment ago, rounding)
+const MHIT_RANGE = [120, 400, 400, 400], MHIT_SLACK = 3, MHIT_BACK_MS = 600;
 // at most this many of the server's projectiles in flight (the people's at the bots, the bots' own)
 const FLY_MAX = 600;
 // the objectives (obj) go out once a second, and on a change at once but not more often than this (ms)
@@ -239,10 +248,11 @@ const num = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(
 // the server's clock for the snapshots: ms since the start, monotonic (a clock adjustment of the machine must not jump it)
 const clock = () => Math.round(performance.now());
 
-// issue #24: + the player's team and the game's state (obj without its t: scores, zones, depots, round)
+// issue #24: + the player's team and the game's state (obj without its t: scores, zones, depots, round; issue #26: and Velemlok, g)
+const objState = now => ({ ...game.state(now), g: monster.state() });
 function welcome(p) {
   send(p.ws, { t: 'welcome', id: p.id, name: p.name, color: p.color, pts: p.pts, team: p.team,
-    players: [...players.values()].filter(o => o !== p).map(pub), props: world.propsDown(), game: game.state(clock()) });
+    players: [...players.values()].filter(o => o !== p).map(pub), props: world.propsDown(), game: objState(clock()) });
 }
 
 // Issue #24: the team a joining person goes into. Asked for a team (0 or 1; or coming back, the team they had): that one, unless it
@@ -274,7 +284,7 @@ function hello(ws, m) {
     return welcome(holder);
   }
   if (humans().length >= MAX_PLAYERS) return refuse(ws, 'full');
-  if (!humans().length) game.newRound(clock());         // the first person in: a new round (the bots drive out below)
+  if (!humans().length) { game.newRound(clock()); monster.reset(clock()); }   // the first person in: a new round (the bots drive out below)
   const back = key && recent.get(key);
   const known = back && sameName(back.name, name);
   const p = {
@@ -409,6 +419,19 @@ function thit(p, m) {
   if (game.hitDepot(i, DEPOT_DMG[['parcel', 'bullet', 'shell'][k]], p.team, clock()) === 2) credit(p, game.R.DEPOT_PTS, false);
 }
 
+// Issue #26: a person's projectile hit Velemlok on their screen: k 0 a parcel, 1 a bullet, 2 a shell, 3 a torpedo, at (x, y, z). It counts
+// once per projectile (sid), only one they really fired of that kind and while it can still score, only while Velemlok is out and the
+// round is on, only from a living player within MHIT_RANGE of where it hit, and only where its hitbox was a moment ago (server/monster.js
+// hitAt); both teams may hit it. Its damage counts for the player and their team (obj.g at once).
+function mhit(p, m) {
+  const k = m.k, s = Number.isInteger(m.sid) && p.shots.get(m.sid), now = clock();
+  if (!(k === 0 || k === 1 || k === SHELL || k === TORP) || !num(m.x, WORLD) || !num(m.y, 400) || !num(m.z, WORLD) || !game.playing()) return;
+  if (!p.st || p.st[6] === 2 || !s || s.k !== k || s.mon || Date.now() - s.t > (k === 1 ? BULLET_TTL_MS : SCORE_TTL_MS[k])) return;
+  if (Math.hypot(p.st[1] - m.x, p.st[2] - m.z) > MHIT_RANGE[k] || !monster.hitAt(m.x, m.y, m.z, MHIT_SLACK, MHIT_BACK_MS, now)) return;
+  s.mon = true;
+  monster.damage(p, k, now);
+}
+
 // Points outside the hits (issue #24): a zone a player or a bot helped take (CAP_PTS, for its team too), a depot it destroyed (DEPOT_PTS;
 // game.hitDepot already gave them to the team). Everyone learns the new personal points from a pts message.
 function credit(pl, pts, team) {
@@ -416,6 +439,18 @@ function credit(pl, pts, team) {
   pl.pts += pts; if (team) game.addScore(pl.team, pts);
   broadcast({ t: 'pts', id: pl.id, pts: pl.pts, gain: pts });
 }
+
+// Issue #26: what Velemlok needs from the server: to tell everyone (mon, mres), to hit a bot (its attacks score for nobody; a slam rocks
+// a ship), to give the personal points of the fight and the team's bonus
+monster.init({
+  broadcast,
+  hitBot(id, A) {
+    const b = players.get(id); if (!b || !b.bot) return;
+    if (B.hitBot(b, 4) && A.a === 'slam' && b.kind === 2) b.heel = (b.heel || 0) + (Math.random() < 0.5 ? -0.2 : 0.2);
+  },
+  credit: (id, pts) => credit(players.get(id), pts, false),
+  teamScore: (team, pts) => game.addScore(team, pts),
+});
 
 // A person's tank or parcel hit a pedestrian (index i, pushed along vx, vz): the fall happens in the shared world.
 function ped(p, m) {
@@ -439,7 +474,8 @@ function view() {
     const k = s[8] || 0;
     veh.push({ o, id: o.id, team: o.team, bot: !!o.bot, k, x: s[1], z: s[2], h: s[3], v: s[4], s: s[6], y: k ? s[9] : 0, p: k ? s[10] : 0 });
   }
-  return { now: Date.now(), veh, zones: game.G.zones, depots: game.G.depots, play: game.playing(), kindFor: b => kindFor(b.team, b) };
+  // (issue #26: + Velemlok while it can be hit, server/monster.js view)
+  return { now: Date.now(), veh, zones: game.G.zones, depots: game.G.depots, play: game.playing(), kindFor: b => kindFor(b.team, b), mon: monster.view(clock()) };
 }
 // The vehicle a bot of team t takes (other than bot `but`): a plane if nobody of the team flies one, a ship if nobody sails one, else a
 // tank (a person's vehicle is the one in their row)
@@ -482,11 +518,11 @@ function removeBots() {
 }
 
 // the bots drive and fire (what they fire goes to everyone and into the server's own flight, against the other team's bots and depots);
-// then the server flies everything it flies: a hit on a bot scores for the shooter, a bot's hit on a depot damages it
-function stepBots(dt) {
+// then the server flies everything it flies: a hit on a bot scores for the shooter, a bot's hit on a depot damages it. Issue #26: and
+// everything stops on Velemlok; a bot's hit on it counts (a person's comes as mhit). v: the tick's view (view())
+function stepBots(dt, v) {
   const list = bots();
   if (!list.length) return;
-  const v = view();
   for (const b of list) {
     for (const s of B.stepBot(b, dt, v)) {
       remember(b, s.sid, s.k);
@@ -503,7 +539,7 @@ function stepBots(dt) {
     const r = game.hitDepot(i, DEPOT_DMG[s.k === SHELL ? 'shell' : s.k === 1 ? 'bullet' : 'parcel'], s.team, clock());
     if (r === 2) credit(players.get(s.by), game.R.DEPOT_PTS, false);
     return r;
-  });
+  }, v.mon && { x: v.mon.x, z: v.mon.z, sph: v.mon.sph, hit: s => { if (s.bot && game.playing()) monster.damage(players.get(s.by) || { id: s.by, team: s.team }, s.k, clock()); } });
 }
 
 // ---------- rounds (issue #24) ----------
@@ -556,6 +592,7 @@ wss.on('connection', ws => {
     else if (m.t === 'hit') hit(p, m);
     else if (m.t === 'shot') shot(p, m);
     else if (m.t === 'thit') thit(p, m);
+    else if (m.t === 'mhit') mhit(p, m);
     else if (m.t === 'ped') ped(p, m);
     else if (m.t === 'prop') prop(p, m);
     else if (m.t === 'ping' && num(m.c, 1e12)) send(ws, { t: 'pong', c: m.c });   // the client's ping readout
@@ -577,7 +614,8 @@ setInterval(() => {
   const t0 = performance.now(), c0 = process.cpuUsage(), now = Date.now(), dt = Math.min(0.2, (now - lastTick) / 1000);
   lastTick = now;
   if (!humans().length) return;                         // nobody to watch: the city waits
-  stepBots(dt);
+  const v = view();
+  stepBots(dt, v);
   const t1 = performance.now(), ts = clock(), p = [], tanks = [], capture = [];
   for (const pl of players.values()) {
     if (!pl.st) continue;
@@ -590,18 +628,23 @@ setInterval(() => {
   for (let k = 0; k < 2; k++) for (const i of world.step(dt / 2, tanks)) broadcast({ t: 'prop', i, up: 1 });
   const t2 = performance.now(), ev = game.step(dt, ts, capture, best);
   for (const c of game.G.captured.splice(0)) for (const id of c.ids) credit(players.get(id), game.R.CAP_PTS, true);
-  if (ev === 'end') flying.length = 0;
-  else if (ev === 'new') newRound();
+  if (ev === 'end') { flying.length = 0; monster.roundEnd(ts, game.G.endAt); }
+  else if (ev === 'new') { newRound(); monster.reset(ts); }
+  // issue #26: Velemlok (it surfaces, swims, attacks, leaves; its attacks on the bots land here)
+  monster.step(dt, ts, v.veh, game.playing());
   tick++;
-  broadcast({ t: 'snap', ts, n: tick, p, ...world.fast() });
+  const g = monster.row();
+  broadcast({ t: 'snap', ts, n: tick, p, ...world.fast(), ...(g ? { g } : {}) });
   if (tick % 2 === 0) broadcast({ t: 'w', ts, n: tick, ...world.slow() });
   // (a change goes out at once, but at most every OBJ_MIN_MS: in a busy fight the hits change the scores every tick)
-  if ((game.G.dirty && ts - lastObj >= OBJ_MIN_MS) || ts - lastObj >= 1000) { game.G.dirty = false; lastObj = ts; broadcast({ t: 'obj', ...game.state(ts) }); }
+  if (((game.G.dirty || monster.M.dirty) && ts - lastObj >= OBJ_MIN_MS) || ts - lastObj >= 1000) {
+    game.G.dirty = false; monster.M.dirty = false; lastObj = ts; broadcast({ t: 'obj', ...objState(ts) });
+  }
   const c = process.cpuUsage(c0), t3 = performance.now();
   TICK.cpu[TICK.i % 200] = (c.user + c.system) / 1000;
   TICK.ms[TICK.i++ % 200] = t3 - t0;
   // a tick that takes longer than a second says where the time went (the bots and their fire, the city, the team game and the messages)
-  if (t3 - t0 > 1000) console.log(`slow tick: ${Math.round(t3 - t0)} ms (cpu ${Math.round((c.user + c.system) / 1000)}): bots ${Math.round(t1 - t0)}, city ${Math.round(t2 - t1)}, game and sending ${Math.round(t3 - t2)}; ${bots().length} bots, ${flying.length} in flight`);
+  if (t3 - t0 > 1000) console.log(`slow tick: ${Math.round(t3 - t0)} ms (cpu ${Math.round((c.user + c.system) / 1000)}): bots ${Math.round(t1 - t0)}, city ${Math.round(t2 - t1)}, game, Velemlok and sending ${Math.round(t3 - t2)}; ${bots().length} bots, ${flying.length} in flight`);
 }, TICK_MS);
 const tickStats = () => {
   const l = TICK.ms, r2 = v => Math.round(v * 100) / 100; if (!l.length) return { avg: 0, max: 0, cpu: 0 };
@@ -623,7 +666,7 @@ setInterval(() => {
 }, HEARTBEAT_MS);
 
 // 0.0.0.0: on Zerops the balancer reaches the container over the project network.
-server.listen(PORT, '0.0.0.0', () => console.log(`World of DODO on :${PORT}, teams of ${TEAM_SIZE}, rounds to ${game.ROUND_POINTS} points or ${game.ROUND_SEC} s`));
+server.listen(PORT, '0.0.0.0', () => console.log(`World of DODO on :${PORT}, teams of ${TEAM_SIZE}, rounds to ${game.ROUND_POINTS} points or ${game.ROUND_SEC} s; Velemlok (${monster.MAX_HP} HP) ${monster.FIRST_S} s into a round, every ${monster.EVERY_S} s, for ${monster.LIFE_S} s`));
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
