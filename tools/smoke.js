@@ -128,8 +128,40 @@ async function join(name, team) {
   r = app ? await fetch(BASE + app) : { status: 0, headers: new Headers(), text: async () => '' };
   check(r.status === 200 && (r.headers.get('content-type') || '').startsWith('text/javascript'), `the built game script is served (${app})`);
   check((r.headers.get('cache-control') || '').includes('immutable'), 'the built script may be cached for good (its name changes with it)');
-  // issue #16: the page carries the map of Karlín (karlin.json, bundled by Vite) with its sources' attribution
-  check((await r.text()).includes(M.DATA.attribution[0]), 'the built script carries the map of Karlín and its attribution');
+  // World of DODO, issue #31: the page's script is the light entry (client/src/entry.ts): the join form works at once and the game
+  // comes after it in stages (import()), Babylon.js and the map of Karlín among them. The map's marker is the first street name of
+  // karlin.json that the texts do not hold (issue #16's check looked for the map's attribution, which client/src/texts.ts holds
+  // too, so it never proved the map was in).
+  const entry = await r.text();
+  const texts = require('node:fs').readFileSync(require('node:path').join(__dirname, '../client/src/texts.ts'), 'utf8');
+  const street = (M.EDGES.find(e => e.n && !texts.includes(e.n)) || {}).n;
+  // the stages: every chunk the entry names, and every one they name, breadth first (a name that is not a chunk is a 404: skipped)
+  const seen = new Set([app]), queue = [[app, entry]], chunks = [], body = new Map([[app, entry]]);
+  while (queue.length && seen.size < 300) {
+    const [, code] = queue.shift();
+    for (const n of new Set(code.match(/[\w.-]+\.js/g) || [])) {
+      const u = '/app/' + n; if (seen.has(u) || seen.size >= 300) continue;
+      seen.add(u);
+      const q = await fetch(BASE + u); if (q.status !== 200) continue;
+      const b = await q.text(); body.set(u, b);
+      chunks.push({ u, type: q.headers.get('content-type') || '', cache: q.headers.get('cache-control') || '', map: !!street && b.includes(street), bytes: Buffer.byteLength(b) });
+      queue.push([u, b]);
+    }
+  }
+  // what the page runs before its form works: the entry and what it imports statically (import ... from "./x.js", not import()),
+  // which the browser must download and run first (a bundler may move a helper the entry needs into a big chunk)
+  const first = new Set(), todo = [app];
+  while (todo.length) {
+    const u = todo.shift(); if (first.has(u) || !body.has(u)) continue; first.add(u);
+    for (const m of body.get(u).matchAll(/(?:\bfrom\s*|\bimport\s*)["']\.\/([\w.-]+\.js)["']/g)) todo.push('/app/' + m[1]);
+  }
+  const firstCode = [...first].map(u => body.get(u)).join('\n'), firstKB = Buffer.byteLength(firstCode) / 1024;
+  check(firstKB <= 60, `the page's script is the light entry (${(Buffer.byteLength(entry) / 1024).toFixed(1)} KB, ${first.size} file(s) with what it imports: ${firstKB.toFixed(1)} KB, at most 60)`);
+  check(!!street && !firstCode.includes(street) && !firstCode.includes('WebGL not supported'), `the entry and what it imports carry neither the map ("${street}") nor Babylon.js`);
+  check(chunks.length >= 2 && chunks.every(c => c.type.startsWith('text/javascript') && c.cache.includes('immutable')),
+    `the game's stages are served as scripts that may be cached for good (${chunks.length} chunks, ${(chunks.reduce((a, c) => a + c.bytes, 0) / 1e6).toFixed(2)} MB)`);
+  // issue #16: the page carries the map of Karlín (karlin.json, bundled by Vite)
+  check(chunks.some(c => c.map), `a stage carries the map of Karlín (${(chunks.find(c => c.map) || {}).u})`);
   r = await fetch(BASE + '/fonts/Poppins-SemiBold.ttf');
   check(r.status === 200, 'fonts are served');
   r = await fetch(BASE + '/assets/logo-white.png');
@@ -768,6 +800,26 @@ async function join(name, team) {
   await sleep(300);
   const h2h = await health();
   check(h2h.players === 0 && h2h.bots === 0, 'with nobody left, the bots are gone');
+
+  // World of DODO, issue #31: a page still loading after its welcome (textures, shaders: seconds, docs/PROTOCOL.md Limits) sends no
+  // st. Meanwhile it is in (counted, its welcome and the snapshots come) but nowhere in snap.p, so nobody can hit it or see it; its
+  // first st puts it there; when it gives up it closes its socket and is gone as a closed tab is.
+  const L = client(); await L.opened;
+  let snaps = 0, inSnap = false, lid = -1;
+  L.ws.addEventListener('message', e => { const m = JSON.parse(e.data); if (m.t === 'snap') { snaps++; if (m.p.some(s => s[0] === lid)) inSnap = true; } });
+  L.send({ t: 'hello', name: 'Tester L', key: key(), team: 'auto' });
+  const wl = await L.next(m => m.t === 'welcome'); lid = wl ? wl.id : -1; snaps = 0;
+  await sleep(2500);
+  const hl3 = await health();
+  check(!!wl && snaps >= 30 && !inSnap && L.ws.readyState === 1 && hl3.players === 1,
+    `a page still loading (welcomed, no st for 2.5 s) is in (/health: ${hl3.players} player, ${hl3.bots} bots) but in none of the ${snaps} snapshots`);
+  L.send({ t: 'st', ct: 1, x: HOME.x, z: HOME.z, h: HOME.h || 0, v: 0, r: 0, s: 0 });
+  const tl0 = Date.now();
+  while (!inSnap && Date.now() - tl0 < 500) await sleep(10);
+  check(inSnap, `its first st puts it into the snapshots (${Date.now() - tl0} ms)`);
+  L.ws.close(); await L.closed; await sleep(300);
+  const hl4 = await health();
+  check(hl4.players === 0 && hl4.bots === 0, 'when it gives up and closes its socket, it is gone');
 
   console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
   process.exit(failed ? 1 : 0);

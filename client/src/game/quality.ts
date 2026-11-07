@@ -8,6 +8,7 @@ import { $, COARSE } from '../core/dom';
 import { T } from '../texts';
 import { G, car } from './state';
 import { flash } from '../ui/hud';
+import { LOAD } from '../ui/loading';
 import { sizeMini } from '../ui/minimap';
 import { snow } from './fx';
 import { NET } from '../net/net';
@@ -69,10 +70,16 @@ export function initQuality() {
   addEventListener('keydown', e => {
     if (e.target instanceof HTMLInputElement || e.repeat) return;
     if (e.code === 'KeyF') { PERF.show = !PERF.show; renderStats(); }
-    // (World of DODO, issue #20: in a ship Q launches the torpedoes, game/ship.ts)
-    else if (e.code === 'KeyQ' && !(G.state === 'drive' && car.k === 2)) { PERF.auto = false; setQuality((PERF.level + 1) % QUALITY.length); }
+    // (World of DODO, issue #20: in a ship Q launches the torpedoes, game/ship.ts.) World of DODO, issue #31: not before the city is
+    // built and not while loading: a level change swaps materials and maps, which would undo the shaders and textures made ready
+    else if (e.code === 'KeyQ' && G.state !== 'load' && LOAD.isDone('city') && !(G.state === 'drive' && car.k === 2)) { PERF.auto = false; setQuality((PERF.level + 1) % QUALITY.length); }
   });
   document.querySelector('.gauge')!.addEventListener('click', () => { PERF.show = !PERF.show; renderStats(); });
+}
+// World of DODO, issue #31: into the game: the second being measured starts now (the frames behind the loading screen and the time
+// it took do not count), and the first two seconds are not judged (the game's first moments: the last cells, a late texture)
+export function perfReset() {
+  PERF.frames = PERF.ms = PERF.worst = 0; PERF.bad = 0; PERF.wait = Math.max(PERF.wait, 2);
 }
 // once per frame with the real frame time (ms); once a second: FPS, the readout, and maybe a step down
 export function perfTick(ms: number) {

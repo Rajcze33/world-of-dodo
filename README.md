@@ -167,14 +167,16 @@ weather (snow, wet streets, the river's ice in frost) lies on the materials as i
 ## How it works
 
 ```
-client/index.html   the page: HUD, intro screen, touch controls (markup and styles)
+client/index.html   the page: HUD, intro screen, loading screen, touch controls (markup and styles)
 client/src/         the game in TypeScript on Babylon.js, built by Vite into client/dist:
-  core/             engine, scene, lights and shadows, geometry, materials, textures
+  entry.ts          the page's script, a light one: the texts, the join form, then the game in stages (issue #31)
+  core/             engine, scene, lights and shadows, geometry, materials, textures; slice.ts: long work in slices
   world/            drawing Karlín: buildings, streets, landmarks, props, traffic and tram, pedestrians, the land
                     around; grid.ts is the world as the game code asks for it
   game/             the player's tank, plane and ship, parcels, bullets, shells and torpedoes, effects, input, quality levels
   net/              the other players and the shared city from the server
-  ui/               HUD and minimap;  main.ts: the frame loop and the join form
+  ui/               HUD and minimap; join.ts: the join form; loading.ts: the loading screen after Start
+  main.ts           the boot (the city built in slices behind the form), a start, and the frame loop
 client/shared/      the world, written once and run by the page and the server alike: map.ts (the solids,
                     the ground, the street graph, spawn points; from karlin.json), geom.ts, site.ts (the
                     construction site), naval.ts (the river), rules.ts (the teams, zones, depots and their
@@ -211,8 +213,16 @@ The game page is TypeScript on [Babylon.js](https://www.babylonjs.com/), built w
 (`npm run build`; the server sends `client/dist`). The scene is right-handed like the three.js
 original it was ported from (x east, z south, y up). The fonts and images are in `client/public`.
 The first load is about 1.3 MB of compressed script (Babylon.js and the map of Karlín), sent as brotli or gzip, then the textures
-of what is drawn once the page is idle (issue #27: the ground's about 1.3 MB at the high quality level, its colour maps alone at
-the medium one, at the low one only the small roof atlas), while the city already shows in their average colours.
+of what is drawn (issue #27: the ground's about 1.3 MB at the high quality level, its colour maps alone at the medium one, at the
+low one only the small roof atlas). Since issue #31 the page's script is a light entry (`client/src/entry.ts`, about 10 KB
+compressed): it puts the texts in and fills the join form, so the form and its Start work at once, and only then loads the game
+in stages, each a task of its own: Babylon.js with the engine and the map of Karlín side by side, then the rest of the game, which
+builds the city in slices (`client/src/core/slice.ts`) behind the form, so typing a name never waits for it; the texture maps are
+requested as soon as their index is in and decoded beside the page, and go to the GPU one a frame once the shaders are ready (or
+at Start), not during the build (`client/src/core/matlib.ts`). Start opens the loading screen (`client/src/ui/loading.ts`): one bar
+for the city, the textures (8 s at most, then they finish in the game), the connection, the first snapshot and the shaders, and the
+game begins when they are done. Esc and a new start wait only for the connection again (and for the textures, if a change of the
+quality level asked for other maps meanwhile).
 The server loads the same `client/shared` TypeScript directly: Node 24 strips the types, so that code
 uses only erasable TypeScript (no enums, namespaces or parameter properties) and imports with `.ts`.
 

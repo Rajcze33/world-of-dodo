@@ -31,6 +31,7 @@ import { COL } from '../core/colors';
 import { COARSE } from '../core/dom';
 import { earClip, orient, hash01, faceN } from './poly';
 import { EXTRA } from './landmarks';
+import { part, type Build } from './tiles';
 import { eachShip } from './water';
 import { mix, shade } from './buildings';
 
@@ -98,7 +99,9 @@ function triV(bk: Bucket, a: P3, b: P3, c: P3, ca: number, cb: number, cc: numbe
     bk.p.push(v[0], v[1], v[2]); bk.n.push(nx, ny, nz); bk.u.push(0, 0); bk.c.push(TC[0], TC[1], TC[2]);
   }
 }
-function terrain(G: Bucket, Wt: Bucket) {
+// (issue #31: a builder: eight rows of the colours a unit, then a row of the triangles a unit (a row across the river's banks cuts
+// its land into 1-unit cells there and is the slowest, some 10 ms on a laptop), then the skirt)
+function* terrain(G: Bucket, Wt: Bucket): Build {
   const T = DATA.terrain, N = T.nx, H = T.h, at = (i: number, j: number) => H[j * N + i];
   // the colour of each vertex: snow; a pond's bed darker; the woods a little darker and greener; rock where it is steep. (Issue #20:
   // no darker bank any more, the embankment's coping runs along it; a vertex in the river takes the land's colours, for the cells by
@@ -110,9 +113,11 @@ function terrain(G: Bucket, Wt: Bucket) {
     let c = h < -1.2 ? BED : inPark(x, z) ? mix(SNOW, WOOD, 0.45) : SNOW;
     if (sl > 0.45 && h > 0) c = mix(c, ROCK, Math.min(1, (sl - 0.45) * 2.5));
     C[j * N + i] = shade(c, 0.97 + 0.05 * hash01(i, j));
+    if (i === N - 1 && j % 8 === 7) yield 0.02 * j / T.nz;
   }
   const HALF = T.step * 0.7072;                                        // half a quad's diagonal
   for (let j = 0; j + 1 < T.nz; j++) for (let i = 0; i + 1 < N; i++) {
+    if (i === 0 && j > 0) yield 0.02 + 0.95 * j / T.nz;
     const x = T.x0 + i * T.step, z = T.z0 + j * T.step, x1 = x + T.step, z1 = z + T.step;
     if (x >= ARENA.x0 && x1 <= ARENA.x1 && z >= ARENA.z0 && z1 <= ARENA.z1) continue;   // the streets' plane covers it
     const k = j * N + i, K = [k, k + 1, k + N + 1, k + N], bd = bankDist(x + T.step / 2, z + T.step / 2);
@@ -140,6 +145,7 @@ function terrain(G: Bucket, Wt: Bucket) {
       }
     }
   }
+  yield 0.97;
   // the skirt: from the outer square's edge 450 further out, sinking to a fifth of the edge's height, into the fog. Where the river
   // leaves the square the skirt dips under the water and the water goes on over it (Wt), so the Vltava runs on into the fog.
   const X0 = T.x0, Z0 = T.z0, X1 = T.x0 + (N - 1) * T.step, Z1 = T.z0 + (T.nz - 1) * T.step, S = 450;
@@ -162,6 +168,7 @@ function terrain(G: Bucket, Wt: Bucket) {
   // and beyond the skirt a snowy plain round it (a ring: inside, the land and the river)
   const R0 = X1 + S, R1 = 4000, y = -0.3;
   for (const [a0, b0, a1, b1] of [[-R1, -R1, R1, -R0], [-R1, R0, R1, R1], [-R1, -R0, -R0, R0], [R0, -R0, R1, R0]]) quad(G, [a0, y, b0], [a0, y, b1], [a1, y, b1], [a1, y, b0], SNOW);
+  yield 1;
 }
 
 // ---------- the Vltava (issue #20): liquid, dark, its small waves moving ----------
@@ -355,10 +362,12 @@ function ponds(): Bucket {
 
 // ---------- the woods: trees in the parks of the outer zone (Vítkov's slopes, Štvanice, Letná's edge), a jittered grid ----------
 const TREES: number[] = [];                                    // x, y, z, scale, height scale, yaw per tree
-function woods() {
+// (issue #31: a builder, two rows of the grid a unit)
+function* woods(): Build {
   TREES.length = 0;
   const STEP = 15, MAX = 2200;
-  for (let z = OUTER.z0 + 5; z < OUTER.z1 && TREES.length < MAX * 6; z += STEP) for (let x = OUTER.x0 + 5; x < OUTER.x1; x += STEP) {
+  for (let z = OUTER.z0 + 5, row = 0; z < OUTER.z1 && TREES.length < MAX * 6; z += STEP, row++) for (let x = OUTER.x0 + 5; x < OUTER.x1; x += STEP) {
+    if (x === OUTER.x0 + 5 && row % 2 === 1) yield (z - OUTER.z0) / (OUTER.z1 - OUTER.z0);
     const i = Math.round(x), j = Math.round(z), tx = x + (hash01(i, j) - 0.5) * 12, tz = z + (hash01(j, i + 7) - 0.5) * 12;
     if (tx > ARENA.x0 - 20 && tx < ARENA.x1 + 20 && tz > ARENA.z0 - 20 && tz < ARENA.z1 + 20) continue;
     if (!inPark(tx, tz) || inAnyWater(tx, tz)) continue;
@@ -387,18 +396,24 @@ function treeInst(name: string, idx: number[], mat: StandardMaterial) {
   im.mesh.alwaysSelectAsActiveMesh = false; im.mesh.thinInstanceRefreshBoundingInfo(false); im.mesh.freezeWorldMatrix();   // culled by its own box
 }
 
-export function buildLand() {
+// (issue #31: a builder: the terrain's rows, each part, each bake and the woods' rows a unit, in the same order as before)
+export function* buildLand(): Build {
   const G = Bucket(), Wt = Bucket(), E = Bucket();
-  terrain(G, Wt);
+  yield* part(terrain(G, Wt), 0, 0.8);
   // (lies on the ground: takes the tanks' shadows. Issue #27: a winter lawn of gravel and soil, coarse, in large patches; the snow is
   // the weather's layer over it)
   bake('landGround', G, matTex('gravel', { tint: 0x5e6553, scale: 3, macro: 0.45, wet: 0.5 }), false);
+  yield 0.82;
   // issue #20: the river, its embankments and floes; the ponds frozen as before
   river(Wt);
+  yield 0.84;
   const wm = riverMat(), water = geoMesh('vltava', Wt, wm, false, false); water.freezeWorldMatrix();
+  yield 0.86;
   embankment(E); bake('embankment', E, matTex('sandstone', { tint: 0xffffff }), false);   // (issue #27: sandstone blocks)
+  yield 0.88;
   const pondIce = matTex('ice'), pondWater = lambert(0x1a2426), ice = geoMesh('ponds', ponds(), pondIce, false, true); ice.freezeWorldMatrix();
   buildFloes();
+  yield 0.89;
   // issue #27: the ice only while it freezes (the weather, core/matlib.ts): the ponds thaw to dark water, the floes are gone
   onWeather(w => { ice.material = w.frost ? pondIce : pondWater; floeInst?.mesh.setEnabled(w.frost); });
   let t = 0;
@@ -408,13 +423,14 @@ export function buildLand() {
     wm.setFloat('fogStart', scene.fogStart); wm.setFloat('fogEnd', scene.fogEnd); wm.setColor3('fogColor', scene.fogColor);
     if (floeInst?.mesh.isEnabled()) driftFloes(dt);
   });
-  woods();
+  yield* part(woods(), 0.89, 0.97);
   for (const e of EXTRA) solid({ k: 0, x: e.x, z: e.z, y0: e.y0, h: e.y1, a: e.a, b: e.b, ux: e.ux, uz: e.uz }, Math.hypot(e.a, e.b));
   // the woods in two instanced meshes, the south (Vítkov) and the north, each culled by its own box
   const south: number[] = [], north: number[] = [];
   for (let k = 0; k < TREES.length; k += 6) (TREES[k + 2] > 0 ? south : north).push(k);
   const treeMat = lambert(0xffffff);
   treeInst('landTrees', south, treeMat); treeInst('landTreesNorth', north, treeMat);
+  yield 1;
 }
 // how many floes drift (tests)
 export const floeCount = () => FLOES.length;

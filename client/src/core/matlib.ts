@@ -26,8 +26,9 @@
 // tint (snow whitens what faces up, the streets turn to the trodden snow's colour, the rain darkens), in a few shader instructions.
 // Babylon shares a texture's GPU memory between all materials that load the same file.
 // At boot every material is compiled once, for its final look: until a map has arrived a 1×1 stand-in of its average takes its place
-// (a map that arrives later changes no shader, only what is bound), and the maps are fetched only once the page is idle after the
-// city has been built, so the boot does not wait for them. The night stays: the textures are tinted towards the palette
+// (a map that arrives later changes no shader, only what is bound), so the boot does not wait for them (World of DODO, issue #31:
+// they are fetched as soon as index.json is in, beside the city's build in slices; the loading screen waits for them, up to a time
+// limit, before the game starts). The night stays: the textures are tinted towards the palette
 // (core/colors.ts), the lights are the scene's (the moon, the sky), the lit windows are emissive as before.
 import {
   StandardMaterial, Texture, RawTexture, Color3, Vector3, MaterialPluginBase, type BaseTexture, type UniformBuffer, type MaterialDefines,
@@ -126,14 +127,18 @@ WEATHER_FN.push(() => { if (LEVEL === 1 && INDEX) for (const e of ALL) if (e.key
 
 // ---------- the index (client/public/assets/mat/index.json, fetched once) ----------
 interface KeyInfo { texel: number; mean: number[]; rough: number; raw: boolean; height: boolean; files: { c: number[]; n: number[] } }
-let INDEX: Record<string, KeyInfo> | null = null;
+let INDEX: Record<string, KeyInfo> | null = null, INDEX_FAILED = false;
 const WAITING: (() => void)[] = [];
 const BASE = 'assets/mat/';
-// (the maps wait for the first idle moment after the boot: the city is built and drawn first, its maps come in after)
-const whenIdle = (f: () => void) => { const w = window as unknown as { requestIdleCallback?: (f: () => void, o: { timeout: number }) => void }; if (w.requestIdleCallback) w.requestIdleCallback(f, { timeout: 3000 }); else setTimeout(f, 300); };
+// World of DODO, issue #31: the maps are asked for as soon as the index is in (they used to wait for the page's first idle moment
+// after the boot). The city is built in slices now while the player fills in the form (main.ts), so the downloads run beside the
+// build, and the loading screen after the start waits for them (matIssued, the scene's waiting items) up to its time limit.
 fetch(BASE + 'index.json').then(r => r.json()).then((j: { keys: Record<string, KeyInfo> }) => {
-  whenIdle(() => { INDEX = j.keys; for (const f of WAITING.splice(0)) f(); });
-}).catch(() => { /* no textures: every material keeps its tint */ });
+  INDEX = j.keys; for (const f of WAITING.splice(0)) f();
+}).catch(() => { INDEX_FAILED = true; /* no textures: every material keeps its tint */ });
+// Issue #31: has every map the materials want been asked for? Then the scene's waiting items (Babylon counts every texture until it
+// has loaded or failed) say how many are still on their way. True on the low level (no library maps), and when the index failed.
+export const matIssued = () => LEVEL === 2 || INDEX_FAILED || (!!INDEX && !WAITING.length);
 const lum = (c: number[]) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
 
 // ---------- the quality level (game/quality.ts: 0 high, 1 medium, 2 low) ----------
@@ -317,11 +322,138 @@ if (wodGloss > 0.001) {
 
 // ---------- the textures ----------
 // one Texture per material and slot (its own scale and level); Babylon keeps one GPU copy of each file
+// World of DODO, issue #31: the file is decoded beside the page before Babylon gets it. A map given to Babylon as a URL is decoded
+// when it is uploaded, on the page's own thread and in one go (up to ~110 ms for one map on a laptop, ~280 ms for all the city's):
+// the maps come now while the player types the name or the loading screen runs, so each was a stall there. So the file is fetched
+// and made an ImageBitmap, which the browser decodes on another thread: turned upside down as it is made (WebGL ignores
+// UNPACK_FLIP_Y for a bitmap; Babylon's own bitmap path does the same), its alpha not premultiplied (an alpha here is a height or a
+// snow mask), its colours as stored. Babylon uploads it when its turn comes (the queue below) and the bitmap is let go (a lost GL
+// context reloads the file by its URL). A file asked for again before its upload gets the same bitmap (DECODING), and after it finds
+// that upload in Babylon's cache. Where the browser cannot do this (BITMAP_OK), or the file fails, Babylon loads the URL itself as before. Until it is in, the scene counts it
+// as waiting (the loading screen's texture step reads getWaitingItemsCount).
+const BITMAP_OPT: ImageBitmapOptions = { imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
+// does this browser make such a bitmap, turned? (a picture one wide and two high, red over blue: blue on top once turned)
+const BITMAP_OK: Promise<boolean> = (async () => {
+  try {
+    if (typeof createImageBitmap !== 'function') return false;
+    const b = await createImageBitmap(new ImageData(new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 255]), 1, 2), BITMAP_OPT);
+    const c = document.createElement('canvas'); c.width = 1; c.height = 2;
+    const g = c.getContext('2d', { willReadFrequently: true }); if (!g) return false;   // (a canvas in memory: read back at once)
+    g.drawImage(b, 0, 0); b.close();
+    const p = g.getImageData(0, 0, 1, 1).data;
+    return p[2] > 200 && p[0] < 50;
+  } catch (_) { return false; }
+})();
+// the files being decoded or waiting for their upload, so that a file asked for twice is fetched and decoded once
+// (World of DODO, issue #31: kept until the last queued Texture of that decode is uploaded, upload(). The uploads wait for main.ts
+// (startUploads), and until the first one Babylon's cache does not have the file, so a material made later in the build (the land's
+// gravel after the roads') or a level Q went back to fetched and decoded it again, and held a second bitmap until the uploads.)
+const DECODING = new Map<string, Promise<ImageBitmap | null>>();
+// a file Babylon has already: the Texture finds it in Babylon's cache (upload(), which also handles Babylon letting it go meanwhile)
+const IN_CACHE: Promise<ImageBitmap | null> = Promise.resolve(null);
+const inCache = (url: string) => scene.getEngine().getLoadedTexturesCache().some(it => it.url === url);
+function decoded(url: string): Promise<ImageBitmap | null> {
+  let p = DECODING.get(url);
+  if (p) return p;
+  if (inCache(url)) return IN_CACHE;
+  p = BITMAP_OK.then(ok => !ok ? null : fetch(url).then(r => r.ok ? r.blob() : null).then(b => b ? createImageBitmap(b, BITMAP_OPT) : null))
+    .catch(() => null);
+  DECODING.set(url, p);
+  return p;
+}
 function load(url: string, onLoad: (t: Texture) => void): Texture {
-  const t: Texture = new Texture(url, scene, false, true, Texture.TRILINEAR_SAMPLINGMODE, () => onLoad(t));
+  const t: Texture = new Texture(null, scene, false, true, Texture.TRILINEAR_SAMPLINGMODE);
   t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE;
+  scene.addPendingData(t);
+  queue(t, url, onLoad);
   return t;
 }
+// the file decoded (or found in Babylon's cache), then the Texture waits in the queue below
+function queue(t: Texture, url: string, onLoad: (t: Texture) => void) {
+  const d = decoded(url);
+  void d.then(b => { UPLOADS.push({ t, url, d, b, onLoad, px: b ? b.width * b.height : 0 }); pumpSoon(); });
+}
+// World of DODO, issue #31: the uploads, queued. A decoded map used to be uploaded the moment it arrived, in the middle of the
+// city's build behind the join form. An upload is quick on its own (on a laptop's GPU a 512 map 1-3 ms, the 2048 roof atlas
+// 11-18 ms), but it hands its texels to the GPU process, and when that process is busy the page waits for it. During the build
+// (one WebGL bufferData of the build's kept it busy 412 ms in a traced load) the atlas's upload took 170-400 ms in 7 loads of 27:
+// the build's longest task (LOAD.longest, meant to stay under 50 ms) while the player types. Started at the city's end instead, the
+// uploads met the pre-warm's shaders (main.ts): the atlas 13-142 ms, a 512 map once 344 ms, once 561 ms. So none goes before
+// main.ts says so (startUploads): when the pre-warm is done and the intro is drawn (there the atlas took 21-57 ms, beside the
+// frame, while the picture still fades in), or at a Start once the city is built (the loading screen covers the page then; nobody
+// types; a start that ends before the pre-warm's end holds them again, stopUploads: main.ts abortRun). The build needs none: every
+// material shows its stand-in until its map is in, so the intro's first frames show the stand-ins' tints while its picture fades
+// in (client/index.html, html.city). Then at most one a frame, in an animation frame, the smallest first and the roof atlas last
+// (the map a near view needs least). Each stays counted as waiting (the scene's pending data) until it is uploaded, so the loading
+// screen's texture step still waits for them all; the stand-in is swapped as before (onLoad: no shader changes). Meanwhile a
+// decoded map is held as a bitmap (outside the JS heap; on high 28 maps, 52 MB, the atlas 16 MB) until its last queued upload, from
+// its arrival during the build to at most ~0.7 s after the intro's first frame.
+// (d: the decode it shares with the other Textures of that file, b its bitmap)
+interface Upload { t: Texture; url: string; d: Promise<ImageBitmap | null>; b: ImageBitmap | null; onLoad: (t: Texture) => void; px: number }
+const UPLOADS: Upload[] = [];
+let UPLOADS_ON = false, PUMP = false, RAF = 0;
+// ?test: every upload of texels [file, texels, ms, when] (tools/browser-test.js, issue #31's report)
+const UP_LOG: [string, number, number, number][] | null = new URLSearchParams(location.search).has('test') ? [] : null;
+// main.ts: the queued maps may go now (and every later one as it comes), one a frame
+export function startUploads() { UPLOADS_ON = true; pumpSoon(); }
+// World of DODO, issue #31: a start that ends before the pre-warm is done (main.ts abortRun) holds them again: the form is back and
+// the player types, while the pre-warm still keeps the GPU process busy (boot lets them go at the pre-warm's end, a new Start at once)
+export function stopUploads() { UPLOADS_ON = false; }
+// (a hidden tab has no animation frames: its uploads go on a timer meanwhile, slowly, as nothing is drawn there anyway; also when the
+// tab is hidden while a frame is asked for, see below)
+function pumpSoon() {
+  if (PUMP || !UPLOADS_ON || !UPLOADS.length) return;
+  PUMP = true;
+  if (document.hidden) setTimeout(pump, 100); else RAF = requestAnimationFrame(pump);
+}
+// World of DODO, issue #31: a frame asked for while the tab was visible does not come while it is hidden, and PUMP keeps every later
+// pumpSoon out, so hiding the tab during the uploads stopped the queue until it was shown (a Start's TEX_MS then ran out and the maps
+// went in during the game's first frames). The frame is cancelled and the queue goes on on the timer instead: still one callback
+// pending at a time, so pump never runs twice over. (A timer still pending when the tab is shown runs once; the next pumpSoon asks
+// for frames again.)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && RAF) { cancelAnimationFrame(RAF); RAF = 0; setTimeout(pump, 100); }
+});
+function pump() {
+  PUMP = false; RAF = 0;
+  if (!UPLOADS_ON) return;                                           // (held again meanwhile, stopUploads; startUploads asks again)
+  try {
+    while (UPLOADS.length) {
+      let k = 0; for (let i = 1; i < UPLOADS.length; i++) if (UPLOADS[i].px < UPLOADS[k].px) k = i;
+      if (upload(UPLOADS.splice(k, 1)[0])) break;                   // (one real upload a frame; a map found in the cache costs nothing)
+    }
+  } finally { pumpSoon(); }                                          // (a map that threw does not stop the others)
+}
+// puts one map in; true if its texels were uploaded now
+function upload(u: Upload): boolean {
+  const { t, url, d, b, onLoad } = u, cached = inCache(url);
+  // World of DODO, issue #31: Babylon had the file when this Texture asked for it (decoded), but has let it go since: a level change
+  // asks for each material's new maps before the next material disposes its old ones (prime, apply; from high to medium in the snow,
+  // the streets' alt map asphaltSnow becomes their colour map), and a stale map's onLoad throws its upload away. Babylon would load the
+  // URL itself now, decoded on the page's thread (a stall; every such switch did it): decoded beside the page after all, queued again.
+  if (d === IN_CACHE && !cached) { queue(t, url, onLoad); return false; }
+  // (a file already in Babylon's cache, uploaded by another Texture of it, needs no upload: this one finds it there and costs no
+  // frame; a bitmap already let go has no size)
+  const bmp = b && b.width && !cached ? b : null;
+  const t0 = UP_LOG ? performance.now() : 0;
+  try { t.updateURL(url, bmp, () => onLoad(t)); }                  // (a bitmap is uploaded here and now; a URL as Babylon does)
+  finally {
+    scene.removePendingData(t);
+    if (bmp) { const it = t.getInternalTexture(); if (it) it._buffer = null; t._buffer = null; }
+    // World of DODO, issue #31: the bitmap and the shared decode stay while another queued Texture of this decode waits for them: if
+    // this one's onLoad threw its map away (a level or weather changed meanwhile), Babylon's cache lost the file with it, and the
+    // next one uploads the bitmap rather than load the URL itself (a decode on the page's thread, the stall this library avoids).
+    // After the last one a file asked for again finds the upload in Babylon's cache (decoded).
+    if (!UPLOADS.some(o => o.d === d)) { b?.close(); if (DECODING.get(url) === d) DECODING.delete(url); }
+  }
+  if (UP_LOG && bmp) UP_LOG.push([url.replace(/^.*\//, ''), u.px, Math.round((performance.now() - t0) * 10) / 10, Math.round(t0)]);
+  return !!bmp;
+}
+// World of DODO, issue #31: a map for a material that already shows a stand-in (standIn): the file is fetched, and onLoad puts it in
+// (and sets its scale, level, filtering) once it has arrived. A map put into a material while it loads keeps the material from being
+// drawn at all (Babylon waits for a loading map), so nothing outside this library assigns one before it has loaded. Repeating, as
+// load(); the caller may set another wrap mode at once. A file that fails keeps the stand-in.
+export const loadSwap = load;
 const ANISO = [4, 2, 1];
 // The noise of the macro patches and the snow's drifts: smooth value noise that tiles, three octaves in r, g, b (4, 8 and 16 cells
 // across), sampled once a pixel at the world position, one texture over NOISE_U units (a texture read is cheaper than hashing
@@ -348,12 +480,21 @@ function noiseTex(): RawTexture {
 }
 // A 1×1 stand-in for a map that has not arrived yet: its average (colour maps are 0.5 on average, their alpha 0.75: a height of 0.5),
 // a flat normal, or no glow. The material is compiled once with it, as with the real map, which then only replaces it.
-const STAND = { c: [128, 128, 128, 192], n: [128, 128, 255, 255], e: [0, 0, 0, 255] };
-function stand(k: keyof typeof STAND, level: number): Texture {
+// (World of DODO, issue #31: 'nh' a flat normal whose alpha is a middling height, for a normal map that carries a height or a snow
+// mask in its alpha: the roof atlas's; 'n' keeps 255, the library's normal maps have no height, and the roof tiles' 255 is "no joint".)
+const STAND = { c: [128, 128, 128, 192], n: [128, 128, 255, 255], nh: [128, 128, 255, 192], e: [0, 0, 0, 255] };
+export type StandKind = keyof typeof STAND;
+function stand(k: StandKind, level: number, ident = false): Texture {
   const t = RawTexture.CreateRGBATexture(new Uint8Array(STAND[k]), 1, 1, scene, false, false, Texture.NEAREST_SAMPLINGMODE);
-  t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE; t.uScale = t.vScale = 0.5; t.level = level;   // (not the identity: as a real map's, same shader)
+  t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE; t.level = level;
+  // a texture matrix that is the identity or not changes the shader (Babylon's DIFFUSEDIRECTUV and the like): the stand-in has the
+  // real map's. The library's maps are scaled (not the identity); a map on the mesh's own uvs (an atlas) is the identity: ident
+  t.uScale = t.vScale = ident ? 1 : 0.5;
   return t;
 }
+// World of DODO, issue #31: a stand-in for a map of one's own (world/facade.ts, world/buildings.ts), as the library's own: ready at
+// once, so the material compiles for its final look before the start and is drawn from the first frame; loadSwap puts the map in.
+export const standIn = stand;
 // the snow layer's texture, one for all (sampled at the world position, no matrix): its stand-in until the real one is in
 const SNOW_TEX: { t: Texture; url: string; texel: number } = { t: stand('c', 1), url: '', texel: 3.5 };
 function snowTex() {
@@ -537,5 +678,7 @@ export function matVramMB(): number {
   add(SNOW_TEX.t);
   return Math.round(mb * 10) / 10;
 }
-// the tests' handle (?test, as main.ts's WOD): the weather, the level, the memory
-if (new URLSearchParams(location.search).has('test')) (window as unknown as { wodMat: unknown }).wodMat = { setWeatherLook, setMatLevel, matVramMB, WEATHER };
+// the tests' handle (?test, as main.ts's WOD): the weather, the level, the memory (issue #31: the uploads, the queue's length)
+if (new URLSearchParams(location.search).has('test')) {
+  (window as unknown as { wodMat: unknown }).wodMat = { setWeatherLook, setMatLevel, matVramMB, WEATHER, uploads: UP_LOG, queued: () => UPLOADS.length };
+}

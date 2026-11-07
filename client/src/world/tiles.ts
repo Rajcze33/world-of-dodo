@@ -10,6 +10,15 @@ import type { Mesh, Material } from '@babylonjs/core';
 import { scene, camera } from '../core/engine';
 import { Bucket, bake } from '../core/geo';
 
+// World of DODO, issue #31: the city is built in the background, in slices (core/slice.ts runs these builders): a builder is a
+// generator that yields between its units of work (a house, a street, a tile's bake), never inside one, and keeps the order of
+// the original build call for call, so every page builds the same city (props by index, the lit windows' hashes). What it yields
+// is how far it is, 0..1 of itself (part() maps a builder inside another into the outer one's share).
+export type Build<R = void> = Generator<number | void, R, void>;
+export function* part<R>(w: Build<R>, a: number, b: number): Build<R> {
+  for (;;) { const r = w.next(); if (r.done) return r.value; yield typeof r.value === 'number' ? a + (b - a) * r.value : undefined; }
+}
+
 // fac: the facades (window texture, lit windows); vc: everything else lit, in vertex colours (roofs, cornices, stone, the site);
 // glow: unlit vertex colours (lit windows of the landmarks, shop windows, signs); and every kind registered with tileKind
 export type Kind = 'fac' | 'vc' | 'glow' | (string & {});
@@ -33,19 +42,25 @@ export function tileB(k: Kind, x: number, z: number): Bucket {
   return b;
 }
 // the meshes, and the fog switch, checked before every frame (a box per tile, and per mesh of a kind with its own far: nothing)
-export function bakeTiles(mats: Record<'fac' | 'vc' | 'glow', Material>) {
-  TILES.forEach((t, n) => {
+// (issue #31: a builder, one bake of a tile's kind a unit, in the same order as before)
+export function* bakeTiles(mats: Record<'fac' | 'vc' | 'glow', Material>): Build {
+  let all = 0, done = 0;
+  for (const t of TILES) all += t.b.size;
+  for (let n = 0; n < TILES.length; n++) {
+    const t = TILES[n];
     for (const [k, bk] of t.b) {
       const def = KINDS.get(k), mat = (mats as Record<string, Material>)[k] ?? def?.mat;
       if (!mat) throw new Error('tiles: no material for the kind ' + k);
       const m = bake('city_' + k + '_' + n, bk, mat, def ? def.cast : true);
-      if (!m) continue;
-      t.m.push({ m, far: def ? def.far : Infinity, on: true });
-      const bb = m.getBoundingInfo().boundingBox, lo = bb.minimumWorld, hi = bb.maximumWorld;
-      t.box = t.m.length === 1 ? [lo.x, lo.z, hi.x, hi.z] : [Math.min(t.box[0], lo.x), Math.min(t.box[1], lo.z), Math.max(t.box[2], hi.x), Math.max(t.box[3], hi.z)];
+      if (m) {
+        t.m.push({ m, far: def ? def.far : Infinity, on: true });
+        const bb = m.getBoundingInfo().boundingBox, lo = bb.minimumWorld, hi = bb.maximumWorld;
+        t.box = t.m.length === 1 ? [lo.x, lo.z, hi.x, hi.z] : [Math.min(t.box[0], lo.x), Math.min(t.box[1], lo.z), Math.max(t.box[2], hi.x), Math.max(t.box[3], hi.z)];
+      }
+      yield ++done / all;
     }
     t.b.clear();
-  });
+  }
   scene.onBeforeRenderObservable.add(() => {
     const c = camera.position, f = scene.fogEnd + 10;
     for (const t of TILES) {

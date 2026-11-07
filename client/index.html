@@ -13,8 +13,10 @@
   the original are marked "World of DODO" in the code.
 
   This file is the page around the 3D view: the HUD, the intro screen, the touch controls and their
-  styles. The game itself is TypeScript on Babylon.js in client/src (entry: src/main.ts), built by
-  Vite into client/dist; the original's three.js script and its single-player shift code are gone.
+  styles. The game itself is TypeScript on Babylon.js in client/src, built by Vite into client/dist;
+  the original's three.js script and its single-player shift code are gone. The page's script is
+  src/entry.ts, a light one: the join form works at once, and the game (src/main.ts) loads behind it
+  and builds the city in slices; after Start the loading screen waits for the rest (issue #31).
   Czech by default, English with ?lang=en.
 -->
 <html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex, nofollow"><link rel="icon" href="/assets/icon.svg" type="image/svg+xml"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
@@ -69,6 +71,19 @@ canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-acti
 #stops li.done .n{background:transparent;border:1px solid var(--dodo-grey);color:var(--dodo-grey)}
 #stops li.done .nm{text-decoration:line-through}
 #stops li .t{margin-left:auto;color:var(--dodo-grey)}
+/* World of DODO, issue #31: the loading screen's steps (ui/loading.ts), drawn like the stops above but their own classes (#stops
+   hides on a phone): a green numbered circle; done: outlined grey with a check; running: light teal; failed: peach */
+.load-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-2)}
+.load-steps li{display:flex;align-items:center;gap:var(--space-3);font-size:var(--fs-body-sm);color:var(--dodo-white);min-width:0}
+.load-steps .n{flex:none;width:24px;height:24px;box-sizing:border-box;border-radius:50%;background:var(--dodo-green);color:var(--dodo-white);display:grid;place-items:center;font-family:var(--font-secondary);font-size:var(--fs-caption);font-weight:600}
+.load-steps .n svg{width:14px;height:14px}
+.load-steps li:not(.done) .n svg,.load-steps li.done .n b{display:none}
+.load-steps li.done{color:var(--dodo-grey)}
+.load-steps li.done .n{background:transparent;border:1px solid var(--dodo-grey);color:var(--dodo-grey)}
+.load-steps li.run .n{background:var(--dodo-light-teal);color:var(--dodo-charcoal)}
+.load-steps li.err{color:var(--dodo-peach)}
+.load-steps li.err .n{background:var(--dodo-peach);color:var(--dodo-charcoal)}
+.load-steps .t{margin-left:auto;color:var(--dodo-grey);text-transform:none;letter-spacing:.02em;text-align:right}
 .tr{position:absolute;right:calc(16px + env(safe-area-inset-right,0px));top:calc(16px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;align-items:flex-end;gap:var(--space-3)}
 #mini{display:block;width:176px;height:176px;border-radius:var(--radius-16);border:1px solid var(--dodo-charcoal-80);background:var(--dodo-charcoal)}
 .camBtn{pointer-events:auto;display:inline-flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-4);border-radius:var(--radius-pill);border:1px solid var(--dodo-grey);background:var(--dodo-charcoal);color:var(--dodo-white);font:500 var(--fs-body-sm) var(--font-primary);cursor:pointer}
@@ -502,6 +517,36 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   body:has(#tbMon:not([hidden])) .tl,body:has(#tbMon:not([hidden])) .tr{top:calc(16px + 76px + 8px + 18px + env(safe-area-inset-top,0px))}
   .monres{top:34%}
 }
+/* World of DODO, issue #31: the city is built behind the join form (in slices, main.ts) and nothing is drawn until it is: till then
+   the page shows a night sky in the sky dome's colours (core/engine.ts), and the 3D view fades in once the city is drawn (main.ts
+   puts the class city on <html>). The line under the start button says how far the city is (#cityBg). */
+body{background:linear-gradient(to top,#3d4543,#0b0e0d 60%) var(--dodo-ink)}
+canvas#gl{opacity:0;transition:opacity 800ms var(--ease)}
+html.city canvas#gl{opacity:1}
+.city-bg{margin:0;color:var(--dodo-light-grey)}
+/* World of DODO, issue #31: the loading screen after Start (ui/loading.ts): opaque (nothing is drawn behind it while the game gets
+   ready), the hero gradient over DODO's charcoal; one bar for all the steps, its fill scaled (no layout per step), a light shimmer
+   moved by a transform, which the compositor keeps running through the page's long tasks (none with reduced motion); the step
+   running, the percent, the steps' list, the vehicle's keys, the way back. On a phone it sits at the bottom, the bar full width. */
+#loading{background:linear-gradient(90deg,var(--gradient-hero-stops)),#1e2322;transition:opacity 250ms var(--ease)}
+#loading.out{opacity:0}
+#loading .intro-inner{width:min(560px,100%)}
+#loadTitle:focus{outline:none}
+.load-bar{position:relative;height:8px;border-radius:4px;background:var(--dodo-charcoal-80);overflow:hidden}
+.load-bar>i{position:absolute;inset:0;background:var(--dodo-green);transform:scaleX(0);transform-origin:0 50%;transition:transform 200ms var(--ease)}
+.load-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;background:linear-gradient(90deg,rgba(178,220,214,0),rgba(178,220,214,.55),rgba(178,220,214,0));transform:translateX(-100%);will-change:transform;animation:load-shimmer 1.6s linear infinite}
+@keyframes load-shimmer{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
+.load-row{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-3);margin-top:calc(-1 * var(--space-3))}
+.load-lbl{font-size:var(--fs-body-sm);font-weight:600;color:var(--dodo-light-teal);min-width:0}
+.load-row .meta{color:var(--dodo-light-grey);white-space:nowrap}
+#loadErr{color:var(--dodo-peach);font-size:var(--fs-body-sm);margin:0}
+#loadCancel{align-self:flex-start;min-height:36px}
+@media (prefers-reduced-motion:reduce){.load-bar::after{animation:none;display:none}}
+@media (max-width:760px){
+  #loading.overlay{background:linear-gradient(0deg,var(--gradient-hero-stops)),#1e2322}
+  #loading .intro-inner{gap:var(--space-4)}
+  #loadCancel{align-self:stretch;justify-content:center;min-height:44px}
+}
 </style>
 
 <canvas id="gl" data-ta="glAria"></canvas>
@@ -626,7 +671,8 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
       <fieldset class="swatches"><legend class="mono" data-t="colorLbl"></legend><div class="sw-row" id="swatches"></div></fieldset>
       <fieldset class="vehs"><legend class="mono" data-t="vehLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="veh" value="0" checked><span data-t="vehTank"></span></label><label class="veh"><input type="radio" name="veh" value="1"><span data-t="vehPlane"></span></label><label class="veh"><input type="radio" name="veh" value="2"><span data-t="vehShip"></span></label></div></fieldset>
       <fieldset class="vehs teams"><legend class="mono" data-t="teamLbl"></legend><div class="veh-row"><label class="veh"><input type="radio" name="team" value="auto" checked><span data-t="teamAuto"></span></label><label class="veh"><input type="radio" name="team" value="0"><span><i class="tdot t0"></i>A</span></label><label class="veh"><input type="radio" name="team" value="1"><span><i class="tdot t1"></i>B</span></label></div></fieldset>
-      <button class="cta" id="startBtn" type="submit" disabled><span id="startLbl" data-t="loading"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+      <button class="cta" id="startBtn" type="submit" disabled><span id="startLbl" data-t="start"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+      <p class="meta city-bg" id="cityBg" hidden></p><!-- issue #31: the city being built behind the form -->
       <p class="err" id="joinErr" role="alert" hidden></p>
     </form>
     <p class="fine" data-t="introFine"></p>
@@ -635,6 +681,22 @@ body{touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-touch-cal
   </div>
 </section>
 
-<script type="module" src="/src/main.ts"></script>
+<!-- World of DODO, issue #31: the loading screen after Start (ui/loading.ts): the vehicle on its way, one bar for the five steps
+     (the city, the textures, the connection, the game's first state, the shaders), the step running, the way back to the menu -->
+<section class="overlay" id="loading" hidden aria-labelledby="loadTitle">
+  <div class="intro-inner">
+    <div class="brand-row"><img id="loadLogo" alt="DODO"></div>
+    <p class="overline" data-t="loadOver"></p>
+    <h2 id="loadTitle" tabindex="-1"></h2>
+    <div class="load-bar" id="loadBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-ta="loadAria"><i id="loadFill"></i></div>
+    <div class="load-row"><span class="load-lbl" id="loadStep" aria-live="polite"></span><span class="meta" id="loadPct"></span></div>
+    <ol class="load-steps" id="loadSteps"></ol>
+    <p class="keys meta" id="loadKeys"></p>
+    <p id="loadErr" role="alert" hidden></p>
+    <button class="camBtn" id="loadCancel" type="button"></button>
+  </div>
+</section>
+
+<script type="module" src="/src/entry.ts"></script>
 
 </body></html>

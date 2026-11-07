@@ -8,7 +8,6 @@ const CS = {
   camera: "Kamera",
   colorLbl: "Barva tanku",
   colorNames: ["DODO zelená","broskvová","modrá","žlutá","fialová","růžová","tyrkysová","oranžová","limetková","bílá","levandulová","hnědá"],
-  connecting: "Připojuji…",
   dec: ",",
   docTitle: "World of DODO",
   errConn: "Server je nedostupný. Zkuste to znovu.",
@@ -33,7 +32,6 @@ const CS = {
   keysTouch: "Vlevo táhněte pro řízení, vpravo plyn, brzda a střelba",
   killedBy: (n: string)=>'Zničil vás '+n+'! Za chvíli se objevíte jinde',
   lang: "cs",
-  loading: "Načítám město",
   lost: "Spojení ztraceno, připojuji znovu…",
   mapAria: "Mapa města",
   nameLbl: "Jméno ve hře",
@@ -147,6 +145,20 @@ const CS = {
   monTop: (s: string)=>'Nejvíc škody: '+s,
   monKilledToast: (t: string, p: number)=>'Velemlok je poražen! '+(t ? 'Tým '+t+' +'+p : 'Nerozhodně'),
   monFledToast: (t: string, p: number)=>'Velemlok odplul. '+(t ? 'Tým '+t+' +'+p : 'Nerozhodně'),
+  // World of DODO, issue #31: the city built behind the join form, the loading screen after Start (ui/loading.ts)
+  loadBtn: "Načítám…",
+  cityBg: (n: number)=>'Karlín se staví · '+n+'\u00a0%',
+  loadOver: "World of DODO · Karlín",
+  loadTitle: ["Tank vyjíždí do Karlína","Letadlo startuje nad Karlín","Loď vyplouvá na Vltavu"],
+  loadSteps: ["Stavba města","Textury","Připojení k serveru","První stav hry","Příprava shaderů"],
+  loadTexLate: "Textury se dotáhnou ve hře",
+  loadCancel: "Zpět do menu · Esc",
+  loadCancelTouch: "Zpět do menu",
+  loadAria: "Načítání hry",
+  loadVal: (n: number, s: string)=>n+'\u00a0%: '+s,
+  pct: (n: number)=>n+'\u00a0%',                                  // (Czech puts a space before %, one that never breaks the line)
+  errLoad: "Hru se nepodařilo stáhnout. Zkontrolujte připojení a načtěte stránku znovu.",
+  reload: "Načíst znovu",
 };
 
 const EN: typeof CS = {
@@ -157,7 +169,6 @@ const EN: typeof CS = {
   camera: "Camera",
   colorLbl: "Tank colour",
   colorNames: ["DODO green","peach","blue","yellow","purple","pink","turquoise","orange","lime","white","lavender","brown"],
-  connecting: "Connecting…",
   dec: ".",
   docTitle: "World of DODO",
   errConn: "The server cannot be reached. Try again.",
@@ -182,7 +193,6 @@ const EN: typeof CS = {
   keysTouch: "Left: drag to steer · Right: accelerate, brake and fire",
   killedBy: n=>n+' destroyed you! You’ll be back somewhere else in a moment',
   lang: "en",
-  loading: "Loading the city",
   lost: "Connection lost, reconnecting…",
   mapAria: "City map",
   nameLbl: "Your name in the game",
@@ -291,6 +301,19 @@ const EN: typeof CS = {
   monTop: s=>'Most damage: '+s,
   monKilledToast: (t,p)=>'Velemlok is beaten! '+(t ? 'Team '+t+' +'+p : 'A draw'),
   monFledToast: (t,p)=>'Velemlok swam off. '+(t ? 'Team '+t+' +'+p : 'A draw'),
+  loadBtn: "Loading…",
+  cityBg: n=>'Building Karlín · '+n+'%',
+  loadOver: "World of DODO · Karlín",
+  loadTitle: ["Your tank is heading into Karlín","Your plane is taking off over Karlín","Your ship is putting out on the Vltava"],
+  loadSteps: ["Building the city","Textures","Connecting to the server","The game’s first state","Preparing the shaders"],
+  loadTexLate: "The textures will finish loading in the game",
+  loadCancel: "Back to the menu · Esc",
+  loadCancelTouch: "Back to the menu",
+  loadAria: "Loading the game",
+  loadVal: (n,s)=>n+'%: '+s,
+  pct: n=>n+'%',
+  errLoad: "The game could not be downloaded. Check your connection and reload the page.",
+  reload: "Reload",
 };
 
 export const LANG: 'cs' | 'en' = new URLSearchParams(location.search).get('lang') === 'en' ? 'en' : 'cs';

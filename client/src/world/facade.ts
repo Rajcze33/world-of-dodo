@@ -25,7 +25,7 @@ import {
 } from '@babylonjs/core';
 import { scene, camera } from '../core/engine';
 import { Bucket, bake, type P3, type P2 } from '../core/geo';
-import { matTex, matLevel, onMatLevel, onWeather, weatherMat } from '../core/matlib';
+import { matTex, matLevel, onMatLevel, onWeather, weatherMat, standIn, loadSwap } from '../core/matlib';
 import { basic } from '../core/mat';
 import { ARENA } from '../../shared/map.ts';
 import { faceN } from './poly';
@@ -182,14 +182,19 @@ const RI = ROOFS as unknown as { mean: number; pages: { file: string; low: strin
 // The low quality level (weak devices): the roofs drop the library's weather shader for a plain one, the half-size atlas page read
 // once and tinted towards white by the weather's snow (onWeather), as cheap as the snowy roofs of issue #16 were. The roofs' meshes
 // (tiles.ts 'roofA') get one material or the other.
-let ROOF_LOW: StandardMaterial | null = null, ROOF_LOWT: Texture | null = null;
+let ROOF_LOW: StandardMaterial | null = null;
+// an atlas page (or its normal map), clamped at its edges; onLoad when it has arrived (issue #31: it goes in then, a stand-in before)
+function roofTex(f: string, onLoad: (t: Texture) => void): Texture {
+  const t = loadSwap('assets/roofs/' + f, onLoad); t.wrapU = t.wrapV = Texture.CLAMP_ADDRESSMODE; return t;
+}
 function roofLowMat(): StandardMaterial {
   if (ROOF_LOW) return ROOF_LOW;
   const m = ROOF_LOW = new StandardMaterial('roofLow', scene);
   m.specularColor = Color3.Black(); m.useEmissiveAsIllumination = true;   // the white added after the photo, not tinted by it
-  ROOF_LOWT = new Texture('assets/roofs/' + RI.pages[0].low, scene, false, true, Texture.TRILINEAR_SAMPLINGMODE);
-  ROOF_LOWT.wrapU = ROOF_LOWT.wrapV = Texture.CLAMP_ADDRESSMODE; ROOF_LOWT.level = 0.5 / RI.mean;
-  m.diffuseTexture = ROOF_LOWT;
+  // World of DODO, issue #31: the page's average until the page has arrived (a map put in while it loads keeps every roof from being
+  // drawn); the page on the mesh's own uvs: a stand-in with the identity matrix, as the page has (the same shader)
+  m.diffuseTexture = standIn('c', 1, true);
+  const t = roofTex(RI.pages[0].low, () => { t.level = 0.5 / RI.mean; const old = m.diffuseTexture; m.diffuseTexture = t; if (old !== t) old?.dispose(); });
   // the snow: the photo washed towards the snow's white (the emissive adds the white, the diffuse keeps the roof's own pattern)
   onWeather(w => { const k = 0.85 * w.snow; m.diffuseColor = new Color3(1 - 0.45 * k, 1 - 0.45 * k, 1 - 0.43 * k); m.emissiveColor = new Color3(0.5 * k, 0.53 * k, 0.53 * k); });
   return m;
@@ -209,37 +214,52 @@ export function roofLevelOnce() { if (ROOF_FIRST) { ROOF_FIRST = false; if (matL
 let ROOF_MAT: StandardMaterial | null = null;
 export function roofMat(): StandardMaterial {
   if (ROOF_MAT) return ROOF_MAT;
-  const pg = RI.pages[0], tex = (f: string, onLoad?: (t: Texture) => void) => {
-    const t: Texture = new Texture('assets/roofs/' + f, scene, false, true, Texture.TRILINEAR_SAMPLINGMODE, () => onLoad?.(t));
-    t.wrapU = t.wrapV = Texture.CLAMP_ADDRESSMODE; return t;
-  };
-  // the maps go in at once (the library's weather reads the snow mask only from a normal map it is given when it is made); a quality
-  // change swaps them (onMatLevel)
+  const pg = RI.pages[0];
+  // World of DODO, issue #31: the material is made with stand-ins (matlib standIn), the maps go in as they arrive (a map put in while
+  // it loads kept every roof of the arena from being drawn until it had come, and its shader from compiling before the start): the
+  // photo's average (its level 2: the tint itself, as the page's 1 / mean makes it), and a flat normal map with a middling snow mask
+  // in its alpha, so that the library's weather reads the mask from the start (it does so only from a normal map it is given when it
+  // is made). Both on the mesh's own uvs, the identity matrix, as the pages have. A quality change swaps them (onMatLevel).
   let lvl = matLevel();
-  const map = tex(lvl === 2 ? pg.low : pg.file), bump = lvl < 2 ? tex(pg.n) : undefined;
-  map.anisotropicFilteringLevel = lvl === 0 ? 4 : 1;
-  if (bump) bump.level = 0.5;
+  const map = standIn('c', 2, true), bump = lvl < 2 ? standIn('nh', 0.5, true) : undefined;
   const m = ROOF_MAT = weatherMat({ tint: 0x9a948c, snow: 0.5, wet: 0.8, uv: 'mesh', height: true, map, bumpMap: bump, mean: RI.mean });
+  map.level = 2;                                                     // (weatherMat set it to 1 / mean, the real page's level)
+  // the page for the level, put in when it has arrived (unless the level has asked for the other page since)
+  let wantMap = '', wantN = 0;
+  const putMap = (f: string) => {
+    wantMap = f;
+    const t = roofTex(f, () => {
+      if (wantMap !== f) { t.dispose(); return; }
+      t.level = 1 / RI.mean; t.anisotropicFilteringLevel = lvl === 0 ? 4 : 1; const old = m.diffuseTexture; m.diffuseTexture = t; if (old && old !== t) old.dispose();
+    });
+  };
+  // the normal map with the snow mask (not on low): its stand-in at once, the map when it has arrived
+  const putBump = () => {
+    if (!m.bumpTexture) m.bumpTexture = standIn('nh', 0.5, true);
+    const my = ++wantN, t = roofTex(pg.n, () => {
+      if (my !== wantN || !m.bumpTexture) { t.dispose(); return; }
+      t.level = 0.5; const old = m.bumpTexture; m.bumpTexture = t; if (old !== t) old.dispose();
+    });
+  };
+  putMap(lvl === 2 ? pg.low : pg.file);
+  if (bump) putBump();
   const tiles = new RoofTiles(m), tilesOn = (l: number) => {
     if (l !== 0) { if (tiles.on) { tiles.on = false; tiles.markAllDefinesAsDirty(); } return; }
     if (tiles.tex) { if (!tiles.on) { tiles.on = true; tiles.markAllDefinesAsDirty(); } return; }
-    const t = new Texture('assets/mat/512/roofTiles_n.webp', scene, false, true, Texture.TRILINEAR_SAMPLINGMODE);
-    t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE;
-    tiles.tex = t; tiles.on = true; tiles.markAllDefinesAsDirty();
+    // issue #31: a stand-in until the tiles' map has arrived, a flat normal with no joint (alpha 255: the photo as it is), so that the
+    // shader with the tiles (WODTILES) compiles at once and the roofs are drawn meanwhile; then the map, no shader change
+    tiles.tex = standIn('n', 1); tiles.on = true; tiles.markAllDefinesAsDirty();
+    const t = loadSwap('assets/mat/512/roofTiles_n.webp', () => { const old = tiles.tex; tiles.tex = t; if (old && old !== t) old.dispose(); });
   };
   tilesOn(lvl);
   if (new URLSearchParams(location.search).has('test')) (window as unknown as { wodRoofTiles: (on: boolean) => void }).wodRoofTiles = on => { tiles.on = on && !!tiles.tex; tiles.markAllDefinesAsDirty(); };
   onMatLevel(l => {
     tilesOn(l); roofLow(l);
     if (l === lvl) return; const was = lvl; lvl = l;
-    if ((l === 2) !== (was === 2)) {
-      const t = tex(l === 2 ? pg.low : pg.file, () => {
-        if (lvl !== l) { t.dispose(); return; }
-        t.level = 1 / RI.mean; t.anisotropicFilteringLevel = l === 0 ? 4 : 1; const old = m.diffuseTexture; m.diffuseTexture = t; if (old && old !== t) old.dispose();
-      });
-    } else if (m.diffuseTexture) m.diffuseTexture.anisotropicFilteringLevel = l === 0 ? 4 : 1;
-    if (l === 2 && m.bumpTexture) { m.bumpTexture.dispose(); m.bumpTexture = null; }
-    else if (l < 2 && !m.bumpTexture) { const n = tex(pg.n); n.level = 0.5; m.bumpTexture = n; }
+    if ((l === 2) !== (was === 2)) putMap(l === 2 ? pg.low : pg.file);
+    else if (m.diffuseTexture) m.diffuseTexture.anisotropicFilteringLevel = l === 0 ? 4 : 1;
+    if (l === 2 && m.bumpTexture) { wantN++; m.bumpTexture.dispose(); m.bumpTexture = null; }
+    else if (l < 2 && !m.bumpTexture) putBump();
   });
   return m;
 }
@@ -252,7 +272,7 @@ const trimMat = () => TRIM_MAT ??= matTex('stucco', { tint: 0xffffff, flatLow: t
 let KIT: Record<InstKind, { g: Bucket; m: Material }> | null = null;
 // a cell's meshes: its jobs run, the mouldings baked, the window parts as thin instances (once; the jobs and the arrays then go)
 function buildCell(c: Cell) {
-  c.built = true;
+  c.built = true; NEAR.built++;
   const trim = trimMat();
   KIT ??= { pane: { g: kitPane(), m: basic(0xffffff) }, frame: { g: kitFrame(), m: trim }, ped: { g: kitPed(), m: trim } };
   for (const j of c.jobs) j();
@@ -279,6 +299,14 @@ function buildCell(c: Cell) {
 // eight times (the relief is for the street: from a roof or a plane it is hardly seen, and there are many more windows in view),
 // off beyond it. A cell is built a little before it is needed (within NEAR_R + BUILD_AHEAD), at most one a frame.
 const BUILD_AHEAD = 50;
+// a cell's distance from the camera at (x, y, z): its houses' box, the height above them counting eight times
+function cellDist(c: Cell, x: number, y: number, z: number) {
+  const dx = Math.max(c.box[0] - x, 0, x - c.box[2]), dz = Math.max(c.box[1] - z, 0, z - c.box[3]), dy = 8 * Math.max(0, y - c.box[4]);
+  return Math.sqrt(dx * dx + dz * dz + dy * dy);
+}
+// World of DODO, issue #31: how many cells have been built, and how many of them in a drawn frame (by the switch below): the loading
+// screen builds the cells round the spawn beforehand (nearAround), so standing there the game builds none (the tests read it)
+export const NEAR = { built: 0, inFrame: 0 };
 export function bakeCells() {
   scene.onBeforeRenderObservable.add(() => {
     roofLevelOnce();
@@ -287,11 +315,28 @@ export function bakeCells() {
     let built = false;
     for (const c of CELLS) {
       if (c.box[0] === Infinity) continue;
-      const dx = Math.max(c.box[0] - p.x, 0, p.x - c.box[2]), dz = Math.max(c.box[1] - p.z, 0, p.z - c.box[3]), dy = 8 * Math.max(0, p.y - c.box[4]);
-      const d = Math.sqrt(dx * dx + dz * dz + dy * dy);
-      if (!c.built) { if (d < R + BUILD_AHEAD && (!built || d < R)) { buildCell(c); built = true; } else continue; }
+      const d = cellDist(c, p.x, p.y, p.z);
+      if (!c.built) { if (d < R + BUILD_AHEAD && (!built || d < R)) { buildCell(c); built = true; NEAR.inFrame++; } else continue; }
       const near = c.isNear ? d < R + HYST : d < R;
       if (near !== c.isNear) { c.isNear = near; for (const m of c.m) m.setEnabled(near); }
     }
   });
+  // issue #31: the houses' near detail is drawn in the library's stucco: made now, so that its maps are asked for with the city's and
+  // the loading screen's texture step waits for them too (on the low level there is no near detail, and no map)
+  if (NEAR_R[matLevel()]) trimMat();
+}
+// World of DODO, issue #31: build up to max of the cells the switch above would build for a camera at (x, y, z) (within NEAR_R +
+// BUILD_AHEAD, nearest first), before the game starts; returns how many are left to build there (0 on the low level: no near detail).
+// The loading screen calls it in slices until 0, so the first frames build nothing (a cell is some milliseconds).
+export function nearAround(x: number, y: number, z: number, max: number): number {
+  const R = NEAR_R[matLevel()] ?? 0; if (!R) return 0;
+  const todo: { c: Cell; d: number }[] = [];
+  for (const c of CELLS) {
+    if (c.built || c.box[0] === Infinity) continue;
+    const d = cellDist(c, x, y, z); if (d < R + BUILD_AHEAD) todo.push({ c, d });
+  }
+  todo.sort((a, b) => a.d - b.d);
+  const n = Math.min(Math.max(0, max), todo.length);
+  for (let k = 0; k < n; k++) buildCell(todo[k].c);
+  return todo.length - n;
 }

@@ -201,3 +201,6 @@ The clients are trusted: a modified client can report anything about its own tan
   position off the river (more than 2 units over a bank) is ignored too.
 - `MAX_PLAYERS` people (default 24); the bots come on top (up to `TEAM_SIZE` a team, issue #24).
 - A socket that stops answering the server's pings is dropped within 30 s.
+- After `welcome` a page may load for a while (issue #31: textures, shaders; seconds) before its first `st`. Until then the
+  player is in (counted, `join` sent, its team's bot gone) but not in `snap.p`: no capture, no hits; snapshots, `obj` and the
+  rest come as usual. A page that gives up closes its socket.
