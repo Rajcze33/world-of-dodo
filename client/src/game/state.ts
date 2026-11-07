@@ -2,13 +2,20 @@
 // that needs them (the original kept them as variables in one big closure).
 import type { TransformNode } from '@babylonjs/core';
 
-// 'intro': the name form over the orbiting city (the browser's own city); 'drive': in the game (the city comes from the server)
+// 'intro': the name form over the orbiting city (the browser's own city); 'drive': in the game (the city comes from the server).
+// World of DODO, issue #31: 'load': after Start, behind the loading screen (ui/loading.ts), until everything is ready: the city, the
+// textures, the connection, the first snapshot, the shaders (main.ts startRun). The game's world runs then (the server's city, the
+// round), but nothing is drawn, nothing is sent and no key drives.
 export const G = {
-  state: 'intro' as 'intro' | 'drive',
+  state: 'intro' as 'intro' | 'load' | 'drive',
   camMode: 0,                       // 0: behind the tank, 1: high above it (C or the camera button)
   realSec: 0,                       // seconds since driving out (the start hint shows for the first few)
   hold: false,                      // World of DODO, issue #24: the break after a round (game/teams.ts): nobody fires, no hit counts
+  spawned: false,                   // World of DODO, issue #31: in 'load', the vehicle has its place already (the first snapshot came)
 };
+// World of DODO, issue #31: is the vehicle in its place in the city: in the game, or loading after its spawn. A new round or a move to
+// the other team respawns it then (game/teams.ts, net/net.ts); before the spawn the spawn itself takes the new team into account.
+export const inPlay = () => G.state === 'drive' || (G.state === 'load' && G.spawned);
 
 // the player's vehicle: a tank or (World of DODO, issue #14) a plane, or (issue #20) a ship on the Vltava. k: what it is now (0 a tank,
 // 1 a plane, 2 a ship), next: what the next (re)spawn gives, swT: switching to it (a countdown, game/tank.ts switchVehicle); y, p: a

@@ -22,7 +22,8 @@ import { DATA, ARENA, BLOCKS, NODES, SITE, DEPOT, SOLIDS, groundH, freeAt, inAre
 import { pointInPoly, polyArea, polyCentroid, polyBox } from '../../shared/geom.ts';
 import { registerProp, applyGroup } from './props';
 import type { Prop } from '../game/types';
-import { bakeTiles, tileB } from './tiles';
+import { bakeTiles, tileB, part, type Build } from './tiles';
+import { roofLevelOnce } from './facade';
 import { prepareBuildings, buildBuildings, facadeMat } from './buildings';
 import { buildLandmarks, FLOOD } from './landmarks';
 import { buildRoads, SHELTERS } from './roads';
@@ -40,11 +41,12 @@ const KEEP_OFF: number[][] = [];
 const keptOff = (x: number, z: number, m: number) => KEEP_OFF.some(b => x > b[0] - m && x < b[2] + m && z > b[1] - m && z < b[3] + m);
 
 // ---------- the first part: up to the traffic ----------
-export function buildCity() {
-  const { bs, P } = prepareBuildings();
-  const skip = buildLandmarks(bs, P);
-  buildBuildings(bs, P, skip);
-  buildRoads();
+// (World of DODO, issue #31: a builder, run in slices by main.ts before the start; every step as before, in the same order)
+export function* buildCity(): Build {
+  const { bs, P } = yield* part(prepareBuildings(), 0, 0.12);
+  const skip = yield* part(buildLandmarks(bs, P), 0.12, 0.18);
+  yield* part(buildBuildings(bs, P, skip), 0.18, 0.48);
+  yield* part(buildRoads(), 0.48, 0.84);
   // the props stay off the site, the depot and its yard, and the tram shelters
   if (SITE) { const A = SITE.area; KEEP_OFF.push([A.x0 - 1, A.z0 - 1, A.x1 + 1, A.z1 + 1]); }
   if (DEPOT.p) {                                                    // the hall and its yard in front (15 towards the street)
@@ -52,8 +54,8 @@ export function buildCity() {
     KEEP_OFF.push([b[0] - (DEPOT.fx < 0 ? Y : 0), b[1] - (DEPOT.fz < 0 ? Y : 0), b[2] + (DEPOT.fx > 0 ? Y : 0), b[3] + (DEPOT.fz > 0 ? Y : 0)]);
   }
   for (const s of SHELTERS) KEEP_OFF.push([s.x - 3.6, s.z - 3.6, s.x + 3.6, s.z + 3.6]);
-  trees();
-  lamps();
+  yield* part(trees(), 0.84, 0.95);
+  yield* part(lamps(), 0.95, 1);
 }
 
 // ---------- trees ----------
@@ -120,11 +122,13 @@ function tree(x: number, z: number, s: number) {
 // The trees, in this order: karlin.json's (OpenStreetMap's trees and tree rows), then a few more in the parks lying on the blocks
 // (a jittered grid, hashed), then the Christmas tree with its little ring of trees. Each only where it stands free of the houses.
 const XMAS = { x: 0, z: 0, on: false }; let XMAS_G: TransformNode | null = null;
-function trees() {
+// (World of DODO, issue #31: a builder, as the city's (tiles.ts Build): the data's trees, the parks', then the meshes and the props)
+function* trees(): Build {
   const spots: number[] = [];
   const ok = (x: number, z: number, m: number) => freeAt(x, z, m) && !keptOff(x, z, 1.5);
   const T = DATA.trees;
   for (let i = 0; i + 2 < T.length; i += 3) if (ok(T[i], T[i + 1], 0.4)) spots.push(T[i], T[i + 1], T[i + 2]);
+  yield 0.3;
   const near = (x: number, z: number, r: number) => { for (let k = 0; k < spots.length; k += 3) if (Math.abs(spots[k] - x) < r && Math.abs(spots[k + 1] - z) < r && Math.hypot(spots[k] - x, spots[k + 1] - z) < r) return true; return false; };
   let extra = 0;
   DATA.parks.forEach((q, pi) => {
@@ -138,6 +142,7 @@ function trees() {
       spots.push(jx, jz, 0.8 + 0.4 * hash01(Math.round(jx * 10), Math.round(jz * 10))); extra++;
     }
   });
+  yield 0.6;
   // the Christmas tree: in the biggest square, where it has room
   let big = -1, ba = 0; DATA.plazas.forEach((q, i) => { const a = Math.abs(polyArea(q)); if (a > ba) { ba = a; big = i; } });
   if (big >= 0) {
@@ -157,6 +162,7 @@ function trees() {
   for (let k = 0; k < ring.length; k += 3) tree(ring[k], ring[k + 1], ring[k + 2]);
   for (const ims of TREE_CH) if (ims.length) cullByBox(ims);
   TREE_SPOTS = all;
+  yield 1;
 }
 let TREE_SPOTS: number[] = [];
 
@@ -165,11 +171,13 @@ let TREE_SPOTS: number[] = [];
 // not where the kerb is the arena's edge (no street there), not on a house, a tree, the site or the depot. Instanced, so each can
 // be knocked over (they are props).
 const LAMP_STEP = 18;
-function lamps() {
+// (World of DODO, issue #31: a builder, as the city's (tiles.ts Build): 40 blocks' kerbs a unit, then the meshes and the props)
+function* lamps(): Build {
   const specs: { x: number; z: number; phi: number }[] = [], juncs = NODES.filter(n => n.e.length >= 3);
   const nearJunc = (x: number, z: number) => juncs.some(n => Math.hypot(n.x - x, n.z - z) < n.r + 4.5);
-  for (const B of BLOCKS) {
-    const p = B.p, n = p.length;
+  for (let b = 0; b < BLOCKS.length; b++) {
+    if (b % 40 === 39) yield 0.7 * b / BLOCKS.length;
+    const p = BLOCKS[b].p, n = p.length;
     for (let i = 0; i < n; i += 2) {
       const j = (i + 2) % n, ax = p[i], az = p[i + 1], dx = p[j] - ax, dz = p[j + 1] - az, L = Math.hypot(dx, dz); if (L < 6) continue;
       const ux = dx / L, uz = dz / L, ox = uz, oz = -ux, cnt = Math.max(1, Math.floor(L / LAMP_STEP)), s0 = (L - (cnt - 1) * LAMP_STEP) / 2;
@@ -183,6 +191,7 @@ function lamps() {
       }
     }
   }
+  yield 0.7;
   // shared lamp in local coordinates: base at the origin (pavement), arm and head towards local +x (= over the street), light pool on the road
   const poleG = Bucket(); boxB(poleG, 0, 0, 0, 0.22, 6.6, 0.22, COL.charcoal); boxB(poleG, 0.6, 6.3, 0, 1.4, 0.16, 0.2, COL.charcoal);
   const headG = Bucket(); boxB(headG, 0.9, 5.95, 0, 0.55, 0.35, 0.55, 0xffffff);
@@ -207,6 +216,7 @@ function lamps() {
     applyLamp(p);
   }
   for (const ims of CH) if (ims.length) cullByBox(ims);
+  yield 1;
 }
 // a tree (registered so far) within r of (x, z)?
 function treeNear(x: number, z: number, r: number) {
@@ -216,9 +226,11 @@ function treeNear(x: number, z: number, r: number) {
 
 // ---------- the second part: after the traffic, up to baking the meshes ----------
 let DIRT = Bucket(), POOLS = Bucket();
-export function finishCity() {
+// (World of DODO, issue #31: a builder too, the same steps in the same order; at its end the roofs get the material of the quality
+// level, so that the shaders compiled before the start are the ones the game draws)
+export function* finishCity(): Build {
   DIRT = Bucket(); POOLS = Bucket();
-  site();
+  site(); yield 0.04;
   depotHall();
   redlineHall();
   if (XMAS.on) market();
@@ -228,18 +240,22 @@ export function finishCity() {
     dotPositions.forEach((p, i) => { o.position.set(p[0], p[1], p[2]); o.scale.setAll(p[3]); im.setMatrixAt(i, o.updateMatrix()); });
     im.update();
   }
+  yield 0.08;
   // ---------- finalize merged meshes ----------
   // World of DODO, issue #27: the lit tiles follow the weather (core/matlib.ts setWeatherLook): their vertex colours already show today's
   // snowy night, so the library's 'baked' mode adds no snow layer (no change at the default weather) but thaws what is snow-white and
   // faces up (the snow on the far roofs, on cornices, ledges and shelters) to a bare grey as the snow goes, and the rain darkens all of
   // it (cornices, the shop band, frames, pediments) with a sheen. The glow tiles stay as they are: they are lights (lit windows, shop
   // windows, signs, the clocks), which neither snow nor rain changes.
-  bakeTiles({ fac: facadeMat(), vc: weatherMat({ tint: 0xffffff, double: true, baked: true, snow: 1, wet: 0.6 }), glow: basic(0xffffff, { double: true }) });
+  yield* part(bakeTiles({ fac: facadeMat(), vc: weatherMat({ tint: 0xffffff, double: true, baked: true, snow: 1, wet: 0.6 }), glow: basic(0xffffff, { double: true }) }), 0.08, 0.92);
   bake('floodlit', FLOOD, lambert(0xffffff, { emissive: 0x3e4240, emissiveIntensity: 1 }), true);   // the church and the memorial
+  yield 0.96;
   const dm = lambert(0xffffff); dm.zOffset = -1; dm.zOffsetUnits = -6;
   bake('siteDirt', DIRT, dm, false);
   bake('pools', POOLS, basic(COL.light, { map: poolTex, transparent: true, opacity: 0.2, depthWrite: false, additive: true, double: true }), false);
   DIRT = Bucket(); POOLS = Bucket();
+  roofLevelOnce();
+  yield 1;
 }
 
 // ---------- World of DODO: the construction site on its lot (map.ts SITE, client/shared/site.ts) ----------

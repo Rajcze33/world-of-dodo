@@ -13,7 +13,7 @@ import { TEAM_COL, TEAM_NAME, ZONES, DEPOTS, DEPOT_HP, ROUND_PTS, homeSide } fro
 import { lambert } from '../core/mat';
 import { hexCss, now } from '../core/util';
 import { T } from '../texts';
-import { G } from './state';
+import { G, inPlay } from './state';
 import { NET, renderBoard } from '../net/net';
 import { flash } from '../ui/hud';
 import { respawn } from './tank';
@@ -109,10 +109,12 @@ export function objMsg(m: ObjMsg, first = false) {
   }
   renderBoard();
 }
-// a new round: the personal points from zero (the server has zeroed its own), my vehicle back in my half, as after being destroyed
+// a new round: the personal points from zero (the server has zeroed its own), my vehicle back in my half, as after being destroyed.
+// World of DODO, issue #31: also while loading once the vehicle has its place (inPlay); the loading screen then builds the near
+// detail round the new place too (main.ts). Before the spawn there is nothing to move: the spawn comes in my half anyway.
 function newRound() {
   NET.pts = 0; for (const o of NET.others.values()) o.pts = 0;
-  if (G.state === 'drive') { respawn(); flash(T.newRound); }
+  if (inPlay()) { respawn(); flash(T.newRound); }
 }
 // I reported a hit on depot i (net/net.ts netThit): a damage the next obj brings is mine
 export function thitSent(i: number) { if (TM.thit[i] !== undefined) TM.thit[i] = now(); }

@@ -8,6 +8,13 @@
 // zone captures it in both players' HUDs; his parcels damage a depot of B in both players' views.
 // Issue #26, Velemlok: Rosta's ship card counts down to the giant salamander; with a server that calls it soon (MON_FIRST_S=60
 // MON_EVERY_S=5 MON_LIFE_S=90) it surfaces in both players' views and Rosta's shells hit it for team A (else that part is skipped).
+// Issue #31, the loading: first, alone, Tom's page, whose textures never come, gets in with them late. Rosta's join form works before
+// the game's code runs and answers his typing while the city is built behind it; his Start shows the loading screen, whose one bar
+// never goes back, and he comes in with his tank away from the others and the cells round him built; Petr clicks Start before the
+// game's code is there and gets in once it is; both pages build the same city; after Esc a new start waits only for the network.
+// Dana's page goes back to the form in every way a start can end early (Esc before the city, Esc before the welcome, no first
+// snapshot, no server, a taken name); a page without WebGL says the game cannot start. Every page notes its slow input events, long
+// tasks and script downloads from its first moment, and every page but the one without WebGL must end with a clean console.
 // Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
@@ -28,6 +35,13 @@ const RU = require('../client/shared/rules.ts');   // issue #24: the teams, the 
 const MS = require('../client/shared/monster.ts'); // issue #26: Velemlok's numbers
 // issue #26: Velemlok's fight is tested when it comes at most this many seconds after the test reaches it
 const MON_SOON = 150;
+// issue #31: the messages the loading tests expect (client/src/texts.ts, the Czech ones: the pages load without ?lang=en)
+const TXT = (() => {
+  const src = fs.readFileSync(path.join(__dirname, '../client/src/texts.ts'), 'utf8');
+  const t = k => (new RegExp('\\b' + k + ': "([^"]+)"').exec(src) || [])[1];
+  return { errConn: t('errConn'), noStart: t('noStart') };
+})();
+const STEPS = ['city', 'tex', 'net', 'snap', 'warm'];      // issue #31: the loading screen's steps in order (client/src/ui/loading.ts)
 
 // ---------- World of DODO, issue #16: real places in Karlín for the scenes below, found in the map ----------
 const r2 = v => Math.round(v * 100) / 100;
@@ -102,29 +116,68 @@ const BASE = (process.argv[2] || 'http://localhost:3400').replace(/\/$/, '');
 const OUT = process.argv[3] || path.join(process.cwd(), 'test-shots');
 const CHROME = process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const SLOW = { timeout: 120000 };
+// issue #31: a start from the join form's first moment: the game's code, the city built in slices, the shaders compiled in software
+// while other pages draw (a minute or more headless)
+const LOADING = { timeout: 280000 };
 const BLUE = 2, BLUE_HEX = 0x4d8dff;           // the third swatch
 let failed = 0;
 const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) failed++; };
 
-// team (issue #24): 0 A, 1 B, or nothing for the form's default (automatic)
-async function player(browser, name, viewport, color, team) {
-  const ctx = await browser.createBrowserContext();   // its own storage, like another person's browser
+// World of DODO, issue #31: what every page notes from its first moment, before its own scripts run: input events slower than a
+// frame (the Event Timing API; processingStart - startTime is how long a key waited for the page), the long tasks, and every script
+// chunk it fetched (an observer, not the resource buffer, which stops at 250 entries)
+function watch() {
+  const BT = window.BT = { ev: [], lt: [], js: [] };
+  const obs = (type, f, o) => { try { new PerformanceObserver(l => l.getEntries().forEach(f)).observe({ type, buffered: true, ...o }); } catch (_) { /* not supported */ } };
+  obs('event', e => BT.ev.push([e.name, Math.round(e.startTime), Math.round(e.processingStart - e.startTime), Math.round(e.duration)]), { durationThreshold: 16 });
+  obs('longtask', e => BT.lt.push([Math.round(e.startTime), Math.round(e.duration)]));
+  obs('resource', e => { if (/\/app\/[^/]+\.js$/.test(e.name)) BT.js.push([Math.round(e.startTime), e.name.replace(/^.*\//, ''), e.decodedBodySize, Math.round(e.responseEnd)]); });
+}
+// A person's browser (its own storage) on the page, watched from its first moment. ovr: issue #31's test switches (window.WOD_OVR,
+// client/src/globals.d.ts), set before the page's scripts run; setup(page): anything else before it loads. Resolves once the join
+// form works (LOAD.t.form; issue #31: Start works from then on, the game's code comes after it).
+async function open(browser, viewport, ovr, setup) {
+  const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.setViewport(viewport || { width: 960, height: 600 });
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') page.errors.push(m.text()); });
+  await page.evaluateOnNewDocument(watch);
+  if (ovr) await page.evaluateOnNewDocument(o => { window.WOD_OVR = o; }, ovr);
+  if (setup) await setup(page);
   await page.goto(BASE + '/?test', { waitUntil: 'domcontentloaded', ...SLOW });
-  await page.waitForFunction(() => !document.getElementById('startBtn').disabled, SLOW);
-  if (name) {
-    await page.type('#nameIn', name);
-    if (color !== undefined) await page.click(`#swatches input[value="${color}"]`);
-    if (team !== undefined) await page.click(`input[name=team][value="${team}"]`);
-    await page.click('#startBtn');
-    await page.waitForFunction(() => window.WOD && WOD.state === 'drive', SLOW);
-  }
+  await page.waitForFunction(() => window.WOD_LOAD && WOD_LOAD.t.form > 0, { ...SLOW, polling: 20 });
   return page;
 }
+// the join form: the name, the colour and the team (issue #24: 0 A, 1 B, or nothing for the form's default, automatic); Start
+async function start(page, name, color, team) {
+  await page.$eval('#nameIn', e => { e.value = ''; });
+  await page.type('#nameIn', name);
+  if (color !== undefined) await page.click(`#swatches input[value="${color}"]`);
+  if (team !== undefined) await page.click(`input[name=team][value="${team}"]`);
+  await page.click('#startBtn');
+}
+const inGame = page => page.waitForFunction(() => window.WOD && WOD.state === 'drive', LOADING);
+// issue #31: after Start, the loading screen (it shows 250 ms after the click unless the game is in sooner) into a screenshot
+async function loadingShot(page, file) {
+  await page.waitForFunction(() => !document.getElementById('loading').hidden || (window.WOD && WOD.state === 'drive'), LOADING);
+  const up = await page.evaluate(() => !document.getElementById('loading').hidden);
+  if (up) await page.screenshot({ path: path.join(OUT, file) });
+  return up;
+}
+async function player(browser, name, viewport, color, team, ovr) {
+  const page = await open(browser, viewport, ovr);
+  if (name) { await start(page, name, color, team); await inGame(page); }
+  return page;
+}
+// a person closes the browser: nothing in its console but what allow expects (issue #31: every page is checked)
+async function bye(page, who, allow) {
+  const errs = page.errors.filter(e => !(allow && allow.test(e)));
+  check(!errs.length, `no errors in ${who}'s console${errs.length ? ': ' + errs.join(' | ') : ''}`);
+  await page.browserContext().close();
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // put the tank at (x,z) facing h, standing still
 const place = (page, x, z, h) => page.evaluate((x, z, h) => Object.assign(WOD.car, { x, z, h, v: 0 }), x, z, h);
@@ -165,24 +218,103 @@ async function shoot(a, b, petrHits) {
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const browser = await puppeteer.launch({
-    executablePath: CHROME, headless: true, protocolTimeout: 240000,
+    executablePath: CHROME, headless: true, protocolTimeout: 330000,
     args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'],
   });
   try {
-    const intro = await player(browser, null);
-    await frames(intro, 3);
-    await intro.screenshot({ path: path.join(OUT, '1-intro.png') });
-    check((await intro.$$('#swatches input')).length === 12, 'the join form offers 12 tank colours');
-    check((await intro.$$eval('input[name=team]', l => l.map(i => i.value + (i.checked ? '*' : '')).join())) === 'auto*,0,1', 'issue #24: the join form offers a team, automatic by default, A or B');
-    await intro.close();
+    // issue #31, first and alone in the browser (so the shaders' pre-warm has the machine to itself and its time limit says something
+    // about the textures): textures that never come (every .webp held back, their limit 3 s). Tom gets in with them late, not the
+    // shaders; every city_* mesh is ready meanwhile on its stand-ins; then they come
+    {
+      const held = []; let hold = true;
+      const tm = await open(browser, null, { texMs: 3000 }, async p => {
+        await p.setRequestInterception(true);
+        p.on('request', r => { if (hold && /\/assets\/.+\.webp$/.test(new URL(r.url()).pathname)) held.push(r); else r.continue().catch(() => {}); });
+      });
+      await start(tm, 'Tom');
+      await inGame(tm);
+      const tx = await tm.evaluate(() => {
+        const ms = WOD.scene.meshes.filter(m => m.name.startsWith('city_'));
+        return { late: WOD_LOAD.last.late, ms: WOD_LOAD.last.ms, pwl: WOD.boot.preWarmLate, n: ms.length, notReady: ms.filter(m => !m.isReady(true)).map(m => m.name) };
+      });
+      check(held.length > 0 && tx.late.includes('tex') && !tx.late.includes('warm') && tx.pwl === false,
+        `textures held back (${held.length}): Tom is in after ${tx.ms} ms with them late (late: ${tx.late.join()}; pre-warm late: ${tx.pwl})`);
+      check(tx.n > 0 && !tx.notReady.length, `meanwhile every city_* mesh is ready on its stand-ins (${tx.n - tx.notReady.length}/${tx.n}${tx.notReady.length ? '; not: ' + tx.notReady.slice(0, 5).join(', ') : ''})`);
+      hold = false; held.splice(0).forEach(r => r.continue().catch(() => {}));
+      await frames(tm, 3);
+      await bye(tm, 'Tom');
+    }
 
-    const a = await player(browser, 'Rosta', null, BLUE, 0);
+    // issue #31, the first moments: Rosta's join form works before any of the game's code runs (LOAD.t.form before eval1, the
+    // engine's stage), and a name typed at once echoes while the city is still being built behind the form; then the city fades in
+    // (html.city). The marks, the slowest key, the long tasks and the build's times go into the log (the budgets: the pull request).
+    const a = await open(browser);
+    await a.type('#nameIn', 'abc');
+    const early = await a.evaluate(() => ({ v: document.getElementById('nameIn').value, city: WOD_LOAD.isDone('city') }));
+    check(early.v === 'abc' && !early.city, `typed at once, the name field echoes ("${early.v}") while the city is still being built`);
+    await a.screenshot({ path: path.join(OUT, '0-form-before-city.png') });
+    // the slowest key must cover the whole load (the import stages, main.ts's evaluation, the build's slices, the pre-warm), not only
+    // the form's first moment, before the first stage began: so Rosta keeps typing, a key every 75 ms, until the city is in (an x and
+    // a Backspace: the field stays "abc", for 1-intro.png)
+    const typeUntil = Date.now() + LOADING.timeout;
+    for (let i = 0; Date.now() < typeUntil && !await a.evaluate(() => document.documentElement.classList.contains('city')); i++) {
+      await a.keyboard.press(i % 2 ? 'Backspace' : 'KeyX'); await sleep(75);
+    }
+    if ((await a.$eval('#nameIn', e => e.value)) !== 'abc') await a.keyboard.press('Backspace');   // (the city came after an x)
+    await a.waitForFunction(() => document.documentElement.classList.contains('city'), LOADING);
+    const boot = await a.evaluate(() => ({ t: WOD_LOAD.t, ms: WOD.boot && WOD.boot.ms, longest: WOD_LOAD.longest, keys: BT.ev.filter(e => e[0] === 'keydown'), lt: BT.lt,
+      pre: BT.js.filter(j => j[3] <= WOD_LOAD.t.form) }));                    // (the script downloaded before the form worked)
+    const preKB = boot.pre.reduce((n, j) => n + j[2], 0) / 1024;
+    check(boot.t.form < boot.t.eval1 && preKB <= 60, `the form works (${Math.round(boot.t.form)} ms) before the game's code runs (${Math.round(boot.t.eval1)} ms), on ${preKB.toFixed(1)} KB of script (${boot.pre.map(j => j[1]).join(', ')})`);
+    console.log(`     marks (ms from navigation): ${Object.entries(boot.t).sort((x, y) => x[1] - y[1]).map(([k, v]) => k + ' ' + Math.round(v)).join(', ')}`);
+    // (each window on its own: the import stages to the end of main.ts's evaluation, the build's slices to the city, the pre-warm after it)
+    const worst = (lo, hi) => Math.max(0, ...boot.keys.filter(e => e[1] >= lo && e[1] < hi).map(e => e[2]));
+    console.log(`     slowest key while loading waited ${worst(0, Infinity)} ms (the import stages ${worst(0, boot.t.code)}, the build ${worst(boot.t.code, boot.t.city)}, the pre-warm ${worst(boot.t.city, Infinity)}; ${boot.keys.length} keydowns over 16 ms); longest task from the end of the game's code's evaluation to the city ${Math.round(boot.longest)} ms`);
+    console.log(`     long tasks (start+ms): ${boot.lt.map(l => l[0] + '+' + l[1]).join(' ')}`);
+    console.log(`     the build (WOD.boot.ms): ${JSON.stringify(boot.ms)}`);
+    await frames(a, 3);
+    await a.screenshot({ path: path.join(OUT, '1-intro.png') });
+    check((await a.$$('#swatches input')).length === 12, 'the join form offers 12 tank colours');
+    check((await a.$$eval('input[name=team]', l => l.map(i => i.value + (i.checked ? '*' : '')).join())) === 'auto*,0,1', 'issue #24: the join form offers a team, automatic by default, A or B');
+
+    // issue #31, his start: the loading screen, one bar that never goes back and ends full, its label going through the steps in
+    // order; then the game: the screen gone, his tank away from everyone else's, no more of the game's code to fetch; the cells
+    // round him were built before he came in, so standing 5 s none is built in a frame
+    await start(a, 'Rosta', BLUE, 0);
+    if (!await loadingShot(a, '1b-loading.png')) console.log('     (Rosta was in before the loading screen showed)');
+    await inGame(a);
+    const run = await a.evaluate(() => ({ trace: WOD_LOAD.trace, last: WOD_LOAD.last, gap: WOD.boot.spawnGap }));
+    const ord = run.trace.map(e => STEPS.indexOf(e[2]));
+    const steady = run.trace.every((e, i) => i === 0 || (e[1] >= run.trace[i - 1][1] && ord[i] >= ord[i - 1]));
+    const labels = run.trace.filter((e, i) => i === 0 || e[2] !== run.trace[i - 1][2]).map(e => e[2] + ' ' + e[1] + '% @' + e[0]);
+    check(steady && run.trace.length > 0 && run.trace[run.trace.length - 1][1] === 100,
+      `the bar never goes back and ends full, its label through the steps in order (${labels.join(' → ')} → 100%; in after ${run.last.ms} ms, late: ${run.last.late.join() || 'none'})`);
+    check(await a.waitForFunction(() => document.getElementById('loading').hidden, { timeout: 10000 }).then(() => true, () => false), 'in the game, the loading screen is gone');
+    check(run.gap > 3, `Rosta's tank starts away from everyone else's (${run.gap && run.gap.toFixed(1)} units to the nearest)`);
+    const in0 = await a.evaluate(() => WOD.boot.near.inFrame);
+    await sleep(5000);
+    const stood = await a.evaluate(() => ({ inFrame: WOD.boot.near.inFrame, js: BT.js.filter(j => j[0] > WOD_LOAD.t.open + WOD_LOAD.last.ms).map(j => j[1]) }));
+    check(stood.inFrame === in0, `standing 5 s, no cell round him is built in a frame (${in0} → ${stood.inFrame})`);
+    check(!stood.js.length, `no more of the game's code is fetched once he is in (${stood.js.join(', ') || 'none'})`);
     // issue #16: he starts at one of the map's spawn points, on a street of Karlín (or, with all of them taken, in the depot's yard);
     // issue #24: in his team's half (A: the west)
     const s0 = await a.evaluate(() => ({ x: WOD.car.x, z: WOD.car.z }));
     check(M.SPAWNS.some(p => Math.hypot(p.x - s0.x, p.z - s0.z) < 0.5) && M.onRoad(s0.x, s0.z) && RU.homeSide(0, s0.x) || Math.hypot(M.DEPOT.park.x - s0.x, M.DEPOT.park.z - s0.z) < 0.5,
       `Rosta starts on a street, at one of the map's spawn points, in A's half (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)})`);
-    const b = await player(browser, 'Petr', null, undefined, 1);
+    // issue #31: Petr is quicker than the game's code (a slow download: WOD_OVR.importDelay holds it back 2 s, and its chunks wait
+    // until he has clicked, as headless typing can take longer than that): his Start waits for the code (LOAD.pending) and gets him
+    // in once it is there. (What the page's script itself needs, the page names: its script and modulepreload links.)
+    const own = new Set(((await (await fetch(BASE + '/')).text()).match(/\/app\/[\w.-]+\.js/g) || []));
+    let gate = true; const parked = [];
+    const b = await open(browser, null, { importDelay: 2000 }, async p => {
+      await p.setRequestInterception(true);
+      p.on('request', r => { const u = new URL(r.url()).pathname; if (gate && /^\/app\/[^/]+\.js$/.test(u) && !own.has(u)) parked.push(r); else r.continue().catch(() => {}); });
+    });
+    await start(b, 'Petr', undefined, 1);
+    const pend = await b.evaluate(() => ({ p: WOD_LOAD.t.pending, e: WOD_LOAD.t.eval1 }));
+    gate = false; parked.splice(0).forEach(r => r.continue().catch(() => {}));
+    check(pend.p > 0 && !(pend.e < pend.p), `Petr's Start before the game's code is there waits for it (at ${Math.round(pend.p)} ms)`);
+    await inGame(b);
     check((await a.evaluate(() => WOD.NET.color)) === BLUE_HEX, 'Rosta drives the blue tank he picked');
     await a.waitForFunction(() => [...WOD.NET.others.values()].some(o => o.name === 'Petr' && o.on), SLOW);
     check(true, 'Rosta sees Petr\'s tank in the city');
@@ -217,6 +349,9 @@ async function shoot(a, b, petrHits) {
       if (!(sa && sb)) await frames(a, 3);
     }
     check(sa && sb && gap(sa.cars, sb.cars) < 0.01 && gap(sa.peds, sb.peds) < 0.01, `Rosta and Petr see the same city at server time ${s} (largest gap: ${sa && sb ? gap(sa.cars, sb.cars).toFixed(3) + ' car, ' + gap(sa.peds, sb.peds).toFixed(3) + ' pedestrian' : 'no data'})`);
+    // issue #31: built in slices, between other work, the city is still the same on both pages (its props, meshes and vertices)
+    const digest = await Promise.all([a, b].map(p => p.evaluate(() => WOD.boot.digest)));
+    check(digest[0] !== undefined && digest[0] === digest[1], `both pages built the same city (digest ${digest[0]} | ${digest[1]})`);
 
     // a tank against a house's wall (issue #16: a real facade of Karlín, a footprint polygon; it was the site's fence): full speed
     // head-on does not get into it, and a tank along it that steers into it still drives on (the old blocked-or-free test stopped it
@@ -331,7 +466,7 @@ async function shoot(a, b, petrHits) {
     // (her own points are not checked: a bot of B crossing the line may take a parcel; the server's side of this is in the smoke test)
     check(byTereza === 0 && await a.evaluate(id => WOD.teams.friendly(id), terezaId),
       `Tereza's parcels do her teammate Rosta no harm and score nothing (${byTereza} hit(s) reported)`);
-    await t.close();
+    await bye(t, 'Tereza');
 
     // issue #24, a zone: Rosta's tank stands in Viadukt (in A's half); the capture runs towards A, and both his HUD and Petr's show it
     // (the zone's chip in the team bar); his own HUD shows the capture meter
@@ -535,18 +670,84 @@ async function shoot(a, b, petrHits) {
       }
     }
 
-    // names: a taken one and a bot's one are refused under the form
-    const c = await player(browser, null);
-    await c.type('#nameIn', 'petr');
-    await c.click('#startBtn');
-    await c.waitForFunction(() => !document.getElementById('joinErr').hidden, SLOW);
-    check((await c.$eval('#joinErr', e => e.textContent)).includes('jméno'), 'a taken name gets an error under the form');
-    await c.$eval('#nameIn', e => { e.value = ''; });
-    await c.type('#nameIn', 'BOT2');
-    await c.click('#startBtn');
-    await c.waitForFunction(() => document.getElementById('joinErr').textContent.includes('bot'), SLOW);
+    // issue #31, the ways back while loading: Dana's page starts again and again (WOD_OVR changed before each start) and each time
+    // ends at the join form; Petr's page notes everyone it ever had in its city and whether it ever drew them
+    await b.evaluate(() => {
+      window.SEEN = new Map(); const m = WOD.NET.others, set = m.set.bind(m);
+      m.set = (k, v) => { if (!SEEN.has(v.name)) SEEN.set(v.name, { on: false }); return set(k, v); };
+      setInterval(() => { for (const o of m.values()) if (o.on && SEEN.has(o.name)) SEEN.get(o.name).on = true; }, 50);
+    });
+    const seenD = () => b.evaluate(() => SEEN.get('Dana') || null);
+    const losesD = () => b.waitForFunction(() => ![...WOD.NET.others.values()].some(o => o.name === 'Dana'), { timeout: 5000 }).then(() => true, () => false);
+    const formOf = p => p.evaluate(() => ({
+      form: !document.getElementById('intro').hidden && document.getElementById('loading').hidden && !WOD_LOAD.isOpen() && !document.getElementById('joinForm').inert,
+      state: window.WOD ? WOD.state : null, wsGone: !!window.WOD && WOD.NET.ws === null, inGame: window.WOD ? WOD.NET.inGame : null,
+      err: document.getElementById('joinErr').hidden ? '' : document.getElementById('joinErr').textContent }));
+    // one more start with these switches (B reads them at each start); ended: that start is over (Esc, or failed)
+    const again = async (p, ovr) => {
+      const t0 = await p.evaluate(o => { window.WOD_OVR = o; return WOD_LOAD.t.open || 0; }, ovr);
+      await p.click('#startBtn');
+      return t0;
+    };
+    const ended = (p, t0) => p.waitForFunction(t => WOD_LOAD.t.open > t && !WOD_LOAD.isOpen(), LOADING, t0).then(() => true, () => false);
+    // (a) Start at once, Esc while the game's code runs and the city is not built yet: the form, the page in the intro; it never
+    // connected, so Petr never had her
+    const d = await open(browser);
+    await start(d, 'Dana');
+    const early2 = await d.waitForFunction(() => window.WOD_EVAL === 3 && !WOD_LOAD.isDone('city') && performance.now() - WOD_LOAD.t.open > 400, { ...LOADING, polling: 20 }).then(() => true, () => false);
+    await d.keyboard.press('Escape');
+    await d.waitForFunction(() => !WOD_LOAD.isOpen() && window.WOD && WOD.state === 'intro', { timeout: 30000 }).catch(() => {});
+    const fa = await formOf(d), tda = await d.evaluate(() => ({ city: WOD_LOAD.t.city, esc: WOD_LOAD.t.cancel }));
+    await sleep(3000);
+    check(early2 && fa.form && fa.state === 'intro' && tda.esc > 0 && !(tda.city < tda.esc) && !(await seenD()),
+      `Esc while the game's code runs, before the city: Dana is back at the form (${JSON.stringify(fa)}), and Petr never had her`);
+    // (b) the welcome held back: an open socket, Petr has her (not drawn); Esc: the form, the socket closed, Petr loses her
+    await again(d, { hold: 'welcome' });
+    const inB = await d.waitForFunction(() => WOD.NET.ws && WOD.NET.ws.readyState === 1, LOADING).then(() => b.waitForFunction(() => SEEN.has('Dana'), SLOW)).then(() => true, () => false);
+    await d.keyboard.press('Escape');
+    await d.waitForFunction(() => !WOD_LOAD.isOpen(), { timeout: 30000 }).catch(() => {});
+    const fb = await formOf(d), lostB = await losesD(), sbD = await seenD();
+    check(inB && fb.form && fb.state === 'intro' && fb.wsGone && lostB && sbD && !sbD.on,
+      `Esc before the welcome: Dana is back at the form, her socket closed (${JSON.stringify(fb)}); Petr had her, never drew her, lost her within 5 s (${lostB})`);
+    await b.evaluate(() => SEEN.delete('Dana'));
+    // (c) welcomed, but no snapshot comes (its limit 1.5 s): the form with "the server cannot be reached", out of the game; Petr loses her
+    let t0 = await again(d, { hold: 'snap', snapMs: 1500 });
+    const inC = await b.waitForFunction(() => SEEN.has('Dana'), SLOW).then(() => true, () => false);
+    await ended(d, t0);
+    const fc = await formOf(d), lostC = await losesD();
+    check(inC && fc.form && fc.err === TXT.errConn && fc.inGame === false && lostC,
+      `no first snapshot: Dana is back at the form with "${fc.err}" (${JSON.stringify(fc)}), and Petr lost her within 5 s (${lostC})`);
+    // (d) no server there: the form with "the server cannot be reached"
+    t0 = await again(d, { ws: 'ws://127.0.0.1:9/ws' });
+    await ended(d, t0);
+    const fd = await formOf(d);
+    check(fd.form && fd.err === TXT.errConn, `no server: Dana is back at the form with "${fd.err}"`);
+    // (e) names: a taken one (the server refuses it) and a bot's one (the form does) get an error under the form
+    await d.$eval('#nameIn', e => { e.value = ''; });
+    await d.type('#nameIn', 'petr');
+    t0 = await again(d, {});
+    await ended(d, t0);
+    await d.waitForFunction(() => !document.getElementById('joinErr').hidden, SLOW);
+    check((await d.$eval('#joinErr', e => e.textContent)).includes('jméno'), 'a taken name gets an error under the form');
+    await d.$eval('#nameIn', e => { e.value = ''; });
+    await d.type('#nameIn', 'BOT2');
+    await d.click('#startBtn');
+    await d.waitForFunction(() => document.getElementById('joinErr').textContent.includes('bot'), SLOW);
     check(true, 'a bot\'s name gets an error under the form');
-    await c.close();
+    await bye(d, 'Dana', /127\.0\.0\.1:9\b/);                         // (the browser reports (d)'s refused socket)
+
+    // issue #31: without WebGL the start button says the game cannot run here and stays off; Start opens nothing
+    {
+      const n = await open(browser, null, null, p => p.evaluateOnNewDocument(() => { HTMLCanvasElement.prototype.getContext = () => null; }));
+      await n.type('#nameIn', 'Nora');
+      const said = await n.waitForFunction(s => document.getElementById('startLbl').textContent === s && document.getElementById('startBtn').disabled, LOADING, TXT.noStart).then(() => true, () => false);
+      await n.click('#startBtn');
+      await n.$eval('#joinForm', f => f.requestSubmit());              // (a submit in spite of the disabled button)
+      await sleep(500);
+      const opened = await n.evaluate(() => WOD_LOAD.isOpen() || !document.getElementById('loading').hidden || !!window.WOD);
+      check(said && !opened, `no WebGL: the start button says "${await n.$eval('#startLbl', e => e.textContent)}" and Start opens nothing`);
+      await n.browserContext().close();                                // (its console has the engine's error: not checked)
+    }
 
     // issue #22: Esc takes Rosta back to the menu: he leaves the game (Petr sees him go), the start screen is back with his name in it,
     // and the start button brings him in again
@@ -558,14 +759,21 @@ async function shoot(a, b, petrHits) {
     await a.waitForFunction(() => WOD.state === 'drive' && WOD.NET.live, SLOW);
     await b.waitForFunction(() => [...WOD.NET.others.values()].some(o => o.name === 'Rosta' && o.on), SLOW);
     check(true, 'the start button brings Rosta back into the game, and Petr sees him again');
+    // issue #31: the city and the textures were there already and the city was built once: the new start waited for the network only
+    const anew = await a.evaluate(() => ({ last: WOD_LOAD.last, builds: WOD.boot.builds }));
+    check(anew.last.pre.includes('city') && anew.last.pre.includes('tex') && !anew.last.pre.includes('net') && anew.builds === 1,
+      `the new start waits only for the network (done before it: ${anew.last.pre.join()}; the city built ${anew.builds}×; in after ${anew.last.ms} ms)`);
 
     // Petr leaves: Rosta's city and scoreboard lose him
-    await b.close();
+    await bye(b, 'Petr');
     await a.waitForFunction(() => ![...WOD.NET.others.values()].some(o => o.name === 'Petr'), SLOW);
     check(!(await row(a, 'Petr')), 'when Petr leaves, his tank and row go');
 
     // a phone: the HUD and the scoreboard fit
-    const m = await player(browser, 'Mobil', { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, 5);
+    const m = await open(browser, { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+    await start(m, 'Mobil', 5);
+    await loadingShot(m, '6a-phone-loading.png');                      // issue #31: the loading screen on a phone
+    await inGame(m);
     await m.waitForFunction(() => [...WOD.NET.others.values()].filter(o => o.on).length >= 2, SLOW);
     await frames(m, 6);
     await m.screenshot({ path: path.join(OUT, '6-phone.png') });

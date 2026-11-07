@@ -19,12 +19,16 @@
 // a tank goes on along its heading for at most EXTRAP ms instead of stopping dead.
 // INTERP: a player's row can wait up to a tick on the server and the next snapshot comes a tick later, so two ticks (100 ms) plus room
 // for the network's jitter.
+// World of DODO, issue #31: the connection is made behind the loading screen (main.ts startRun), once the city is built (a snapshot
+// needs BODIES). welcome and the first snapshot are two of its steps (onWelcome, onFirstSnap); until the game begins this page sends
+// no st, so the server keeps it out of the snapshots (docs/PROTOCOL.md, Limits). A connection lost while loading is not tried again:
+// the page goes back to the form with T.errConn (main.ts abortRun); in the game it is, as before.
 import { Matrix, type Material, type StandardMaterial, type TransformNode } from '@babylonjs/core';
 import { camera, canvas, scene } from '../core/engine';
 import { $ } from '../core/dom';
 import { lerp, angLerp, r2, hexCss } from '../core/util';
 import { groundH, segHit } from '../world/grid';
-import { G, car, view } from '../game/state';
+import { G, car, view, inPlay } from '../game/state';
 import type { Other, Row } from '../game/types';
 import { TM, objMsg, teamsWelcome, flagTeam, teamCss, teamHex, teamName, thitSent, friendly, type ObjMsg } from '../game/teams';
 import { DEPOTS } from '../../shared/rules.ts';
@@ -40,7 +44,7 @@ import { nextShot, showShot } from '../game/shots';
 import { startImpactFx } from '../game/fx';
 import { flash } from '../ui/hud';
 import { PERF } from '../game/quality';
-import { start } from '../main';
+import { onWelcome, onFirstSnap, abortRun } from '../main';
 import { monSnap, monObj, monAttack, monResult, monReset } from '../game/monster';
 import { WORLD, BODIES, worldClear, worldMsg, worldSnap, propMsg, propsDown } from './world';
 
@@ -53,20 +57,15 @@ export type Tag = HTMLDivElement & { visible: boolean; px: number; py: number; p
 // another player or a bot as this module keeps it: the shared fields (game/types.ts), its own paint, its tag
 export interface NetOther extends Other { tag: Tag; mat: Material }
 
+// (issue #31: snaps, the snapshots since the last welcome: the first one is a step of the loading screen)
 export const NET = {
-  ws: null as WebSocket | null, id: 0, name: '', color: 0, pts: 0, want: false, live: false, inGame: false, err: '', retry: 0, retryT: 0, sendT: 0, sid: 0, rr: 0,
+  ws: null as WebSocket | null, id: 0, name: '', color: 0, pts: 0, want: false, live: false, inGame: false, err: '', retry: 0, retryT: 0, sendT: 0, sid: 0, rr: 0, snaps: 0,
   off: null as number | null, pingAt: 0, others: new Map<number, NetOther>(),
   team: -1, teamPick: 'auto' as 'auto' | 0 | 1,   // issue #24: my team (0 A, 1 B; -1 none yet), and the one asked for in the join form
   key: Array.from(crypto.getRandomValues(new Uint8Array(24)), b => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[b & 63]).join(''),   // this page load: a reconnect keeps the score, a reload starts at 0
 };
-// the colours a player can pick; the server accepts only these (COLORS in server/server.js, same order)
-export const TANK_COLORS = [0x00a99a, 0xf9aa8f, 0x4d8dff, 0xf2c94c, 0x9b6bff, 0xff7eb6, 0x5ad1e6, 0xff9f43, 0xa3d977, 0xeaebeb, 0x7b8cff, 0xc59b6d];
-// the same cleaning as on the server: no control or invisible characters, no < >, at most 16 characters
-export function cleanName(s: unknown) {
-  const t = String(s || '').normalize('NFC').replace(/[\p{C}<>]/gu, '').replace(/\s+/g, ' ').trim();
-  return Array.from(t).slice(0, 16).join('').trim();
-}
-export const botName = (s: string) => /^bot\s*\d+$/i.test(s);   // BOT1, bot 2, ...: kept for the bots
+// (World of DODO, issue #31: the colours, the name's cleaning and the join form's error line moved to ui/join.ts, the page's first
+// script: the form works before this module is loaded)
 export function netName(id: number) { const o = NET.others.get(id); return o ? o.name : '?'; }
 // the server's clock seen from here: the offset of the fastest snapshot so far (a slower one only adds network delay), creeping up slowly
 // in case the route got longer; null until the first snapshot
@@ -99,16 +98,27 @@ export function bodyAt(b: Row[] | null | undefined, R: number, jumpD: number): t
   return o;
 }
 export function netSend(m: object) { if (NET.live && NET.ws && NET.ws.readyState === 1) NET.ws.send(JSON.stringify(m)); }
+// World of DODO, issue #31, only with ?test (tools/browser-test.js, window.WOD_OVR): another server (ws), and a welcome or the first
+// snapshot never let through (hold), to see the loading screen's time limits and its way back
+const TEST = new URLSearchParams(location.search).has('test');
 export function netConnect() {
+  const ovr = TEST ? window.WOD_OVR ?? {} : {}, hold = ovr.hold;
   let ws: WebSocket;
-  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { netFail(T.errConn); return; }
+  try { ws = new WebSocket(ovr.ws || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { netFail(T.errConn); return; }
   NET.ws = ws;
   ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: NET.name, color: NET.color, key: NET.key, team: NET.teamPick }));
-  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } if (NET.ws === ws) netMsg(m); };
+  ws.onmessage = e => {
+    let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+    if (NET.ws !== ws || (hold === 'welcome' && !NET.live) || (hold === 'snap' && m.t === 'snap')) return;
+    netMsg(m);
+  };
   ws.onclose = () => {
     if (NET.ws !== ws) return;
     const was = NET.live; NET.ws = null; NET.live = false;
-    if (!NET.inGame) { if (NET.want) netFail(NET.err || T.errConn); return; }                       // never got in: back to the name form
+    if (!NET.inGame) { if (NET.want) netFail(NET.err || T.errConn, !!NET.err); return; }           // never got in: back to the name form
+    // World of DODO, issue #31: welcomed but still loading: back to the form (Q8), not round again (it could go on for ever behind
+    // the screen); the time limits of the loading screen would end it anyway
+    if (G.state === 'load') { abortRun(T.errConn, 'screen'); return; }
     NET.others.forEach(netDrop); NET.others.clear(); renderBoard();
     if (was) flash(T.lost);
     NET.retry = Math.min(5000, (NET.retry || 500) * 2); NET.retryT = setTimeout(netConnect, NET.retry);   // in the game: keep driving, keep trying
@@ -118,9 +128,11 @@ export function netConnect() {
 function netMsg(m: any) {
   if (m.t === 'snap') {
     clockSample(m.ts);
+    const first = NET.snaps++ === 0;
     for (const s of m.p) { const o = NET.others.get(s[0]); if (o) pushRow(o.buf, { t: s[7] ?? m.ts, x: s[1], z: s[2], h: s[3], v: s[4], r: s[5], s: s[6], k: s[8] || 0, y: s[9] || 0, p: s[10] || 0, a: s[11] || 0, b: s[12] || 0 }); }   // t: the moment the row shows; a plane: k, y, p; a ship: k, y, p and its turrets
     worldSnap(m);
     if (m.g) monSnap(m.g, m.ts);                                                       // issue #26: Velemlok's pose while it is in the water
+    if (first) onFirstSnap();                                                          // issue #31: the loading screen's fourth step
   }
   else if (m.t === 'fire') netShot(m);
   else if (m.t === 'w') worldMsg(m);
@@ -152,14 +164,18 @@ function netMsg(m: any) {
     NET.others.forEach(netDrop); NET.others.clear(); m.players.forEach(netAdd);
     teamsWelcome(m.game); renderBoard();                                               // issue #24: the round as it stands
     monReset(); if (m.game?.g) monObj(m.game.g, true);                                 // issue #26: Velemlok as it stands
-    NET.off = null; worldClear();                                                      // the server may have restarted: a new clock, a new city
-    if (!NET.inGame) { NET.inGame = true; WORLD.on = true; start(); } else flash(T.back);
+    NET.off = null; worldClear(); NET.snaps = 0;                                       // the server may have restarted: a new clock, a new city
+    // issue #31: the first welcome is a step of the loading screen (main.ts onWelcome: a fresh start of this page's world, no spawn
+    // yet: that waits for the first snapshot, which says where the others are); a later one is a reconnect in the game
+    if (!NET.inGame) { NET.inGame = true; WORLD.on = true; onWelcome(); } else flash(T.back);
     propsDown(m.props);
   }
   else if (m.t === 'err') NET.err = ({ name_taken: T.errTaken, name_reserved: T.errReserved, full: T.errFull } as Record<string, string>)[m.code] || T.errName;   // the server closes the socket next
 }
-// never got in: back to the name form (and the mouse, locked for a plane at the start button, let go)
-function netFail(msg: string) { if (document.pointerLockElement) document.exitPointerLock(); NET.want = false; const b = $<HTMLButtonElement>('startBtn'); b.disabled = false; $('startLbl').textContent = T.start; joinErr(msg); }
+// never got in: back to the name form (and the mouse, locked for a plane at the start button, let go). World of DODO, issue #31:
+// through the loading screen (main.ts abortRun), which closes the socket and clears what the start began; the server's refusal (a name
+// taken or reserved, the game full: form) goes straight to the form, anything else shows on the screen for a moment first
+function netFail(msg: string, form = false) { NET.want = false; abortRun(msg, form ? 'form' : 'screen'); }
 // World of DODO, issue #22: back to the menu (Esc): leave the game as a closed tab does (the server drops the player and tells the
 // others), for good: no reconnecting, and the next start joins anew. The city goes back to the browser's own (main.ts backToMenu).
 export function netLeave() {
@@ -184,7 +200,7 @@ function setTeam(id: unknown, t: unknown) {
   const team = t === 0 || t === 1 ? t : -1;
   if (id === NET.id) {
     const was = NET.team; NET.team = team; TM.on = team >= 0; paintOwn();
-    if (was !== team && team >= 0 && G.state === 'drive') { respawn(); flash(T.teamMoved(teamName(team))); }
+    if (was !== team && team >= 0 && inPlay()) { respawn(); flash(T.teamMoved(teamName(team))); }   // (issue #31: also loading, once placed)
   } else {
     const o = NET.others.get(id as number); if (!o) return;
     o.team = team; o.tag.style.setProperty('--c', hexCss(teamHex(team, o.color)));
@@ -373,4 +389,3 @@ export function netThit(i: number, k: number, x: number, y: number, z: number, s
   const d = DEPOTS[i]; if (!d || !TM.on || G.hold || d.team === NET.team || !sid) return;
   thitSent(i); netSend({ t: 'thit', i, k, x: r2(x), y: r2(y), z: r2(z), sid });
 }
-export function joinErr(msg: string) { const e = $('joinErr'); e.textContent = msg; e.hidden = !msg; }

@@ -10,7 +10,7 @@ import { DATA, terrainH, nearestEdge } from '../../shared/map.ts';
 import { polyCentroid, pointInPoly } from '../../shared/geom.ts';
 import { Bucket, type P3 } from '../core/geo';
 import { faceN, prism, orient, extent, wall, hash01 } from './poly';
-import { tileB } from './tiles';
+import { tileB, type Build } from './tiles';
 import { house, shade, mix, SNOW, type Party, type Bld } from './buildings';
 
 // extra solids above the footprints' prisms, for the planes: upright boxes (centre, half sizes along u / across, turned by u)
@@ -242,18 +242,25 @@ function vitkov(b: B, rot: number, parts: B[]) {
 }
 
 // Every landmark drawn; returns the buildings whose plain extrusion they replace
-export function buildLandmarks(bs: Bld[], P: Party[]): Set<number> {
+// (World of DODO, issue #31: a builder, as the city's (tiles.ts Build): a landmark a unit, in the same order)
+export function* buildLandmarks(bs: Bld[], P: Party[]): Build<Set<number>> {
   const skip = new Set<number>(), Lm = DATA.landmarks, at = (k: string) => Lm[k] && Lm[k].b >= 0 && bs[Lm[k].b] && bs[Lm[k].b].p.length >= 6 ? Lm[k] : null;
   let L = at('church'); if (L) { church(bs[L.b], L.rot); skip.add(L.b); }
+  yield 0.2;
   L = at('forum'); if (L) { forum(L.b, bs[L.b]); skip.add(L.b); }
+  yield 0.35;
   L = at('synagogue'); if (L) { synagogue(bs[L.b], L.rot); skip.add(L.b); }
+  yield 0.5;
   L = at('kasarna'); if (L) { kasarna(L.b, bs[L.b], P[L.b]); skip.add(L.b); }
+  yield 0.65;
   L = at('theatre'); if (L) { theatre(L.b, bs[L.b], P[L.b], L.rot); skip.add(L.b); }
+  yield 0.8;
   L = at('vitkov');
   if (L) {                                                                            // the memorial and the parts standing on its footprint
     const fp = orient(bs[L.b].p), parts: number[] = [];
     bs.forEach((q, i) => { if (i !== L!.b && q.p.length >= 6 && q.far) { const [x, z] = polyCentroid(q.p); if (pointInPoly(fp, x, z)) parts.push(i); } });
     vitkov(bs[L.b], L.rot, parts.map(i => bs[i])); skip.add(L.b); for (const i of parts) skip.add(i);
   }
+  yield 1;
   return skip;
 }

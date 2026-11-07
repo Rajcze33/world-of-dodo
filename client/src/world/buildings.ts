@@ -29,9 +29,9 @@ import { tri, boxB, type Bucket, type P3 } from '../core/geo';
 import { canvasTex } from '../core/tex';
 import { lambert } from '../core/mat';
 import { scene } from '../core/engine';
-import { matLevel, onMatLevel } from '../core/matlib';
+import { matLevel, onMatLevel, standIn, loadSwap } from '../core/matlib';
 import { wall, capUp, faceN, grow, insetEdges, insetOk, minWidth, orient, dedupe, hash01 } from './poly';
-import { tileB, tileKind } from './tiles';
+import { tileB, tileKind, part, type Build } from './tiles';
 import { cellAt, addInst, nearJob, bakeCells, roofUV, roofMat, type Cell } from './facade';
 
 // the facade colours karlin.json's c indexes (KARLIN-DATA.md: cream, ochre, light grey, white, salmon, sage, grey-blue, brick)
@@ -76,11 +76,15 @@ export function facadeMat() {
   // World of DODO, issue #27: the plaster's grain (the material library's fine plaster, its normal map) on every facade, lit by the moon
   // and the lamps; one tile of the facade texture is 16 bays (40 units) across and 8 floors (some 24 units) up. On the high level only
   // (a normal map on every facade of the city costs some GPU time).
+  // (World of DODO, issue #31: a flat stand-in at once, scaled as the map is, and the map put in once it has arrived: a normal map
+  // put in while it loads kept every facade of the city from being drawn, and its shader from compiling before the start)
+  let gen = 0;
   const m = FAC_MAT, grain = (l: number) => {
-    if (l > 0) { m.bumpTexture?.dispose(); m.bumpTexture = null; return; }
+    if (l > 0) { gen++; m.bumpTexture?.dispose(); m.bumpTexture = null; return; }
     if (m.bumpTexture) return;
-    const g = new Texture('assets/mat/512/plasterBeige_n.webp', scene, false, true, Texture.TRILINEAR_SAMPLINGMODE);
-    g.uScale = BAYS * BAY / 2.5; g.vScale = 9.5; g.level = 0.8; m.bumpTexture = g;
+    const my = ++gen, sc = (t: Texture) => { t.uScale = BAYS * BAY / 2.5; t.vScale = 9.5; t.level = 0.8; return t; };
+    m.bumpTexture = sc(standIn('n', 0.8));
+    const g = loadSwap('assets/mat/512/plasterBeige_n.webp', () => { if (my !== gen) { g.dispose(); return; } const old = m.bumpTexture; m.bumpTexture = sc(g); if (old && old !== g) old.dispose(); });
   };
   grain(matLevel()); onMatLevel(grain);
   return FAC_MAT;
@@ -104,7 +108,8 @@ function capAt(bk: Bucket, A: P3, B: P3, C: P3, col: number, t: [number, number]
 // For every edge of every footprint: how much of it a neighbour's wall covers (0..1), and the neighbour's height there (the one
 // covering most). Edges match when they run the opposite way within 0.4 of each other.
 export interface Party { cov: number[]; top: number[] }
-export function parties(bs: { p: number[]; h: number }[]): Party[] {
+// (World of DODO, issue #31: a builder, as the city's (tiles.ts Build): the edges' hash a unit, then 1500 edges a unit)
+export function* parties(bs: { p: number[]; h: number }[]): Build<Party[]> {
   const H = new Hash<number>(-720, -720, 720, 720, 12), E: number[] = [], Q: number[] = [];   // E: building, edge, ax, az, bx, bz
   bs.forEach((b, bi) => {
     const p = b.p, n = p.length;
@@ -114,8 +119,10 @@ export function parties(bs: { p: number[]; h: number }[]): Party[] {
     }
   });
   const out: Party[] = bs.map(b => ({ cov: new Array(b.p.length >> 1).fill(0), top: new Array(b.p.length >> 1).fill(0) }));
-  const iv: number[][] = [];
-  for (let k = 0; k < E.length / 6; k++) {
+  const iv: number[][] = [], NE = E.length / 6;
+  yield 0.2;
+  for (let k = 0; k < NE; k++) {
+    if (k % 1500 === 1499) yield 0.2 + 0.8 * k / NE;
     const bi = E[6 * k], ax = E[6 * k + 2], az = E[6 * k + 3], bx = E[6 * k + 4], bz = E[6 * k + 5], L = Math.hypot(bx - ax, bz - az); if (L < 0.3) continue;
     const ux = (bx - ax) / L, uz = (bz - az) / L; iv.length = 0;
     for (const f of H.query(Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz), Q)) {
@@ -158,12 +165,15 @@ function glassMat(): StandardMaterial {
   if (GLASS_MAT) return GLASS_MAT;
   const m = GLASS_MAT = new StandardMaterial('glass', scene);
   m.specularColor = Color3.Black(); m.emissiveColor = Color3.Black(); m.useEmissiveAsIllumination = true;
+  // (World of DODO, issue #31: stand-ins at once, a dark glass with no glow, on the walls' own uvs as the map is; the map put in as the
+  // glow and the colour once it has arrived: a map put in while it loads kept the offices from being drawn until it had come)
+  m.diffuseTexture = standIn('c', 0.3, true); m.emissiveTexture = standIn('e', 1, true);
   let size = 0;
   const maps = (l: number) => {
     const sz = l === 0 ? 1024 : 512; if (sz === size) return; size = sz;
-    const url = 'assets/mat/' + sz + '/glassOffice_c.webp', d = new Texture(url, scene), e = new Texture(url, scene);
-    e.level = 0.85;
-    const od = m.diffuseTexture, oe = m.emissiveTexture; m.diffuseTexture = d; m.emissiveTexture = e; od?.dispose(); oe?.dispose();
+    const url = 'assets/mat/' + sz + '/glassOffice_c.webp';
+    const d = loadSwap(url, () => { if (size !== sz) { d.dispose(); return; } const od = m.diffuseTexture; m.diffuseTexture = d; if (od !== d) od?.dispose(); });
+    const e = loadSwap(url, () => { if (size !== sz) { e.dispose(); return; } e.level = 0.85; const oe = m.emissiveTexture; m.emissiveTexture = e; if (oe !== e) oe?.dispose(); });
   };
   maps(matLevel()); onMatLevel(maps);
   return m;
@@ -361,22 +371,28 @@ function roof(bi: number, B: { r: number; rh: number; k?: string }, p: number[],
 // The footprints as drawn (turned to the data's orientation, doubled points dropped) and their shared walls: landmarks.ts needs them
 // too (house() for the barracks and the theatre), so city.ts prepares them once, then draws the landmarks, then the rest.
 export type Bld = (typeof DATA.buildings)[number];
-export function prepareBuildings(): { bs: Bld[]; P: Party[] } {
-  kinds();
-  const bs = DATA.buildings.map(b => ({ ...b, p: dedupe(orient(b.p), 0.02) }));
-  return { bs, P: parties(bs) };
+// (World of DODO, issue #31: a builder: the materials, then 500 footprints a unit, then the shared walls)
+export function* prepareBuildings(): Build<{ bs: Bld[]; P: Party[] }> {
+  kinds(); yield 0.1;
+  const D = DATA.buildings, bs: Bld[] = [];
+  for (let i = 0; i < D.length; i++) { bs.push({ ...D[i], p: dedupe(orient(D[i].p), 0.02) }); if (i % 500 === 499) yield 0.1 + 0.2 * i / D.length; }
+  const P = yield* part(parties(bs), 0.3, 1);
+  return { bs, P };
 }
 // Far houses more than FAR_PLAIN beyond the arena's edge (seen only from a plane, through the fog) get plain walls instead of the window
 // texture and a flat roof: no lit windows out there, but one draw call less per tile, no texture to sample over a big part of the
 // air view, and half the triangles.
 const FAR_PLAIN = 140;
-export function buildBuildings(bs: Bld[], P: Party[], skip: Set<number>) {
-  bs.forEach((b, i) => {
-    if (b.p.length < 6 || skip.has(i)) return;
+// (issue #31: a builder, a house a unit, in the data's order as before)
+export function* buildBuildings(bs: Bld[], P: Party[], skip: Set<number>): Build {
+  for (let i = 0; i < bs.length; i++) {
+    const b = bs[i];
+    if (b.p.length < 6 || skip.has(i)) continue;
     let plain = false;
     if (b.far) { const [x, z] = polyCentroid(b.p); plain = Math.max(ARENA.x0 - x, x - ARENA.x1, ARENA.z0 - z, z - ARENA.z1) > FAR_PLAIN; }
     house(i, b, P[i], { detail: !b.far, plain, flat: plain, col: plain ? shade(PALETTE[b.c] ?? PALETTE[0], 0.8 + 0.12 * hash01(i, 5)) : undefined });
-  });
+    yield (i + 1) / bs.length;
+  }
   // World of DODO, issue #27: the arena's houses' near detail (facade.ts cells), baked now (the landmarks that use house() were drawn
   // before)
   bakeCells();

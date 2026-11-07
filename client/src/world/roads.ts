@@ -26,7 +26,7 @@ import { lambert } from '../core/mat';
 import { COL } from '../core/colors';
 import { matTex } from '../core/matlib';
 import { wall, capUp, capDown, faceN, prism, orient, grow } from './poly';
-import { tileB, tileKind } from './tiles';
+import { tileB, tileKind, part, type Build } from './tiles';
 import { shade } from './buildings';
 
 // (issue #27: the pavements', kerbs', squares', parks' and roads' colours are their materials' tints now, core/matlib.ts)
@@ -107,7 +107,8 @@ function rails(pts: [number, number][], dy: number, bed: boolean, gy?: (x: numbe
 // issue #27: a tram track set in the street: one strip of the rails texture along it
 const trackIn = (pts: [number, number][], dy: number, gy?: (x: number, z: number) => number) => strip(TR, pts, -TRACK_W / 2, TRACK_W / 2, dy, WHITE, gy, true);
 
-export function buildRoads() {
+// (issue #31: a builder: a block's pavement, a far road, each of the other parts and each bake a unit, in the same order as before)
+export function* buildRoads(): Build {
   PV = Bucket(); KB = Bucket(); KT = Bucket(); SQ = Bucket(); PK = Bucket(); MK = Bucket(); TR = Bucket(); BD = Bucket(); FR = Bucket(); SHELTERS.length = 0;
   kinds();
   // the carriageways: one plane over the arena at 0 (the terrain outside it lies a hair lower, land.ts). Issue #27: dry asphalt; under
@@ -115,37 +116,48 @@ export function buildRoads() {
   // (snow 0): the asphalt has no joints to fill, asphaltSnow is its snow, and the street is most of the picture: a texture read less
   const A = ARENA, asphalt = geoMesh('streets', rotateX(planeGeo(A.x1 - A.x0, A.z1 - A.z0), -Math.PI / 2), STREET(0), false, true);
   asphalt.position.set((A.x0 + A.x1) / 2, 0, (A.z0 + A.z1) / 2); asphalt.freezeWorldMatrix();
+  yield 0.01;
   // the pavements: every block raised to 0.3 with its kerb (issue #27: mosaic on top, granite kerbs with a granite strip on their edge)
-  for (const B of BLOCKS) {
-    const p = B.p, n = p.length, g = grow(p, -KERB_TOP);
+  for (let b = 0; b < BLOCKS.length; b++) {
+    const p = BLOCKS[b].p, n = p.length, g = grow(p, -KERB_TOP);
     for (let i = 0; i < n; i += 2) {
       const j = (i + 2) % n; wall(KB, p[i], p[i + 1], p[j], p[j + 1], 0, 0.3, WHITE);
       faceN(KT, [[p[i], 0.3, p[i + 1]], [p[j], 0.3, p[j + 1]], [g[j], 0.3, g[j + 1]], [g[i], 0.3, g[i + 1]]], [0, 1, 0], WHITE);
     }
     capUp(PV, p, 0.3, WHITE);
+    yield 0.01 + 0.02 * (b + 1) / BLOCKS.length;
   }
   // the squares (setts) and the parks lying on the blocks (a winter lawn under the snow)
   for (const q of DATA.plazas) capUp(SQ, orient(q), 0.315, WHITE);
+  yield 0.04;
   for (const q of DATA.parks) if (onBlocks(q)) capUp(PK, orient(q), 0.33, WHITE);
+  yield 0.06;
   // World of DODO, issue #16 (4. 11.): the streets of Prague round the arena, for the planes: strips lying on the terrain (or on a
   // bridge's deck), going on where the arena's streets leave it
   // (issue #20: a bridge over the river lies on its deck slab, its top at y; the others float as before)
-  for (const r of DATA.farRoads || []) {
-    const y = r.y, onDeck = y !== undefined && deckTop((r.pts[0] + r.pts[2]) / 2, (r.pts[1] + r.pts[3]) / 2, 0.1) === y;
+  const far = DATA.farRoads || [];
+  for (let k = 0; k < far.length; k++) {
+    const r = far[k], y = r.y, onDeck = y !== undefined && deckTop((r.pts[0] + r.pts[2]) / 2, (r.pts[1] + r.pts[3]) / 2, 0.1) === y;
     const gy = y === undefined ? landY : () => y;
     strip(FR, dense(r.pts, 5), -r.w / 2, r.w / 2, y === undefined ? 0.06 : onDeck ? 0.03 : 0.25, WHITE, gy);
+    if (k % 8 === 7) yield 0.06 + 0.24 * (k + 1) / far.length;
   }
-  laneDashes(); zebras(); tram(); railway();
-  bake('pavements', PV, matTex('mosaic', { macro: 0.2 }), false);
-  bake('kerbs', KB, matTex('granite'), false);
-  bake('kerbTops', KT, matTex('granite', { zOffset: 3 }), false);
-  bake('squares', SQ, matTex('setts', { zOffset: 4, macro: 0.2 }), false);
-  bake('parks', PK, matTex('gravel', { tint: 0x5e6553, scale: 2.5, zOffset: 4, macro: 0.45, wet: 0.5 }), false);
-  bake('roadMarks', MK, decal(8), false);
-  bake('tramTrack', TR, matTex('rails', { uv: 'mesh', scale: TRACK_W / 1.9, zOffset: 6, snow: 0.3 }), false);
-  bake('trackBeds', BD, matTex('gravel', { zOffset: 6 }), false);
+  yield 0.3;
+  laneDashes(); yield 0.33;
+  zebras(); yield 0.36;
+  yield* part(tram(), 0.36, 0.55);
+  yield* part(railway(), 0.55, 0.7);
+  bake('pavements', PV, matTex('mosaic', { macro: 0.2 }), false); yield 0.74;
+  bake('kerbs', KB, matTex('granite'), false); yield 0.78;
+  bake('kerbTops', KT, matTex('granite', { zOffset: 3 }), false); yield 0.82;
+  bake('squares', SQ, matTex('setts', { zOffset: 4, macro: 0.2 }), false); yield 0.85;
+  bake('parks', PK, matTex('gravel', { tint: 0x5e6553, scale: 2.5, zOffset: 4, macro: 0.45, wet: 0.5 }), false); yield 0.88;
+  bake('roadMarks', MK, decal(8), false); yield 0.91;
+  bake('tramTrack', TR, matTex('rails', { uv: 'mesh', scale: TRACK_W / 1.9, zOffset: 6, snow: 0.3 }), false); yield 0.94;
+  bake('trackBeds', BD, matTex('gravel', { zOffset: 6 }), false); yield 0.97;
   bake('farRoads', FR, STREET(2), false);
   PV = Bucket(); KB = Bucket(); KT = Bucket(); SQ = Bucket(); PK = Bucket(); MK = Bucket(); TR = Bucket(); BD = Bucket(); FR = Bucket();
+  yield 1;
 }
 // a park polygon is drawn only where it lies wholly on the raised blocks (else it would cover a street at the wrong height)
 function onBlocks(q: number[]): boolean {
@@ -189,7 +201,8 @@ function zebras() {
 // Rails along the track the tram really drives (client/shared/tram.ts TRAM_PATH: the data's loop, pulled in towards Sokolovská's
 // middle so that a tram fits on its narrow carriageway, the turning loops outside the arena on a gravel bed), the other tram tracks
 // of the outer zone (where they are not the loop's own), and a shelter at every stop on the right of the track (the doors' side)
-function tram() {
+// (World of DODO, issue #31: a builder: the loop's track, then four of the other tracks a unit, then the shelters)
+function* tram(): Build {
   const P = TRAM_PATH.pts; if (P.length < 2) return;
   const track: [number, number][] = []; for (let i = 0; i < P.length; i += 2) track.push(P[i]);   // a point every ~2 units is enough
   track.push(P[0]);
@@ -207,11 +220,15 @@ function tram() {
   const other = (run: [number, number][]) => {
     for (const r of runs(run, setIn)) { if (r.on) trackIn(r.pts, 0.06, trackY); else { strip(BD, r.pts, -1.5, 1.5, 0.04, WHITE, trackY); rails(r.pts, 0.06, false, trackY); } }
   };
-  for (const t of DATA.tram.tracks) {
-    const d = dense(t, 3); let run: [number, number][] = [];
+  yield 0.2;
+  const TT = DATA.tram.tracks;
+  for (let k = 0; k < TT.length; k++) {
+    if (k % 4 === 3) yield 0.2 + 0.6 * k / TT.length;
+    const d = dense(TT[k], 3); let run: [number, number][] = [];
     for (const q of d) { if (!near(q[0], q[1]) && !wetTrack(q[0], q[1])) run.push(q); else { if (run.length > 1) other(run); run = []; } }
     if (run.length > 1) other(run);
   }
+  yield 0.8;
   // the shelters: on the pavement beyond the kerb to the right of the stop (tram.ts TRAM_STOP_AT), facing the track, moved along it
   // a little where a house or a lamp's corner is in the way
   for (const st of TRAM_STOP_AT) {
@@ -224,6 +241,7 @@ function tram() {
       shelter(x, z, Math.atan2(rx, rz)); break;
     }
   }
+  yield 1;
 }
 // issue #27: a polyline cut into the runs where on(point) is the same (each run starts at the last point of the one before)
 function runs(pts: [number, number][], on: (q: [number, number]) => boolean): { on: boolean; pts: [number, number][] }[] {
@@ -250,11 +268,14 @@ function shelter(x: number, z: number, a: number) {
 // ---------- the railway ----------
 // lines on the ground: a gravel bed and two rails on the terrain; bridges: the deck slabs and piers map.ts made solid, with parapets
 // and the rails on top; the Negrelli viaduct (the decks at 6.4, in and by the arena): stone arches between its piers
-function railway() {
-  for (const r of DATA.rail) {
-    const d = r.bridge ? dense(r.pts, 1e9) : dense(r.pts, 8);                         // on a bridge it is level: no need to follow the ground
+// (World of DODO, issue #31: a builder: 16 lines' rails a unit, the decks and piers, then each viaduct's arches a unit)
+function* railway(): Build {
+  for (let k = 0; k < DATA.rail.length; k++) {
+    if (k % 16 === 15) yield 0.3 * k / DATA.rail.length;
+    const r = DATA.rail[k], d = r.bridge ? dense(r.pts, 1e9) : dense(r.pts, 8);         // on a bridge it is level: no need to follow the ground
     if (r.bridge) rails(d, 0.02, false, () => r.deck); else rails(d, 0.08, true, (x, z) => inArena(x, z) ? groundH(x, z) : landY(x, z) + 0.06);
   }
+  yield 0.3;
   for (const s of SOLIDS) {
     if (s.kind !== 'deck' && s.kind !== 'pier' && s.kind !== 'roaddeck') continue;
     // (issue #27: the stone in the sandstone material, the road decks concrete, the track's bed on a deck gravel: tiles.ts kinds)
@@ -278,6 +299,7 @@ function railway() {
   // the arches: between two piers of the same line at most three steps apart (wider where a street passes and a pier was left out).
   // World of DODO, issue #20: the piers found where they stand on the line (over the river they keep the river's spans, not the land's
   // step), each pier's middle within 0.4 of it
+  yield 0.6;
   const at: At = { x: 0, z: 0, hx: 1, hz: 0, k: 0 }, tmp: typeof SOLIDS = [];
   for (const r of DATA.rail) {
     if (!r.bridge || Math.abs(r.deck - 6.4) > 0.01) continue;
@@ -295,7 +317,9 @@ function railway() {
       const s0 = piers[k] + PIER_L / 2, s1 = piers[k + 1] - PIER_L / 2; if (s1 - s0 > 3 * PIER_STEP) continue;
       arch(P, cum, s0, s1, r.deck - 1);
     }
+    yield 0.8;
   }
+  yield 1;
 }
 // World of DODO, issue #20: a road bridge's deck over the river (a map.ts 'roaddeck' strip, its long sides edges 0→1 and 2→3): a
 // concrete slab with a darker fascia, and a parapet along both sides

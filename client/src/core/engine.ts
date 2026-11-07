@@ -3,6 +3,10 @@
 // Created when this module is first imported, so every other module can use `scene` at once. The scene is right-handed
 // (useRightHandedSystem), as three.js was in the original: x east, z south, y up, a heading h faces (sin h, cos h), and the
 // geometry winds counter-clockwise seen from the front (core/geo.ts builds it that way).
+//
+// World of DODO, issue #31: entry.ts imports this module as its own stage; core/evalmark1.ts comes first so the page can tell a stage
+// that never downloaded from one that threw here (no WebGL).
+import './evalmark1';
 import {
   Engine, Scene, FreeCamera, Vector3, HemisphericLight, DirectionalLight, ShadowGenerator, Mesh, VertexData,
   StandardMaterial, Color3, type AbstractMesh,

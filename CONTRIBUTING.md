@@ -33,6 +33,14 @@ Zerops right away, so run the checks before you ask for a merge.
   module holds only constants and functions. Write like the code around you and explain the *why*
   in comments. Changes made for World of DODO (against the original Christmas game) are marked
   "World of DODO" in comments.
+- **The city is built in slices** (issue #31) behind the join form, so the page answers its input
+  while it is built: the boot in `main.ts` and the big builders (`buildCity`, `finishCity`, ...) are
+  generators (`function*`) that `core/slice.ts` steps through, and they `yield` only between units of
+  work (a house, a street, a tile kind's bake), never inside one. Between two slices other code runs,
+  so nothing that draws from `R` or registers a prop may run there: it stays inside a unit, in its
+  order. A new build step takes its place in that order (and a long one yields between its units);
+  a unit over about 30 ms is split further. The page's first script, `entry.ts`, stays light (no
+  Babylon.js, no map: `tools/smoke.js` checks it): what the join form needs goes into `ui/join.ts`.
 - **The 3D conventions** (`client/src/core/geo.ts`): the scene is right-handed, shapes are built as
   triangle lists that wind counter-clockwise from the front, and the shape helpers follow three.js
   (a cylinder stands on y, a plane faces +z). Use `lambert`/`basic` from `core/mat.ts` for materials,
@@ -56,7 +64,7 @@ Zerops right away, so run the checks before you ask for a merge.
   Changing what draws from `R` (or the build order in `main.ts`) changes the city for everyone; that is
   fine, as long as the server and all players run the same version.
 - **Some numbers still live twice** and must stay in step:
-  - the tank colours: `COLORS` in `server/server.js` and `TANK_COLORS` in the client (same order);
+  - the tank colours: `COLORS` in `server/server.js` and `TANK_COLORS` in the client (`client/src/ui/join.ts`, same order);
   - tank size, parcel physics and the hit rules: the server mirrors the client (`TANK_L/W/H`, the parcel's
     gravity, bounce and ground in `server/shots.js`; `SLOW_T`, `DEAD_T`, the bot's wall circles
     `BOT_C`/`BOT_CR` in `server/bots.js` against `TANK_C`/`TANK_CR` in `client/src/game/tank.ts`);
