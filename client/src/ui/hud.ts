@@ -50,8 +50,18 @@ export function toast(m: string) {
   if (m) { t.textContent = m; t.classList.remove('off'); } else t.classList.add('off');
 }
 // a message for 3.5 s; the drive loop shows it in the toast (game/tank.ts updateDrive), over the start hint
+// World of DODO, issue #34: and a priority and a length. The toast is one line, and a zone captured a second later used to replace
+// the "quality lowered" message before anyone could read it. So the zones' and depots' news comes at priority -1 (game/teams.ts)
+// and is dropped while a message above 0 (the quality's, game/quality.ts) is running: not queued, news that late is stale.
+// Everything else is priority 0 and replaces any running message, as before: being shot dead, toppled or cut off has to be said
+// (a rule of "a lower priority waits" kept those out for the quality message's 5 s).
 export let flashMsg = '', flashUntil = 0;
-export function flash(m: string) { flashMsg = m; flashUntil = now() + 3500; }
+let flashPrio = 0;
+export function flash(m: string, prio = 0, ms = 3500) {
+  const t = now();
+  if (t < flashUntil && prio < 0 && flashPrio > 0) return;
+  flashMsg = m; flashUntil = t + ms; flashPrio = prio;
+}
 
 function initPage() {
   addEventListener('error', backstop);

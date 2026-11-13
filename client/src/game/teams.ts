@@ -87,15 +87,16 @@ export function objMsg(m: ObjMsg, first = false) {
     const owner = z[0] === 0 || z[0] === 1 ? z[0] : -1, p = Number(z[1]) || 0, ts = typeof m.ts === 'number' ? m.ts : t;
     const dt = (ts - TM.zts[i]) / 1000;
     if (TM.zts[i] && dt > 0.05) TM.zr[i] = Math.abs(p) >= 100 ? 0 : (p - o[1]) / dt; else if (!TM.zts[i]) TM.zr[i] = 0;
-    if (!first && owner !== o[0] && owner >= 0) flash(T.zoneTaken(teamName(owner), zoneName(i)));
+    // World of DODO, issue #34: zone and depot news at priority -1: a running quality message stays over it (ui/hud.ts flash)
+    if (!first && owner !== o[0] && owner >= 0) flash(T.zoneTaken(teamName(owner), zoneName(i)), -1);
     o[0] = owner; o[1] = p; TM.zts[i] = ts; TM.zat[i] = t;
   });
   (m.d || []).forEach((d, i) => {
     const o = TM.d[i]; if (!o || !Array.isArray(d)) return;
     const hp = Number(d[0]) || 0;
     if (!first && hp < o[0]) {
-      if (hp <= 0 && mine >= 0) flash(DEPOTS[i].team === mine ? T.depotLost : T.depotOurs);
-      else if (t - TM.thit[i] < 3000) flash(T.depotHit);
+      if (hp <= 0 && mine >= 0) flash(DEPOTS[i].team === mine ? T.depotLost : T.depotOurs, -1);
+      else if (t - TM.thit[i] < 3000) flash(T.depotHit, -1);
     }
     o[0] = hp; o[1] = Number(d[1]) || 0;
   });

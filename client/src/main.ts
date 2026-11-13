@@ -47,6 +47,7 @@ import { JOIN, JOIN_HOOK, type Join } from './ui/join';
 import { run, yieldNow, SLICE, SLICE_MS, type Work } from './core/slice';
 import { nearAround, NEAR } from './world/facade';
 import { matIssued, startUploads, stopUploads } from './core/matlib';
+import { ASSET } from './core/assets';
 
 const TEST = new URLSearchParams(location.search).has('test');
 
@@ -339,25 +340,37 @@ async function ready(until: number, me: number, onFrac: (f: number) => void): Pr
 // come later mark it done for real (ui/loading.ts done).
 // World of DODO, issue #31: a Start watches them again when maps were asked for again since they came (texAgain); one watch at a time
 // (the guard is a cheap safety: texAgain starts none while one runs).
+// World of DODO, issue #34: and every file the game can show at any quality level is downloaded (core/assets.ts: each level's maps,
+// wanted for all levels at once as their materials are made in the build; kept as Blobs for the visit), so neither a level change
+// (Q, the automatic quality's texture step) nor anything else in the game goes to the network. Done when every map has been asked
+// for (matIssued), no download is pending (ASSET.pending; a file that failed all its tries in core/assets.ts counts as done, its material
+// keeps its tint), and
+// the scene waits for nothing (each Texture of the current level counts until it is uploaded, one a frame: matlib's queue). The
+// step's share: 85 % the bytes (nearly all of its time on a first visit), 15 % the uploads; its note says how many megabytes are in.
 let texWatching = false;
-const texIn = () => matIssued() && scene.getWaitingItemsCount() === 0;
+const texIn = () => matIssued() && ASSET.pending === 0 && scene.getWaitingItemsCount() === 0;
 // World of DODO, issue #31: does a Start now have to wait for the textures again (startRun)? Maps on their way although their step was
 // done: Q in the menu, or the automatic quality drop in the game before an Esc, asked for another level's maps. Not while the first
 // watch still runs: then the step was marked done late by a start's time limit (a slow connection) and the maps never came, and a new
-// start goes in at once with the step still late, as before (it waited the whole TEX_MS again at every Esc and Start). Only once the
+// start goes in at once with the step still late, as before (it waited the whole limit again at every Esc and Start). Only once the
 // city is done: before that boot() starts the one watch. ui/join.ts asks the same (JOIN_HOOK.texAgain) before it locks the pointer.
+// (Issue #34: the files are all in by then, so this waits for a level's uploads only, a fraction of a second.)
 const texAgainNow = () => LOAD.isDone('city') && !texWatching && !texIn();
 async function texWatch() {
   if (texWatching) return;
   texWatching = true;
   let peak = 0;
   for (;;) {
-    const w = scene.getWaitingItemsCount(); if (w > peak) peak = w;
-    if (matIssued() && w === 0) {
+    const w = scene.getWaitingItemsCount(), issued = matIssued(); if (w > peak) peak = w;
+    if (issued && ASSET.pending === 0 && w === 0) {
       texWatching = false;
+      LOAD.note('tex', ASSET.failed > 0 ? T.loadTexMiss : '');
       LOAD.done('tex'); if (G.state === 'load') BOOT.steps.tex = Math.round(performance.now() - (LOAD.t.open ?? 0)); nudge(); return;
     }
-    if (matIssued() && peak) LOAD.progress('tex', 1 - w / peak);
+    // (until every map is asked for the total still grows: the bar waits, the note counts)
+    if (issued) LOAD.progress('tex', 0.85 * (ASSET.total > 0 ? Math.min(1, ASSET.bytes / ASSET.total) : 1) + 0.15 * (peak ? 1 - w / peak : 1));
+    // (not once done late by a start's limit: the screen says that instead, and in the game nobody sees it)
+    if (!LOAD.isDone('tex')) LOAD.note('tex', ASSET.pending > 0 && ASSET.total > 0 ? T.loadTexMB(ASSET.bytes, ASSET.total) : '');
     await sleep(100);
   }
 }
@@ -366,7 +379,12 @@ async function texWatch() {
 // The time limits (ms; ?test may change them, window.WOD_OVR): the textures from the later of Start and the city's end (then the game
 // begins without them: they finish in the game); the connection from the socket's creation to welcome, the first snapshot after
 // welcome (then back to the form: T.errConn); the shaders round the spawn (then the game begins, the rest compiles as it is drawn).
-const TEX_MS = 8000, CONNECT_MS = 10000, SNAP_MS = 5000, WARM_MS = 8000;
+// World of DODO, issue #34: the textures' limit was 8 s, which a slow connection ran out of: the game began on the stand-ins (flat
+// tints) and the maps came in one by one while driving, the look the players reported as textures dropping out. Now every file of
+// every level comes first (3 MB), so the limit is a minute (on DevTools' Slow 4G they are in 17 s after the city, in the game 34 s
+// after the page was opened): only a connection that hardly moves goes in without them, and the screen says so (T.loadTexLate).
+// A download that gets no byte for 15 s is retried at once, a refused or dropped one after 2, 4 and 8 s (core/assets.ts).
+const TEX_MAX_MS = 60000, CONNECT_MS = 10000, SNAP_MS = 5000, WARM_MS = 8000;
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 // Waiting for a step: until(ok) wakes on nudge() (welcome, the first snapshot, a step done, a cancel) and checks at least every 250 ms.
 // true: ok; false: the time is up, or this start is over (RUN changed: the caller just returns then).
@@ -400,7 +418,7 @@ async function startRun(j: Join) {
   startUploads();                                                  // (if the pre-warm has not let them go yet: behind the screen now)
   at('city');
   // 2. the textures, beside the network: their time limit from now on (the later of Start and the city's end)
-  if (!LOAD.isDone('tex')) setTimeout(() => { if (alive() && !LOAD.isDone('tex')) { LOAD.done('tex', true); nudge(); } }, ovr.texMs ?? TEX_MS);
+  if (!LOAD.isDone('tex')) setTimeout(() => { if (alive() && !LOAD.isDone('tex')) { LOAD.done('tex', true); nudge(); } }, ovr.texMaxMs ?? TEX_MAX_MS);
   // 3. the connection (after the city: a snapshot needs BODIES). The server counts the player from hello on, but keeps it out of the
   // snapshots until its first st, which this page sends only in the game (docs/PROTOCOL.md, Limits).
   NET.name = j.name; NET.color = j.color; NET.teamPick = j.team; NET.want = true; NET.err = '';

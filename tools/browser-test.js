@@ -15,6 +15,11 @@
 // Dana's page goes back to the form in every way a start can end early (Esc before the city, Esc before the welcome, no first
 // snapshot, no server, a taken name); a page without WebGL says the game cannot start. Every page notes its slow input events, long
 // tasks and script downloads from its first moment, and every page but the one without WebGL must end with a clean console.
+// Issue #34, the textures: every texture of every quality level is downloaded on the loading screen, so after Rosta's first moment
+// in the game his page asks the server for no texture again, through three Q presses (each level's maps there at once, none a
+// stand-in), a minute of driving (nothing changes) and the automatic quality's steps (each one said in the toast for at least 3 s,
+// textures only as the last one, a texture step never remembered); Petr's page, which an older version left on the low level
+// (wod-quality), starts on high.
 // Saves screenshots for a look by eye.
 // Needs Chrome and puppeteer-core, which is not a dependency of the game:
 //   npm install --no-save puppeteer-core@25.14.0
@@ -39,7 +44,11 @@ const MON_SOON = 150;
 const TXT = (() => {
   const src = fs.readFileSync(path.join(__dirname, '../client/src/texts.ts'), 'utf8');
   const t = k => (new RegExp('\\b' + k + ': "([^"]+)"').exec(src) || [])[1];
-  return { errConn: t('errConn'), noStart: t('noStart') };
+  // issue #34: the quality's messages: the start of qStep and qSet (functions of a name), the auto steps' names, the levels' names
+  const fn = k => (new RegExp('\\b' + k + ": \\(\\w+: string\\)=>'([^']+)'").exec(src) || [])[1];
+  const list = k => JSON.parse((new RegExp('\\b' + k + ': (\\[[^\\]]+\\])').exec(src) || [])[1] || '[]');
+  return { errConn: t('errConn'), noStart: t('noStart'), qStep: fn('qStep'), qSet: fn('qSet'), qLevers: list('qLevers'), qNames: list('qNames'),
+    qAutoLbl: t('qAutoLbl'), qLbl: t('qLbl') };
 })();
 const STEPS = ['city', 'tex', 'net', 'snap', 'warm'];      // issue #31: the loading screen's steps in order (client/src/ui/loading.ts)
 
@@ -126,12 +135,23 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
 // World of DODO, issue #31: what every page notes from its first moment, before its own scripts run: input events slower than a
 // frame (the Event Timing API; processingStart - startTime is how long a key waited for the page), the long tasks, and every script
 // chunk it fetched (an observer, not the resource buffer, which stops at 250 entries)
+// Issue #34: and every request for a texture or another asset (as), every change of the toast line ([ms, text, shown]) and of the
+// automatic quality's step ([ms, step]), so a test can tell what the page fetched after it was in the game and what it said when.
 function watch() {
-  const BT = window.BT = { ev: [], lt: [], js: [] };
+  const BT = window.BT = { ev: [], lt: [], js: [], as: [], toast: [], steps: [] };
   const obs = (type, f, o) => { try { new PerformanceObserver(l => l.getEntries().forEach(f)).observe({ type, buffered: true, ...o }); } catch (_) { /* not supported */ } };
   obs('event', e => BT.ev.push([e.name, Math.round(e.startTime), Math.round(e.processingStart - e.startTime), Math.round(e.duration)]), { durationThreshold: 16 });
   obs('longtask', e => BT.lt.push([Math.round(e.startTime), Math.round(e.duration)]));
-  obs('resource', e => { if (/\/app\/[^/]+\.js$/.test(e.name)) BT.js.push([Math.round(e.startTime), e.name.replace(/^.*\//, ''), e.decodedBodySize, Math.round(e.responseEnd)]); });
+  obs('resource', e => {
+    if (/\/app\/[^/]+\.js$/.test(e.name)) BT.js.push([Math.round(e.startTime), e.name.replace(/^.*\//, ''), e.decodedBodySize, Math.round(e.responseEnd)]);
+    if (/\/assets\//.test(e.name)) BT.as.push([Math.round(e.startTime), e.name.replace(/^.*\/assets\//, '')]);
+  });
+  addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById('toast'); if (!el) return;
+    const note = () => { const t = el.textContent, on = !el.classList.contains('off'), l = BT.toast[BT.toast.length - 1]; if (!l || l[1] !== t || l[2] !== on) BT.toast.push([Math.round(performance.now()), t, on]); };
+    new MutationObserver(note).observe(el, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  });
+  setInterval(() => { const st = window.WOD && WOD.PERF ? WOD.PERF.step : undefined, l = BT.steps[BT.steps.length - 1]; if (st !== undefined && (!l || l[1] !== st)) BT.steps.push([Math.round(performance.now()), st]); }, 50);
 }
 // A person's browser (its own storage) on the page, watched from its first moment. ovr: issue #31's test switches (window.WOD_OVR,
 // client/src/globals.d.ts), set before the page's scripts run; setup(page): anything else before it loads. Resolves once the join
@@ -224,10 +244,11 @@ async function shoot(a, b, petrHits) {
   try {
     // issue #31, first and alone in the browser (so the shaders' pre-warm has the machine to itself and its time limit says something
     // about the textures): textures that never come (every .webp held back, their limit 3 s). Tom gets in with them late, not the
-    // shaders; every city_* mesh is ready meanwhile on its stand-ins; then they come
+    // shaders; every city_* mesh is ready meanwhile on its stand-ins; then they come. Issue #34: and every download finishes then
+    // (a held one gets no byte: its stall limit is set beyond the test, so it is neither retried nor given up meanwhile)
     {
       const held = []; let hold = true;
-      const tm = await open(browser, null, { texMs: 3000 }, async p => {
+      const tm = await open(browser, null, { texMaxMs: 3000, stallMs: 600000 }, async p => {
         await p.setRequestInterception(true);
         p.on('request', r => { if (hold && /\/assets\/.+\.webp$/.test(new URL(r.url()).pathname)) held.push(r); else r.continue().catch(() => {}); });
       });
@@ -241,6 +262,9 @@ async function shoot(a, b, petrHits) {
         `textures held back (${held.length}): Tom is in after ${tx.ms} ms with them late (late: ${tx.late.join()}; pre-warm late: ${tx.pwl})`);
       check(tx.n > 0 && !tx.notReady.length, `meanwhile every city_* mesh is ready on its stand-ins (${tx.n - tx.notReady.length}/${tx.n}${tx.notReady.length ? '; not: ' + tx.notReady.slice(0, 5).join(', ') : ''})`);
       hold = false; held.splice(0).forEach(r => r.continue().catch(() => {}));
+      const done = await tm.waitForFunction(() => window.wodAssets && wodAssets.pending === 0, SLOW).then(() => true, () => false);
+      const ta = await tm.evaluate(() => window.wodAssets && { files: wodAssets.files, failed: wodAssets.failed, pending: wodAssets.pending });
+      check(done && !!ta && ta.failed === 0, `once let through, every download finishes (${JSON.stringify(ta)})`);
       await frames(tm, 3);
       await bye(tm, 'Tom');
     }
@@ -291,6 +315,12 @@ async function shoot(a, b, petrHits) {
       `the bar never goes back and ends full, its label through the steps in order (${labels.join(' → ')} → 100%; in after ${run.last.ms} ms, late: ${run.last.late.join() || 'none'})`);
     check(await a.waitForFunction(() => document.getElementById('loading').hidden, { timeout: 10000 }).then(() => true, () => false), 'in the game, the loading screen is gone');
     check(run.gap > 3, `Rosta's tank starts away from everyone else's (${run.gap && run.gap.toFixed(1)} units to the nearest)`);
+    // issue #34: every texture of every level came on the loading screen (29 files today), none failed, none is on its way, and the
+    // step was not cut short; from here on (rostaIn) his page fetches no asset again, checked at the end of his session
+    const rostaIn = await a.evaluate(() => WOD_LOAD.t.open + WOD_LOAD.last.ms);
+    const rAs = await a.evaluate(() => window.wodAssets && { files: wodAssets.files, got: wodAssets.got, failed: wodAssets.failed, pending: wodAssets.pending, mb: +(wodAssets.bytes / 1e6).toFixed(2) });
+    check(!!rAs && rAs.files >= 29 && rAs.failed === 0 && rAs.pending === 0 && !run.last.late.includes('tex'),
+      `every texture of every level is in before the game (${JSON.stringify(rAs)}; late: ${run.last.late.join() || 'none'})`);
     const in0 = await a.evaluate(() => WOD.boot.near.inFrame);
     await sleep(5000);
     const stood = await a.evaluate(() => ({ inFrame: WOD.boot.near.inFrame, js: BT.js.filter(j => j[0] > WOD_LOAD.t.open + WOD_LOAD.last.ms).map(j => j[1]) }));
@@ -306,7 +336,10 @@ async function shoot(a, b, petrHits) {
     // in once it is there. (What the page's script itself needs, the page names: its script and modulepreload links.)
     const own = new Set(((await (await fetch(BASE + '/')).text()).match(/\/app\/[\w.-]+\.js/g) || []));
     let gate = true; const parked = [];
+    // issue #34: and an older version left his browser on the low level (wod-quality '2': the automatic drop, remembered): he starts on
+    // high all the same, and the old key is gone
     const b = await open(browser, null, { importDelay: 2000 }, async p => {
+      await p.evaluateOnNewDocument(() => { try { if (!sessionStorage.getItem('bt-q')) { sessionStorage.setItem('bt-q', '1'); localStorage.setItem('wod-quality', '2'); } } catch (_) { /* no storage */ } });
       await p.setRequestInterception(true);
       p.on('request', r => { const u = new URL(r.url()).pathname; if (gate && /^\/app\/[^/]+\.js$/.test(u) && !own.has(u)) parked.push(r); else r.continue().catch(() => {}); });
     });
@@ -315,6 +348,13 @@ async function shoot(a, b, petrHits) {
     gate = false; parked.splice(0).forEach(r => r.continue().catch(() => {}));
     check(pend.p > 0 && !(pend.e < pend.p), `Petr's Start before the game's code is there waits for it (at ${Math.round(pend.p)} ms)`);
     await inGame(b);
+    const pq = await b.evaluate(() => {
+      const st = WOD.scene.meshes.filter(m => m.isEnabled() && m.material && m.material.name === 'mat_asphalt' && m.subMeshes && m.subMeshes.length);
+      const bump = st.map(m => { const d = m.subMeshes[0].materialDefines; return d ? !!d.BUMP : !!m.material.bumpTexture; });
+      return { level: WOD.PERF.level, old: localStorage.getItem('wod-quality'), streets: st.length, bump: bump.filter(Boolean).length };
+    });
+    check(pq.level === 0 && pq.old === null && pq.streets > 0 && pq.bump === pq.streets,
+      `Petr, left on low by an older version, starts on high: the streets have their normal maps (${pq.bump}/${pq.streets}), the old key is gone (${JSON.stringify(pq)})`);
     check((await a.evaluate(() => WOD.NET.color)) === BLUE_HEX, 'Rosta drives the blue tank he picked');
     await a.waitForFunction(() => [...WOD.NET.others.values()].some(o => o.name === 'Petr' && o.on), SLOW);
     check(true, 'Rosta sees Petr\'s tank in the city');
@@ -479,6 +519,13 @@ async function shoot(a, b, petrHits) {
     // the zone's chip: held by A (class o0), or its capture bar over 30 % in A's colour
     const chip = p => p.$eval('#zones .zc', e => { const i = e.querySelector('i'); return { o0: e.classList.contains('o0'), w: parseFloat(i.style.width) || 0, c: i.style.getPropertyValue('--pc') }; });
     const chipA = c => c.o0 || (c.w > 30 && c.c === hex(RU.TEAM_COL[0]));
+    // World of DODO, issue #34: the chip is drawn in the page's next frame, after the state above (TM) has changed; in software a frame
+    // can take seconds, so it is waited for too, not read once (Petr's chip once read 28 % while his state said more than 30)
+    const chipIn = p => p.waitForFunction(col => {
+      const e = document.querySelector('#zones .zc'), i = e && e.querySelector('i');
+      return !!i && (e.classList.contains('o0') || ((parseFloat(i.style.width) || 0) > 30 && i.style.getPropertyValue('--pc') === col));
+    }, { timeout: 60000 }, hex(RU.TEAM_COL[0])).catch(() => {});
+    if (capA && capB) await Promise.all([chipIn(a), chipIn(b)]);
     const [ca, cb] = [await chip(a), await chip(b)];
     check(capA && capB && chipA(ca) && chipA(cb) && (await b.$eval('#cap', e => e.hidden)),
       `Rosta captures Viadukt for A, in his HUD (${JSON.stringify(ca)}) and in Petr's (${JSON.stringify(cb)})`);
@@ -778,15 +825,106 @@ async function shoot(a, b, petrHits) {
     await frames(m, 6);
     await m.screenshot({ path: path.join(OUT, '6-phone.png') });
 
-    // software-drawn headless Chrome is the weak computer: the quality drops by itself; F shows the readout
-    await a.waitForFunction(() => WOD.PERF.level === 2, SLOW);
-    check(true, 'the quality drops to low by itself when the frames do not keep up');
+    // issue #34, the automatic quality (game/quality.ts): software-drawn headless Chrome is the weak computer, so Rosta's page has
+    // stepped down by itself while he played (BT.steps, from his first moment): the resolution and the shadows first, the textures
+    // only as the fifth and last step. Each step down was said in the toast (a qStep message, BT.toast) and stayed there at least
+    // 3 s, whatever zone or depot news came meanwhile; F lists the steps; the step remembered for the next visit is never the
+    // textures' (wod-q: a <= 4). (Before the Q presses below: Q turns the automatic quality off for the visit.)
+    const top = await a.waitForFunction(() => WOD.PERF.step >= 5, SLOW).then(() => true, () => false);
+    const au = await a.evaluate(() => ({ steps: BT.steps, toast: BT.toast, q: localStorage.getItem('wod-q'), now: Math.round(performance.now()) }));
+    // (from the step on: drawn in software, with other pages loading beside it, a frame can take seconds, and the toast shows the
+    // message only in the next one; what matters is that nothing else takes its place within 3 s of the step)
+    const downs = au.steps.filter((x, i) => i > 0 && x[1] > au.steps[i - 1][1]);
+    const said = downs.map(([t, k], j) => {
+      const until = j + 1 < downs.length ? downs[j + 1][0] : au.now;
+      const i = au.toast.findIndex(x => x[0] >= t - 1000 && x[0] < until && x[2] && x[1].startsWith(TXT.qStep));
+      if (i < 0) return { k, ms: -1 };
+      const next = au.toast.slice(i + 1).find(x => x[1] !== au.toast[i][1] || !x[2]);
+      return { k, ms: (next ? next[0] : au.now) - t };
+    });
+    let wq = null; try { wq = JSON.parse(au.q); } catch (_) { /* not JSON */ }
+    // (a step that changes nothing for the preset is passed over: at a pixel ratio of 1 the first one, a1, lowers no resolution)
+    const t5 = downs.findIndex(x => x[1] === 5), before5 = t5 > 0 ? downs[t5 - 1][1] : t5 === 0 ? 0 : -1;
+    check(top && before5 === 4 && said.every(x => x.ms >= 3000),
+      `the quality stepped down by itself, the textures last (${au.steps.map(x => x[1]).join(' → ')}), each step said in the toast for 3 s or more (${said.map(x => 'a' + x.k + ' ' + x.ms + ' ms').join(', ') || 'no step'})`);
+    check(!!wq && wq.a <= 4 && wq.m === 0, `the textures' step is not remembered for the next visit (wod-q ${au.q})`);
     await a.keyboard.press('KeyF');
     await a.waitForFunction(() => /ping \d+ ms/.test(document.getElementById('stats').textContent), SLOW);
     const readout = await a.$eval('#stats', e => (e.hidden ? 'hidden: ' : '') + [...e.children].map(s => s.textContent).join(' | '));
-    check(/^\d+ FPS/.test(readout) && readout.includes('nízká (auto'), `F shows FPS, ping and the level (${readout})`);
+    check(/^\d+ FPS/.test(readout) && readout.includes(TXT.qLbl + ': ' + TXT.qNames[0]) && readout.includes(TXT.qAutoLbl) && readout.includes(TXT.qLevers[4]),
+      `F shows FPS, ping, the level and the automatic steps taken (${readout})`);
     await frames(a, 3);
-    await a.screenshot({ path: path.join(OUT, '7-low-quality-readout.png') });
+    await a.screenshot({ path: path.join(OUT, '7-quality-readout.png') });
+    await a.keyboard.press('KeyF');
+
+    // issue #34, Q: the first press after the automatic steps brings the preset back as it was (high, the steps undone); then three
+    // presses go to medium, low and high again. Each change takes its maps from what the loading screen downloaded (no request: the
+    // check at the end), and once its uploads are done (matlib's queue empty, nothing waiting) no material in use on high shows a
+    // stand-in (a 1x1 map) and the library's colour maps are filtered at anisotropy 4; each press says what it chose (qSet).
+    // (In a tank: in a ship Q fires the torpedoes.)
+    const settled = p => p.waitForFunction(() => window.wodMat.queued() === 0 && WOD.scene.getWaitingItemsCount() === 0, SLOW).then(() => true, () => false);
+    const inUse = p => p.evaluate(() => {
+      const seen = new Set(), out = { maps: 0, stand: [], aniso: [] };
+      for (const me of WOD.scene.meshes) {
+        const m = me.material; if (!m || !me.isEnabled() || seen.has(m) || !/^(mat_|weather$|glass$|roof)/.test(m.name)) continue; seen.add(m);
+        const pl = m.pluginManager && m.pluginManager.getPlugin('WodSurface');
+        for (const [k, t] of [['c', m.diffuseTexture], ['n', m.bumpTexture], ['a', pl && pl.alt]]) {
+          if (!t) continue; out.maps++;
+          const z = t.getSize(); if (z.width <= 1 && z.height <= 1) out.stand.push(m.name + '.' + k);
+          if (k === 'c' && m.name.startsWith('mat_') && t.anisotropicFilteringLevel !== 4) out.aniso.push(m.name + ' ' + t.anisotropicFilteringLevel);
+        }
+      }
+      return out;
+    });
+    check((await a.evaluate(() => WOD.car.k)) === 0, 'Rosta is in his tank for the Q presses');
+    const presses = [];
+    // (the toast is read as soon as it changes: the uploads of a level, one a frame, take longer in software than its 3.5 s)
+    const press = async want => {
+      const n0 = await a.evaluate(() => BT.as.length);
+      await a.keyboard.press('KeyQ');
+      const said = await a.waitForFunction((s, n) => { const t = document.getElementById('toast').textContent; return t.startsWith(s) && t.includes(n) ? t : ''; },
+        { timeout: 30000 }, TXT.qSet, TXT.qNames[want]).then(h => h.jsonValue(), () => '');
+      const ok = await a.waitForFunction(l => WOD.PERF.level === l && WOD.PERF.step === 0, { timeout: 30000 }, want).then(() => true, () => false) && await settled(a);
+      await frames(a, 3);
+      const r = await a.evaluate(n => ({ level: WOD.PERF.level, reqs: BT.as.length - n }), n0);
+      presses.push(r.level + ' "' + (said || 'no message') + '" ' + r.reqs + ' req');
+      return ok && r.reqs === 0 && !!said;
+    };
+    const restored = (await a.evaluate(() => WOD.PERF.step)) > 0 ? await press(0) : true;
+    const cycled = [await press(1), await press(2), await press(0)];
+    const hi = await inUse(a);
+    check(restored && cycled.every(Boolean) && hi.maps > 0 && !hi.stand.length && !hi.aniso.length,
+      `Q: the preset back, then medium, low and high, each with no request and said in the toast (${presses.join('; ')}); on high again ${hi.maps} maps in use, stand-ins: ${hi.stand.join(', ') || 'none'}, anisotropy not 4: ${hi.aniso.join(', ') || 'none'}`);
+
+    // issue #34, what the players reported: a minute of driving with the automatic quality off, forward along the streets (put on
+    // the next spawn point when stuck), a sample every 2 s: the level, every library material's colour map and the count of
+    // stand-ins in use never change, and there is no stand-in
+    await a.evaluate(() => { WOD.PERF.auto = false; WOD.K.up = true; });
+    const sample = () => a.evaluate(() => {
+      const c = WOD.scene.materials.filter(m => m.name.startsWith('mat_')).map(m => { const t = m.diffuseTexture; return m.name + '=' + (!t ? '-' : t.getSize().width <= 1 ? '1x1' : String(t.url || '').replace(/^.*\//, '')); }).sort().join();
+      let stand = 0;
+      for (const me of WOD.scene.meshes) {
+        const m = me.material; if (!m || !me.isEnabled() || !/^(mat_|weather$|glass$|roof)/.test(m.name)) continue;
+        for (const t of [m.diffuseTexture, m.bumpTexture]) if (t && t.getSize().width <= 1 && t.getSize().height <= 1) stand++;
+      }
+      return { level: WOD.PERF.level, step: WOD.PERF.step, c, stand, x: WOD.car.x, z: WOD.car.z };
+    });
+    const s0q = await sample(), drift = []; let prev = s0q, moved = 0, jumps = 0;
+    for (const until = Date.now() + 60000; Date.now() < until;) {
+      await sleep(2000);
+      const q = await sample();
+      if (q.level !== s0q.level || q.step !== s0q.step || q.c !== s0q.c || q.stand !== s0q.stand || q.stand) drift.push(Math.round((until - 60000 - Date.now()) / -1000) + ' s: level ' + q.level + ', step ' + q.step + ', stand-ins ' + q.stand + (q.c !== s0q.c ? ', maps changed' : ''));
+      const d = Math.hypot(q.x - prev.x, q.z - prev.z); moved += d;
+      if (d < 0.5) { const sp = M.SPAWNS[jumps++ % M.SPAWNS.length]; await place(a, sp.x, sp.z, sp.h); await a.evaluate(() => { WOD.K.up = true; }); }
+      prev = q;
+    }
+    await a.evaluate(() => { WOD.K.up = false; WOD.car.v = 0; });
+    check(!drift.length && !s0q.stand, `a minute of driving: the textures stay as they are (${moved.toFixed(0)} units driven, ${jumps} jump(s) to a spawn point; ${drift.slice(0, 4).join('; ') || 'no change'})`);
+
+    // issue #34: after his first moment in the game Rosta's page fetched no texture or other asset: not through the automatic steps,
+    // the Q presses, the minute of driving, nor his new start after Esc
+    const lateAs = await a.evaluate(t => BT.as.filter(x => x[0] > t).map(x => x[1]), rostaIn);
+    check(!lateAs.length, `after his first moment in the game Rosta's page fetched no asset (${lateAs.length}${lateAs.length ? ': ' + lateAs.slice(0, 5).join(', ') : ''})`);
 
     for (const [n, p] of [['Rosta', a], ['Mobil', m]]) check(!p.errors.length, `no errors in ${n}'s console${p.errors.length ? ': ' + p.errors.join(' | ') : ''}`);
   } finally {
