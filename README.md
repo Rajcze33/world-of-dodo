@@ -85,8 +85,11 @@ Last Mile), the 3D delivery game DODO made for Christmas 2026, where the deliver
   down lies there for a while, then is gone and walks again somewhere else.
 - **Names only in plain sight.** A tank's name glows above it only while nothing stands between you,
   and it shows on the minimap only once you have spotted it. The scoreboard lists everybody.
-- **Runs on modest hardware.** The quality drops by itself when the frames do not keep up; F shows
-  FPS, ping and the level, Q changes the level by hand (not in a ship, where Q launches torpedoes).
+- **Runs on modest hardware.** When the frames do not keep up the game lowers its quality by itself,
+  a step at a time and says so: the resolution, the shadows, and only as the last step the textures
+  (issue #34); it raises it again when the frames have room. F shows FPS, ping, the level and the
+  steps taken; Q brings the level back or changes it by hand (not in a ship, where Q launches
+  torpedoes). Only the level chosen by hand and the steps above the textures are remembered.
 - Czech by default, English with `?lang=en`. Works on phones (touch controls).
 
 ## Našli jste chybu nebo máte nápad?
@@ -160,9 +163,10 @@ The streets, pavements, walls and roofs have real materials (issue #27): CC0 tex
 and ice, and the roofs of Karlín cut from the orthophoto of **IPR Praha** (CC BY 4.0, "data base © IPR Praha"). They are made
 into small WebP files in `client/public/assets/` (`mat/` the materials, `roofs/` the roofs) by the scripts in
 [tools/assets/](tools/assets/README.md) from the downloaded sources, which are not in the repository; [ASSETS.md](ASSETS.md) lists
-every file, where it comes from and what it is for. The game loads only what it draws, in the size of its quality level, and the
-weather (snow, wet streets, the river's ice in frost) lies on the materials as it is set (`setWeatherLook` in
-`client/src/core/matlib.ts`), never baked into them.
+every file, where it comes from and what it is for. The game downloads every file it can show at any quality level before it
+begins (issue #34: 29 files, about 3 MB; `client/src/core/assets.ts`), keeps them for the visit, and decodes and uploads to the GPU
+only those of its current level, so a change of the level in the game goes to no server. The weather (snow, wet streets, the
+river's ice in frost) lies on the materials as it is set (`setWeatherLook` in `client/src/core/matlib.ts`), never baked into them.
 
 ## How it works
 
@@ -212,17 +216,20 @@ do it), so the network's jitter does not show. [docs/PROTOCOL.md](docs/PROTOCOL.
 The game page is TypeScript on [Babylon.js](https://www.babylonjs.com/), built with Vite
 (`npm run build`; the server sends `client/dist`). The scene is right-handed like the three.js
 original it was ported from (x east, z south, y up). The fonts and images are in `client/public`.
-The first load is about 1.3 MB of compressed script (Babylon.js and the map of Karlín), sent as brotli or gzip, then the textures
-of what is drawn (issue #27: the ground's about 1.3 MB at the high quality level, its colour maps alone at the medium one, at the
-low one only the small roof atlas). Since issue #31 the page's script is a light entry (`client/src/entry.ts`, about 10 KB
-compressed): it puts the texts in and fills the join form, so the form and its Start work at once, and only then loads the game
-in stages, each a task of its own: Babylon.js with the engine and the map of Karlín side by side, then the rest of the game, which
-builds the city in slices (`client/src/core/slice.ts`) behind the form, so typing a name never waits for it; the texture maps are
-requested as soon as their index is in and decoded beside the page, and go to the GPU one a frame once the shaders are ready (or
-at Start), not during the build (`client/src/core/matlib.ts`). Start opens the loading screen (`client/src/ui/loading.ts`): one bar
-for the city, the textures (8 s at most, then they finish in the game), the connection, the first snapshot and the shaders, and the
-game begins when they are done. Esc and a new start wait only for the connection again (and for the textures, if a change of the
-quality level asked for other maps meanwhile).
+The first load is about 1.3 MB of compressed script (Babylon.js and the map of Karlín), sent as brotli or gzip, the fonts (0.4 MB
+as brotli), then every texture of every quality level (issue #34: about 3 MB, so that nothing loads in the game; before, a level
+change downloaded its maps while the player drove). Since issue #31 the page's script is a light entry (`client/src/entry.ts`,
+about 10 KB compressed): it puts the texts in and fills the join form, so the form and its Start work at once, and only then loads
+the game in stages, each a task of its own: Babylon.js with the engine and the map of Karlín side by side, then the rest of the
+game, which builds the city in slices (`client/src/core/slice.ts`) behind the form, so typing a name never waits for it; the
+texture maps are requested as their materials are made in the build and decoded beside the page, and go to the GPU one a frame
+once the shaders are ready (or at Start), not during the build (`client/src/core/matlib.ts`). Start opens the loading screen
+(`client/src/ui/loading.ts`): one bar for the city, the textures (every file in, with the megabytes counted under the step, and
+the current level's maps on the GPU; a minute at most, then they finish in the game and the screen says so), the connection, the
+first snapshot and the shaders, and the game begins when they are done. Esc and a new start wait only for the connection again
+(and for the uploads, if a change of the quality level asked for other maps meanwhile).
+Every file the server sends has an ETag (issue #34): the textures and fonts may be kept for a day and the page is asked for on
+every visit, and a browser whose copy is still good gets a 304 with no body instead of the file again.
 The server loads the same `client/shared` TypeScript directly: Node 24 strips the types, so that code
 uses only erasable TypeScript (no enums, namespaces or parameter properties) and imports with `.ts`.
 

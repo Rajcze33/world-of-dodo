@@ -30,12 +30,19 @@
 // they are fetched as soon as index.json is in, beside the city's build in slices; the loading screen waits for them, up to a time
 // limit, before the game starts). The night stays: the textures are tinted towards the palette
 // (core/colors.ts), the lights are the scene's (the moon, the sky), the lit windows are emissive as before.
+// World of DODO, issue #34: the files come from core/assets.ts. A material wants its files for every level (and medium's dry and
+// snowy street) the moment it is made (wantAll), so they are all downloaded before the game; only the current level's are decoded and
+// uploaded. A level change in the game (Q, or the automatic quality's texture step, game/quality.ts) then decodes Blobs held in memory
+// and makes no request. The maps a change takes off a material are retired, not disposed at once (retire): Babylon keeps their
+// upload while they live, so a map that comes back (the streets' snowy asphalt, alt on high and the colour map on medium) is found
+// there, and they go once the change has settled.
 import {
   StandardMaterial, Texture, RawTexture, Color3, Vector3, MaterialPluginBase, type BaseTexture, type UniformBuffer, type MaterialDefines,
   type Nullable,
 } from '@babylonjs/core';
 import { scene, moon } from './engine';
 import { c3 } from './colors';
+import { want, blob, retryLater } from './assets';
 
 // ---------- the keys ----------
 // What each material is (and what the game uses it for). index.json (client/public/assets/mat) has its source, licence, texel size
@@ -84,8 +91,8 @@ const LOOK: Record<MatKey, [number, number, number]> = {
   concrete: [0xa7aaa5, 0.9, 0.6], concreteTiles: [0x8f9593, 0.8, 0.5], glassOffice: [0xffffff, 0.3, 0.3], glassOffice2: [0xffffff, 0.3, 0.3],
   roofClay: [0x9a5d48, 1, 0.8], roofSlate: [0x4a5150, 1, 0.8], roofTiles: [0x6d7270, 1, 0.8], corrugated: [0x8a908e, 1, 0.9],
 };
-// the biggest colour map of a key at this level (high: the biggest there is; else 512)
-const cSize = (info: KeyInfo) => (LEVEL === 0 ? Math.max(...info.files.c) : 512);
+// the biggest colour map of a key at a level (high: the biggest there is; else 512)
+const cSize = (info: KeyInfo, lv: number) => (lv === 0 ? Math.max(...info.files.c) : 512);
 
 export interface MatOpts {
   tint?: number;            // the colour it averages to (default: the key's); vertex colours multiply on top, so 0xffffff lets them decide
@@ -125,7 +132,7 @@ export function onWeather(f: (w: typeof WEATHER) => void) { WEATHER_FN.push(f); 
 // (medium: a material with an alt map shows the alt's map itself once the snow is half way; its maps follow the weather)
 WEATHER_FN.push(() => { if (LEVEL === 1 && INDEX) for (const e of ALL) if (e.key && e.o.alt) apply(e); });
 
-// ---------- the index (client/public/assets/mat/index.json, fetched once) ----------
+// ---------- the index (client/public/assets/mat/index.json, fetched at boot) ----------
 interface KeyInfo { texel: number; mean: number[]; rough: number; raw: boolean; height: boolean; files: { c: number[]; n: number[] } }
 let INDEX: Record<string, KeyInfo> | null = null, INDEX_FAILED = false;
 const WAITING: (() => void)[] = [];
@@ -133,18 +140,36 @@ const BASE = 'assets/mat/';
 // World of DODO, issue #31: the maps are asked for as soon as the index is in (they used to wait for the page's first idle moment
 // after the boot). The city is built in slices now while the player fills in the form (main.ts), so the downloads run beside the
 // build, and the loading screen after the start waits for them (matIssued, the scene's waiting items) up to its time limit.
-fetch(BASE + 'index.json').then(r => r.json()).then((j: { keys: Record<string, KeyInfo> }) => {
-  INDEX = j.keys; for (const f of WAITING.splice(0)) f();
-}).catch(() => { INDEX_FAILED = true; /* no textures: every material keeps its tint */ });
+// World of DODO, issue #34: tried again after a wait as core/assets.ts tries a texture (retryLater): its one try, refused during a
+// deploy's restart or a dropped link, left the whole visit without textures. Meanwhile matIssued is false, so the loading screen
+// waits for it (up to its time limit); a 404 or 410 (no such file) is final at once.
+function getIndex(tries: number) {
+  let status = 0;
+  fetch(BASE + 'index.json').then(r => { status = r.status; if (!r.ok) throw new Error('index.json: ' + r.status); return r.json(); }).then((j: { keys: Record<string, KeyInfo> }) => {
+    INDEX = j.keys; for (const f of WAITING.splice(0)) f();
+  }).catch(() => {
+    if (INDEX) return;                     // (a material's build after the index threw: not the download's fault; nothing waits)
+    if (status !== 404 && status !== 410 && retryLater(tries, () => getIndex(tries + 1))) return;
+    INDEX_FAILED = true;                   // no textures: every material keeps its tint
+  });
+}
+getIndex(1);
 // Issue #31: has every map the materials want been asked for? Then the scene's waiting items (Babylon counts every texture until it
-// has loaded or failed) say how many are still on their way. True on the low level (no library maps), and when the index failed.
-export const matIssued = () => LEVEL === 2 || INDEX_FAILED || (!!INDEX && !WAITING.length);
+// has loaded or failed) say how many are still on their way. True when the index failed.
+// (World of DODO, issue #34: every level's files, wanted from core/assets.ts, so also on the low level, which shows none of them:
+// a level change in the game must find them all in memory.)
+export const matIssued = () => INDEX_FAILED || (!!INDEX && !WAITING.length);
 const lum = (c: number[]) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
 
 // ---------- the quality level (game/quality.ts: 0 high, 1 medium, 2 low) ----------
 // read at boot from the browser as quality.ts remembers it, so a weak device does not load the big maps first
+// (World of DODO, issue #34: 'wod-q', its m: the preset chosen. The automatic texture step is never remembered, and the old
+// 'wod-quality', which remembered it, is ignored: game/quality.ts removes it)
 let LEVEL = 0;
-try { LEVEL = Math.min(2, parseInt(localStorage.getItem('wod-quality') ?? '', 10) || 0); } catch (_) { /* storage blocked: high */ }
+try {
+  const q = JSON.parse(localStorage.getItem('wod-q') ?? 'null') as { m?: unknown } | null;
+  LEVEL = Math.max(0, Math.min(2, Number(q?.m) | 0));
+} catch (_) { /* storage blocked or garbled: high */ }
 export const matLevel = () => LEVEL;
 
 // ---------- the plugin: world uvs, snow, wetness, macro variation ----------
@@ -154,6 +179,7 @@ class WodSurface extends MaterialPluginBase {
   world = true; snowK = 0; wetK = 0; macro = 0; altK = 0; height: '' | 'c' | 'n' = ''; rough = 0.8; baked = false;
   snowCol = new Color3(1, 1, 1);           // the snow's colour relative to the material's tint (the shader multiplies the tint back in)
   alt: Texture | null = null; altMul = new Color3(1, 1, 1); altScale = 1;
+  altOld: Texture | null = null;           // issue #34: the alt map a level change took off, bound until it is disposed (retire)
   altRel = new Color3(1, 1, 1);            // the alt layer's tint relative to this one (the low level's flat alt)
   heightOn = 0;                            // 1: the colour map's alpha is a height (index.json), 0: it is not (a constant 0.5)
   constructor(m: StandardMaterial) {
@@ -195,10 +221,14 @@ class WodSurface extends MaterialPluginBase {
     TO_MOON.copyFrom(moon.direction).normalize().scaleInPlace(-1);
     ubo.updateFloat4('wodM', TO_MOON.x, TO_MOON.y, TO_MOON.z, this.rough);
     ubo.updateFloat4('wodX', this.heightOn, 0, 0, 0);
-    if (LEVEL !== 0) return;                                             // (medium and low sample none of these)
+    // (medium and low sample none of these; World of DODO, issue #34: but they are bound on every level. After a level change the
+    // material is drawn with its old shader while the new one compiles (Babylon's shader hot swapping), and the old one of high
+    // samples them: unbound, a sampler reads whatever the unit held last, for the compile's 0.3-0.8 s. An effect without the sampler
+    // ignores the call.)
     if (this.snowK > 0 && !this.baked) ubo.setTexture('wodSnowSampler', SNOW_TEX.t);
-    if ((this.snowK > 0 && !this.baked) || this.macro > 0) ubo.setTexture('wodNoiseSampler', noiseTex());
-    if (this.alt) ubo.setTexture('wodAltSampler', this.alt);
+    if (NOISE && ((this.snowK > 0 && !this.baked) || this.macro > 0)) ubo.setTexture('wodNoiseSampler', NOISE);
+    else if (LEVEL === 0 && ((this.snowK > 0 && !this.baked) || this.macro > 0)) ubo.setTexture('wodNoiseSampler', noiseTex());
+    const alt = this.alt ?? this.altOld; if (alt) ubo.setTexture('wodAltSampler', alt);
   }
   override getCustomCode(type: string): Nullable<{ [p: string]: string }> {
     if (type === 'vertex') return {
@@ -329,8 +359,13 @@ if (wodGloss > 0.001) {
 // UNPACK_FLIP_Y for a bitmap; Babylon's own bitmap path does the same), its alpha not premultiplied (an alpha here is a height or a
 // snow mask), its colours as stored. Babylon uploads it when its turn comes (the queue below) and the bitmap is let go (a lost GL
 // context reloads the file by its URL). A file asked for again before its upload gets the same bitmap (DECODING), and after it finds
-// that upload in Babylon's cache. Where the browser cannot do this (BITMAP_OK), or the file fails, Babylon loads the URL itself as before. Until it is in, the scene counts it
+// that upload in Babylon's cache. Where the browser cannot do this (BITMAP_OK), or the file fails, Babylon loaded the URL itself (no
+// longer: issue #34 below). Until it is in, the scene counts it
 // as waiting (the loading screen's texture step reads getWaitingItemsCount).
+// World of DODO, issue #34: the bytes are core/assets.ts's (downloaded before the game, kept for the visit), never fetched here: a
+// level change in the game made requests, and on a slow connection the streets waited seconds for them. Where the browser cannot
+// make the bitmap, the file is decoded as an image from its Blob (an object URL: the page's CSP allows img-src blob:), not loaded by
+// its URL. A file that failed (assets.ts tried it twice) keeps its stand-in: no request in the game.
 const BITMAP_OPT: ImageBitmapOptions = { imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
 // does this browser make such a bitmap, turned? (a picture one wide and two high, red over blue: blue on top once turned)
 const BITMAP_OK: Promise<boolean> = (async () => {
@@ -348,18 +383,30 @@ const BITMAP_OK: Promise<boolean> = (async () => {
 // (World of DODO, issue #31: kept until the last queued Texture of that decode is uploaded, upload(). The uploads wait for main.ts
 // (startUploads), and until the first one Babylon's cache does not have the file, so a material made later in the build (the land's
 // gravel after the roads') or a level Q went back to fetched and decoded it again, and held a second bitmap until the uploads.)
-const DECODING = new Map<string, Promise<ImageBitmap | null>>();
+// (issue #34: the pixels, a bitmap or, without BITMAP_OK, an image)
+type Pix = ImageBitmap | HTMLImageElement;
+const DECODING = new Map<string, Promise<Pix | null>>();
 // a file Babylon has already: the Texture finds it in Babylon's cache (upload(), which also handles Babylon letting it go meanwhile)
-const IN_CACHE: Promise<ImageBitmap | null> = Promise.resolve(null);
+const IN_CACHE: Promise<Pix | null> = Promise.resolve(null);
 const inCache = (url: string) => scene.getEngine().getLoadedTexturesCache().some(it => it.url === url);
-function decoded(url: string): Promise<ImageBitmap | null> {
+function decoded(url: string): Promise<Pix | null> {
   let p = DECODING.get(url);
   if (p) return p;
   if (inCache(url)) return IN_CACHE;
-  p = BITMAP_OK.then(ok => !ok ? null : fetch(url).then(r => r.ok ? r.blob() : null).then(b => b ? createImageBitmap(b, BITMAP_OPT) : null))
-    .catch(() => null);
+  p = blob(url).then(async (b): Promise<Pix | null> => (!b ? null : (await BITMAP_OK) ? createImageBitmap(b, BITMAP_OPT) : imageOf(b))).catch(() => null);
   DECODING.set(url, p);
   return p;
+}
+// World of DODO, issue #34: a Blob as an image (decoded beside the page where the browser can; Babylon uploads an image with WebGL's
+// own flip, as one it loads by URL), its object URL let go with it (pixGone)
+function imageOf(b: Blob): Promise<HTMLImageElement | null> {
+  const u = URL.createObjectURL(b), im = new Image();
+  im.src = u;
+  return im.decode().then(() => im, () => { URL.revokeObjectURL(u); return null; });
+}
+function pixGone(b: Pix | null) {
+  if (!b) return;
+  if (b instanceof HTMLImageElement) { if (b.src.startsWith('blob:')) URL.revokeObjectURL(b.src); b.removeAttribute('src'); } else b.close();
 }
 function load(url: string, onLoad: (t: Texture) => void): Texture {
   const t: Texture = new Texture(null, scene, false, true, Texture.TRILINEAR_SAMPLINGMODE);
@@ -389,7 +436,7 @@ function queue(t: Texture, url: string, onLoad: (t: Texture) => void) {
 // decoded map is held as a bitmap (outside the JS heap; on high 28 maps, 52 MB, the atlas 16 MB) until its last queued upload, from
 // its arrival during the build to at most ~0.7 s after the intro's first frame.
 // (d: the decode it shares with the other Textures of that file, b its bitmap)
-interface Upload { t: Texture; url: string; d: Promise<ImageBitmap | null>; b: ImageBitmap | null; onLoad: (t: Texture) => void; px: number }
+interface Upload { t: Texture; url: string; d: Promise<Pix | null>; b: Pix | null; onLoad: (t: Texture) => void; px: number }
 const UPLOADS: Upload[] = [];
 let UPLOADS_ON = false, PUMP = false, RAF = 0;
 // ?test: every upload of texels [file, texels, ms, when] (tools/browser-test.js, issue #31's report)
@@ -435,6 +482,16 @@ function upload(u: Upload): boolean {
   // (a file already in Babylon's cache, uploaded by another Texture of it, needs no upload: this one finds it there and costs no
   // frame; a bitmap already let go has no size)
   const bmp = b && b.width && !cached ? b : null;
+  // World of DODO, issue #34: no pixels and no upload of the file in Babylon's cache. Before, Babylon then loaded the URL itself (a
+  // request and a decode on the page's thread, in the game). Pixels let go meanwhile (a bitmap closed) are decoded again from the
+  // file's Blob; a file that failed (its download, assets.ts, or its decode) keeps the material's stand-in (one that failed on the
+  // network is fetched again by the next Texture of it: assets.ts blob(), a level change).
+  if (!bmp && !cached) {
+    if (DECODING.get(url) === d && (b || !UPLOADS.some(o => o.d === d))) DECODING.delete(url);
+    if (b) queue(t, url, onLoad);
+    else { scene.removePendingData(t); t.dispose(); }
+    return false;
+  }
   const t0 = UP_LOG ? performance.now() : 0;
   try { t.updateURL(url, bmp, () => onLoad(t)); }                  // (a bitmap is uploaded here and now; a URL as Babylon does)
   finally {
@@ -444,15 +501,52 @@ function upload(u: Upload): boolean {
     // this one's onLoad threw its map away (a level or weather changed meanwhile), Babylon's cache lost the file with it, and the
     // next one uploads the bitmap rather than load the URL itself (a decode on the page's thread, the stall this library avoids).
     // After the last one a file asked for again finds the upload in Babylon's cache (decoded).
-    if (!UPLOADS.some(o => o.d === d)) { b?.close(); if (DECODING.get(url) === d) DECODING.delete(url); }
+    if (!UPLOADS.some(o => o.d === d)) { pixGone(b); if (DECODING.get(url) === d) DECODING.delete(url); }
   }
   if (UP_LOG && bmp) UP_LOG.push([url.replace(/^.*\//, ''), u.px, Math.round((performance.now() - t0) * 10) / 10, Math.round(t0)]);
   return !!bmp;
+}
+// World of DODO, issue #34: a map taken off a material (a level change, a newer map, a weather's swap on medium), kept a while
+// before it is disposed. While it lives, Babylon keeps its upload in its cache, so a Texture of the same file made meanwhile finds it
+// there (decoded: IN_CACHE) with no decode and no upload: on high to medium in the snow the streets' alt map, asphaltSnow, becomes
+// their colour map; it used to be disposed first and loaded again (the dark dry asphalt for up to 1.4 s). It goes once the change has
+// settled (no upload queued, nothing the scene waits for, every mesh drawn last frame with its final shader) or after RETIRE_MS.
+// A stand-in (no file) goes at once. off: called when it is disposed (whoever still binds it lets go).
+const RETIRE_MS = 3000;
+const RETIRED: { t: BaseTexture; at: number; off?: () => void }[] = [];
+let SWEEP = 0;
+export function retire(t: Nullable<BaseTexture> | undefined, off?: () => void) {
+  if (!t) return;
+  if (!(t as Texture).url) { t.dispose(); off?.(); return; }
+  if (RETIRED.some(r => r.t === t)) return;
+  RETIRED.push({ t, at: performance.now(), off });
+  if (!SWEEP) SWEEP = window.setTimeout(sweep, 250);
+}
+// (a material whose shader is compiling is drawn with its old one meanwhile, its defines left dirty: Babylon's hot swapping)
+function settled(): boolean {
+  if (UPLOADS.length || scene.getWaitingItemsCount()) return false;
+  const a = scene.getActiveMeshes();
+  for (let i = 0; i < a.length; i++) {
+    for (const sm of a.data[i].subMeshes ?? []) { const d = sm.materialDefines, f = sm.effect; if (d?.isDirty || (f && !f.isReady())) return false; }
+  }
+  return true;
+}
+function sweep() {
+  SWEEP = 0;
+  const t = performance.now(); let ok: boolean;
+  try { ok = settled(); } catch (_) { ok = false; }                  // (a mesh disposed meanwhile: the time limit decides)
+  for (let i = RETIRED.length; i--;) {
+    const r = RETIRED[i];
+    if (t - r.at >= RETIRE_MS || (ok && t - r.at >= 200)) { RETIRED.splice(i, 1); r.t.dispose(); r.off?.(); }
+  }
+  if (RETIRED.length) SWEEP = window.setTimeout(sweep, 250);
 }
 // World of DODO, issue #31: a map for a material that already shows a stand-in (standIn): the file is fetched, and onLoad puts it in
 // (and sets its scale, level, filtering) once it has arrived. A map put into a material while it loads keeps the material from being
 // drawn at all (Babylon waits for a loading map), so nothing outside this library assigns one before it has loaded. Repeating, as
 // load(); the caller may set another wrap mode at once. A file that fails keeps the stand-in.
+// (World of DODO, issue #34: the file's bytes come from core/assets.ts: its owner wants it when the material is made, for every
+// level the material can show, or a level change in the game downloads it, ASSET.miss)
 export const loadSwap = load;
 const ANISO = [4, 2, 1];
 // The noise of the macro patches and the snow's drifts: smooth value noise that tiles, three octaves in r, g, b (4, 8 and 16 cells
@@ -496,15 +590,19 @@ function stand(k: StandKind, level: number, ident = false): Texture {
 // once, so the material compiles for its final look before the start and is drawn from the first frame; loadSwap puts the map in.
 export const standIn = stand;
 // the snow layer's texture, one for all (sampled at the world position, no matrix): its stand-in until the real one is in
+// (World of DODO, issue #34: on the high level only: medium and low sample no snow map, medium used to load it all the same. Leaving
+// high, the map is retired and the stand-in takes its place.)
 const SNOW_TEX: { t: Texture; url: string; texel: number } = { t: stand('c', 1), url: '', texel: 3.5 };
+const snowUrl = () => (INDEX && INDEX.snow ? BASE + Math.max(...INDEX.snow.files.c) + '/snow_c.webp' : '');
 function snowTex() {
-  if (!INDEX || !INDEX.snow || LEVEL === 2) return;                     // (the low level samples no snow map)
-  const url = BASE + cSize(INDEX.snow) + '/snow_c.webp';
+  if (!INDEX || !INDEX.snow) return;
+  const url = LEVEL === 0 ? snowUrl() : '';
   if (SNOW_TEX.url === url) return;
   SNOW_TEX.url = url; SNOW_TEX.texel = INDEX.snow.texel;
+  if (!url) { const old = SNOW_TEX.t; SNOW_TEX.t = stand('c', 1); retire(old); return; }
   const t = load(url, () => {
-    if (SNOW_TEX.url !== url) { t.dispose(); return; }
-    const old = SNOW_TEX.t; SNOW_TEX.t = t; old.dispose();
+    if (SNOW_TEX.url !== url) { retire(t); return; }
+    const old = SNOW_TEX.t; SNOW_TEX.t = t; retire(old);
     t.anisotropicFilteringLevel = 1;                                     // soft: plain trilinear filtering will do
   });
 }
@@ -538,17 +636,25 @@ function setSnowCol(e: Entry) {
 }
 // the key whose colour map a material shows: its own, or on medium its alt's once the weather's snow is half way (one map, no blend)
 const mapKey = (e: Entry): MatKey => (LEVEL === 1 && e.o.alt && WEATHER.snow >= 0.5 ? e.o.alt : e.key!);
-// the files a material wants at the current level
-function wantFor(e: Entry): { c: string; n: string; a: string } {
+// the files a material wants at a level (World of DODO, issue #34: any level, and on medium in a weather with snow or without)
+function filesFor(e: Entry, lv: number, snowy: boolean): { c: string; n: string; a: string } {
   const w = { c: '', n: '', a: '' };
-  if (!e.key || !INDEX || LEVEL === 2) return w;                       // the low level: no maps at all (its tint, the weather as a tint)
-  const k = mapKey(e), info = INDEX[k]; if (!info) return w;
-  w.c = BASE + cSize(info) + '/' + k + '_c.webp';
-  if (LEVEL === 0 && (e.o.bump ?? 1) > 0 && info.files.n.length) {     // normal maps on high only
+  if (!e.key || !INDEX || lv === 2) return w;                          // the low level: no maps at all (its tint, the weather as a tint)
+  const k = lv === 1 && e.o.alt && snowy ? e.o.alt : e.key, info = INDEX[k]; if (!info) return w;
+  w.c = BASE + cSize(info, lv) + '/' + k + '_c.webp';
+  if (lv === 0 && (e.o.bump ?? 1) > 0 && info.files.n.length) {        // normal maps on high only
     w.n = BASE + (info.files.n.includes(1024) ? 1024 : 512) + '/' + k + '_n.webp';
   }
-  if (LEVEL === 0 && e.o.alt && INDEX[e.o.alt]) w.a = BASE + cSize(INDEX[e.o.alt]) + '/' + e.o.alt + '_c.webp';
+  if (lv === 0 && e.o.alt && INDEX[e.o.alt]) w.a = BASE + cSize(INDEX[e.o.alt], lv) + '/' + e.o.alt + '_c.webp';
   return w;
+}
+// the files a material wants now (mapKey's choice)
+const wantFor = (e: Entry) => filesFor(e, LEVEL, WEATHER.snow >= 0.5);
+// World of DODO, issue #34: every file the material can show, at every level and in every weather, wanted now from core/assets.ts
+// (downloaded before the game), and the snow map, which high shows on everything that takes snow
+function wantAll(e: Entry) {
+  for (const lv of [0, 1]) for (const snowy of [false, true]) { const w = filesFor(e, lv, snowy); for (const u of [w.c, w.n, w.a]) if (u) want(u); }
+  const s = snowUrl(); if (s) want(s);
 }
 // load what is wanted and put each map in when it has arrived (the old one stays until then)
 // the stand-ins a library material has at this level before its maps come (none on low): the shader is compiled for its final look
@@ -556,18 +662,26 @@ function prime(e: Entry) {
   if (!e.key) return;
   const low = LEVEL === 2, glow = e.o.emissiveMap === 'self';
   if (low) {
-    for (const t of [e.m.diffuseTexture, e.m.bumpTexture, e.p.alt]) t?.dispose();
-    e.m.diffuseTexture = null; e.m.bumpTexture = null; e.p.alt = null; e.on = { c: '', n: '', a: '' };
-    if (glow && e.m.emissiveTexture) { e.m.emissiveTexture.dispose(); e.m.emissiveTexture = null; }
+    const d = e.m.diffuseTexture, b = e.m.bumpTexture;
+    e.m.diffuseTexture = null; e.m.bumpTexture = null; e.on = { c: '', n: '', a: '' };
+    retire(d); retire(b); altOff(e);                                   // (issue #34: retired, see retire)
+    if (glow && e.m.emissiveTexture) { const g = e.m.emissiveTexture; e.m.emissiveTexture = null; retire(g); }
     return;
   }
   if (!e.m.diffuseTexture) e.m.diffuseTexture = stand('c', glow ? 0.3 : 2);   // (0.5 × 2: the tint itself; a glass facade dark)
   if (glow && !e.m.emissiveTexture) { e.m.emissiveTexture = stand('e', 1); e.m.emissiveColor = Color3.Black(); }
   const full = LEVEL === 0;                                              // (normal and alt maps on high only)
   if (full && (e.o.bump ?? 1) > 0 && !e.m.bumpTexture) e.m.bumpTexture = stand('n', 1);
-  if (!full && e.m.bumpTexture) { e.m.bumpTexture.dispose(); e.m.bumpTexture = null; e.on.n = ''; }
+  if (!full && e.m.bumpTexture) { const b = e.m.bumpTexture; e.m.bumpTexture = null; e.on.n = ''; retire(b); }
   if (full && e.o.alt && !e.p.alt) { e.p.alt = stand('c', 1); e.p.altMul.copyFrom(e.p.altRel).scaleInPlace(2); }
-  if (!full && e.p.alt) { e.p.alt.dispose(); e.p.alt = null; e.on.a = ''; }
+  if (!full && e.p.alt) altOff(e);
+}
+// World of DODO, issue #34: the alt map off the material, retired; the plugin still binds it until it is disposed (the old shader of a
+// level change samples it while the new one compiles)
+function altOff(e: Entry) {
+  const a = e.p.alt; if (!a) return;
+  e.p.alt = null; e.on.a = ''; e.p.altOld = a;
+  retire(a, () => { if (e.p.altOld === a) e.p.altOld = null; });
 }
 // swap a map in when it has arrived (the stand-in or the old map stays until then); no shader changes
 function apply(e: Entry) {
@@ -576,38 +690,42 @@ function apply(e: Entry) {
   e.want = w;
   if (!info || !k) return;
   const tile = info.texel * (e.o.scale ?? 1);
+  // World of DODO, issue #34: a map kept across the change (the same file at both levels: most colour maps are 512 on high and
+  // medium) gets this level's filtering: it kept the level's it was loaded on
+  if (w.c && w.c === e.on.c && e.m.diffuseTexture) e.m.diffuseTexture.anisotropicFilteringLevel = ANISO[LEVEL];
+  if (w.a && w.a === e.on.a && e.p.alt) e.p.alt.anisotropicFilteringLevel = ANISO[LEVEL];
   if (w.c && w.c !== e.on.c) {
     const url = w.c;
     const t = load(url, () => {
-      if (e.want.c !== url) { t.dispose(); return; }
+      if (e.want.c !== url) { retire(t); return; }
       t.uScale = t.vScale = 1 / tile; t.anisotropicFilteringLevel = ANISO[LEVEL];
       t.level = !info.raw ? 1 / lum(info.mean) : 1;                    // the average back to 1: the tint decides the brightness
-      const old = e.m.diffuseTexture; e.m.diffuseTexture = t; e.on.c = url; old?.dispose();
+      const old = e.m.diffuseTexture; e.m.diffuseTexture = t; e.on.c = url; retire(old);   // (issue #34: retired)
       // the tint of the key shown (medium's snowy street: the alt's, relative to the base as given), its height, the snow against it
       e.m.diffuseColor.copyFrom(e.tint); if (k !== e.key) e.m.diffuseColor.multiplyInPlace(e.p.altRel);
       e.p.heightOn = info.height ? 1 : 0; setSnowCol(e);
       if (e.o.emissiveMap === 'self') {                                  // the same file as the glow (its own Texture: its own level)
-        const g = load(url, () => { if (e.want.c !== url) { g.dispose(); return; } g.uScale = g.vScale = 1 / tile; g.level = e.o.emissiveIntensity ?? 1; const og = e.m.emissiveTexture; e.m.emissiveTexture = g; if (og !== g) og?.dispose(); });
+        const g = load(url, () => { if (e.want.c !== url) { retire(g); return; } g.uScale = g.vScale = 1 / tile; g.level = e.o.emissiveIntensity ?? 1; const og = e.m.emissiveTexture; e.m.emissiveTexture = g; if (og !== g) retire(og); });
       }
     });
   }
   if (w.n && w.n !== e.on.n) {
     const url = w.n;
     const t = load(url, () => {
-      if (e.want.n !== url) { t.dispose(); return; }
+      if (e.want.n !== url) { retire(t); return; }
       t.uScale = t.vScale = 1 / tile; t.level = e.o.bump ?? 1;      // no anisotropic filtering: at a grazing view the bumps may blur
-      const old = e.m.bumpTexture; e.m.bumpTexture = t; e.on.n = url; old?.dispose();
+      const old = e.m.bumpTexture; e.m.bumpTexture = t; e.on.n = url; retire(old);
     });
   }
   if (w.a && w.a !== e.on.a) {
     const url = w.a, ai = INDEX![e.o.alt!];
     const t = load(url, () => {
-      if (e.want.a !== url) { t.dispose(); return; }
+      if (e.want.a !== url) { retire(t); return; }
       t.anisotropicFilteringLevel = ANISO[LEVEL];
       // the alt colour: its tint relative to this material's, its map's average back to 1; its tiles in this one's uvs
       e.p.altMul.copyFrom(e.p.altRel).scaleInPlace(1 / lum(ai.mean));
       e.p.altScale = tile / (ai.texel * (e.o.scale ?? 1));
-      const old = e.p.alt; e.p.alt = t; e.on.a = url; old?.dispose();
+      const old = e.p.alt; e.p.alt = t; e.on.a = url; retire(old);
     });
   }
 }
@@ -617,7 +735,7 @@ function register(key: MatKey | null, o: WeatherOpts, m: StandardMaterial, p: Wo
   if (key && o.alt) { const at = c3(LOOK[o.alt][0]), mt = m.diffuseColor; p.altRel.set(at.r / Math.max(0.05, mt.r), at.g / Math.max(0.05, mt.g), at.b / Math.max(0.05, mt.b)); }
   if (key) p.height = 'c';                                               // (whether the alpha is a height: wodX, from index.json)
   prime(e);
-  const go = () => { snowTex(); if (key) { const info = INDEX![key]; if (info) p.rough = info.rough; } setSnowCol(e); apply(e); };
+  const go = () => { wantAll(e); snowTex(); if (key) { const info = INDEX![key]; if (info) p.rough = info.rough; } setSnowCol(e); apply(e); };
   if (INDEX) go(); else WAITING.push(go);
   return e;
 }
@@ -680,5 +798,6 @@ export function matVramMB(): number {
 }
 // the tests' handle (?test, as main.ts's WOD): the weather, the level, the memory (issue #31: the uploads, the queue's length)
 if (new URLSearchParams(location.search).has('test')) {
-  (window as unknown as { wodMat: unknown }).wodMat = { setWeatherLook, setMatLevel, matVramMB, WEATHER, uploads: UP_LOG, queued: () => UPLOADS.length };
+  (window as unknown as { wodMat: unknown }).wodMat = { setWeatherLook, setMatLevel, matVramMB, WEATHER, uploads: UP_LOG, queued: () => UPLOADS.length,
+    retired: () => RETIRED.length };                                    // issue #34: the maps retired, not yet disposed
 }

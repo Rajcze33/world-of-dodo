@@ -22,7 +22,11 @@ export const STEPS: readonly StepId[] = ['city', 'tex', 'net', 'snap', 'warm'];
 // Start), the textures 1602, the connection 298, the first state 53, the shaders ~1080 (to the three frames). The steps after the
 // city run side by side, so these are shares of their sum, not of the time on the clock. Not learnt per browser (a first visit has
 // nothing to learn from) and not by time (a stalled step would move the bar while nothing happens).
-export const STEP_W: Record<StepId, number> = { city: 58, tex: 22, net: 4, snap: 1, warm: 15 };
+// World of DODO, issue #34: measured again, the medians of six runs (the same laptop, 1536 x 730 at 1.25, Fast 4G, Start at the
+// form's first moment), now that the texture step waits for every file of every level (29 files, 3.0 MB) and their uploads: the
+// city 6549 ms, the textures 1088 after the city (most of the files come during the build), the connection 582, the first state
+// 113, the shaders 2096.
+export const STEP_W: Record<StepId, number> = { city: 63, tex: 10, net: 6, snap: 1, warm: 20 };
 // The city step's first part is the code (entry.ts: the engine and the map, then the game's own); the build fills the rest. main.ts
 // reports its build as progress('city', CITY_CODE + (1 - CITY_CODE) * f).
 export const CITY_CODE = 0.2;
@@ -32,8 +36,9 @@ const SHOW_MS = 250, ERR_MS = 1200, FADE_MS = 250;
 const KEY_DEAD_MS = 300;
 
 export type FailHow = 'screen' | 'form' | 'reload' | 'fatal';
-interface Step { f: number; done: boolean; late: boolean; err: boolean }
-const ST = Object.fromEntries(STEPS.map(id => [id, { f: 0, done: false, late: false, err: false }])) as Record<StepId, Step>;
+// (note: World of DODO, issue #34: a line under the step's name, main.ts says what: the textures' megabytes, files that failed)
+interface Step { f: number; done: boolean; late: boolean; err: boolean; note: string }
+const ST = Object.fromEntries(STEPS.map(id => [id, { f: 0, done: false, late: false, err: false, note: '' }])) as Record<StepId, Step>;
 
 let opened = false;          // a start is on: from open() to enter(), close() or fail()
 let shown = false;           // the screen is up (SHOW_MS after open)
@@ -106,6 +111,11 @@ export const LOAD = {
     s.done = true; s.f = 1; s.late = late; s.err = false; LOAD.t[id] = performance.now(); changed();
   },
   isDone: (id: StepId) => ST[id].done,
+  // World of DODO, issue #34: the line under a step's name ('' none); a step done late says that instead (the textures: T.loadTexLate)
+  note(id: StepId, text: string) {
+    const s = ST[id]; if (s.note === text) return;
+    s.note = text; paintSoon();
+  },
   isOpen: () => opened,
   // Start (ui/join.ts): the form is set aside, the screen comes up SHOW_MS later, and the game is asked to start
   open(j: Join) {
@@ -232,7 +242,7 @@ function paint() {
   document.querySelectorAll<HTMLElement>('#loadSteps li').forEach((li, i) => {
     const s = ST[STEPS[i]], run = !s.done && (STEPS[i] === cur || s.f > 0);
     li.classList.toggle('done', s.done); li.classList.toggle('run', run && !s.err); li.classList.toggle('err', s.err);
-    const note = s.done && s.late && STEPS[i] === 'tex' ? T.loadTexLate : '';
+    const note = s.done && s.late && STEPS[i] === 'tex' ? T.loadTexLate : s.note;
     const t = li.querySelector<HTMLElement>('.t')!; if (t.textContent !== note) t.textContent = note;
   });
 }

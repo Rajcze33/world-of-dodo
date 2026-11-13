@@ -175,6 +175,29 @@ async function join(name, team) {
   check(r.status === 404, 'nothing outside the asset folders');
   r = await fetch(BASE + '/health');
   check(r.status === 200 && (await r.json()).ok === true, '/health answers');
+  // World of DODO, issue #34: validators. A static file comes with an ETag; asked again with it (If-None-Match) the server answers 304
+  // with no body, so a browser whose day of caching is over revalidates instead of downloading every texture again. The brotli copy
+  // has a tag of its own (its bytes differ), and the page revalidates the same way. A build compressed by tools/compress.js (npm run
+  // build; the game's script then comes as brotli) has the fonts and the JSON indexes as brotli too.
+  const get = async (u, h) => { const q = await fetch(BASE + u, { headers: h }); const n = (await q.arrayBuffer()).byteLength; return { q, n, tag: q.headers.get('etag'), enc: q.headers.get('content-encoding') || '' }; };
+  const IDX = '/assets/mat/index.json';
+  const plain = await get(IDX, { 'accept-encoding': 'identity' });
+  check(plain.q.status === 200 && /^"[0-9a-f]{16}"$/.test(plain.tag || ''), `a static file has an ETag (${IDX}: ${plain.tag})`);
+  const again304 = await get(IDX, { 'accept-encoding': 'identity', 'if-none-match': plain.tag || '' });
+  check(again304.q.status === 304 && again304.n === 0 && again304.tag === plain.tag, `asked again with its ETag, the answer is 304 with no body (${again304.q.status}, ${again304.n} bytes)`);
+  const other = await get(IDX, { 'accept-encoding': 'identity', 'if-none-match': '"0000000000000000"' });
+  check(other.q.status === 200 && other.n > 0, `with another ETag the file comes in full (${other.q.status}, ${other.n} bytes)`);
+  const packed = (await get(app || '/', { 'accept-encoding': 'br' })).enc === 'br';
+  const idxBr = await get(IDX, { 'accept-encoding': 'br' }), ttf = await get('/fonts/Poppins-SemiBold.ttf', { 'accept-encoding': 'br' });
+  if (packed) {
+    check(idxBr.enc === 'br' && idxBr.tag && idxBr.tag !== plain.tag, `the brotli copy has an ETag of its own (${idxBr.tag} | ${plain.tag})`);
+    check(ttf.q.status === 200 && ttf.enc === 'br', `a font comes as brotli (${ttf.n} bytes)`);
+    const br304 = await get(IDX, { 'accept-encoding': 'br', 'if-none-match': idxBr.tag || '' });
+    check(br304.q.status === 304 && br304.n === 0, `the brotli copy revalidates to 304 too (${br304.q.status})`);
+  } else console.log('     (the build has no brotli copies, tools/compress.js did not run: the brotli checks are skipped)');
+  const page = await get('/', { 'accept-encoding': 'identity' });
+  const page304 = await get('/', { 'accept-encoding': 'identity', 'if-none-match': page.tag || '' });
+  check(!!page.tag && page304.q.status === 304 && page304.n === 0, `the page revalidates to 304 (${page.tag}, ${page304.q.status})`);
 
   // issue #24: the places of the team game stand where the rules say (client/shared/rules.ts against the map): the ground zones on a
   // carriageway, the river zone on the water, every depot on open ground off the streets in its team's half, one of each team's

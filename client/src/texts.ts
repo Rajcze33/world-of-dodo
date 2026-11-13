@@ -1,5 +1,8 @@
 // Player-facing texts: Czech first, English with ?lang=en. The only place for them (AGENTS.md); generated once from the
 // original page's T object, keys of the single-player game left out.
+// World of DODO, issue #34: bytes as megabytes with one decimal and the language's decimal mark (1,2 / 1.2)
+function mb(bytes: number, dec: string): string { return (Math.max(0, bytes) / 1e6).toFixed(1).replace('.', dec); }
+
 const CS = {
   back: "Zpátky ve hře",
   boardCol: "body",
@@ -41,7 +44,6 @@ const CS = {
   pingLbl: "ping",
   ptsUnit: "body",
   qAuto: "auto",
-  qDown: (n: string)=>'Hra nestíhala, kvalita snížena na: '+n,
   qLbl: "kvalita",
   qManual: "ručně",
   qNames: ["vysoká","střední","nízká"],
@@ -159,6 +161,17 @@ const CS = {
   pct: (n: number)=>n+'\u00a0%',                                  // (Czech puts a space before %, one that never breaks the line)
   errLoad: "Hru se nepodařilo stáhnout. Zkontrolujte připojení a načtěte stránku znovu.",
   reload: "Načíst znovu",
+  // World of DODO, issue #34: the automatic quality steps (game/quality.ts) say what they lowered, a Q press says what it chose, and
+  // the loading screen's texture step counts the megabytes (main.ts). qLevers: the auto steps a1..a5 in order (a1 and a3 both lower
+  // the resolution); qBack follows the texture step's message on a keyboard (a touch screen has no Q).
+  qStep: (what: string)=>'Hra nestíhala, sníženo: '+what,
+  qLevers: ["rozlišení","stíny","rozlišení","stíny vypnuty","textury vypnuty"],
+  qBack: " · Q je vrátí",
+  qKept: (list: string)=>'Kvalita upravena pro plynulost: '+list,
+  qSet: (name: string)=>'Kvalita: '+name+' (ručně)',
+  qAutoLbl: "auto:",
+  loadTexMB: (got: number, total: number)=>mb(got, ',')+' z '+mb(total, ',')+'\u00a0MB',
+  loadTexMiss: "Některé textury se nepodařilo stáhnout",
 };
 
 const EN: typeof CS = {
@@ -202,7 +215,6 @@ const EN: typeof CS = {
   pingLbl: "ping",
   ptsUnit: "points",
   qAuto: "auto",
-  qDown: n=>'The game was struggling: quality lowered to '+n,
   qLbl: "quality",
   qManual: "manual",
   qNames: ["high","medium","low"],
@@ -314,6 +326,14 @@ const EN: typeof CS = {
   pct: n=>n+'%',
   errLoad: "The game could not be downloaded. Check your connection and reload the page.",
   reload: "Reload",
+  qStep: what=>'The game was struggling, lowered: '+what,
+  qLevers: ["resolution","shadows","resolution","shadows off","textures off"],
+  qBack: " · Q brings them back",
+  qKept: list=>'Quality adjusted for smoothness: '+list,
+  qSet: name=>'Quality: '+name+' (manual)',
+  qAutoLbl: "auto:",
+  loadTexMB: (got, total)=>mb(got, '.')+' of '+mb(total, '.')+'\u00a0MB',
+  loadTexMiss: "Some textures could not be downloaded",
 };
 
 export const LANG: 'cs' | 'en' = new URLSearchParams(location.search).get('lang') === 'en' ? 'en' : 'cs';

@@ -42,6 +42,7 @@
 
 const http = require('node:http');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const B = require('./bots');
@@ -135,15 +136,40 @@ const PAGE_CSP = [
   "form-action 'none'",
 ].join('; ');
 
-// enc: the encodings the browser accepts (Accept-Encoding); a .br or .gz copy written by the build (tools/compress.js) goes out
-// instead of the file when there is one
-function sendFile(res, file, cache, enc = '') {
+// World of DODO, issue #34: validators. The static files may be kept for a day (max-age=86400) and the page is asked for again on
+// every visit (no-cache), but nothing let the browser ask whether its copy was still good: after a day every texture, font and
+// script came again in full (3.6 MB), and every visit fetched the page itself. Each file sent gets an ETag (16 hex of the SHA-1 of
+// the bytes sent: the .br and .gz copies their own, as their bytes differ), and a request whose If-None-Match names it gets a 304
+// with no body. Hashed once per file and kept while its size and mtime stay (a new build writes new files); a file being hashed is
+// a promise shared by the requests that come meanwhile.
+const ETAGS = new Map();           // file -> { size, mtime, tag: Promise<string | null> }
+function etagOf(file, st) {
+  const k = ETAGS.get(file);
+  if (k && k.size === st.size && k.mtime === st.mtimeMs) return k.tag;
+  const tag = new Promise(resolve => {
+    const h = crypto.createHash('sha1');
+    fs.createReadStream(file).on('data', d => h.update(d)).on('error', () => resolve(null)).on('end', () => resolve('"' + h.digest('hex').slice(0, 16) + '"'));
+  });
+  ETAGS.set(file, { size: st.size, mtime: st.mtimeMs, tag });
+  return tag;
+}
+// does the request's If-None-Match name this tag? (a list; for a GET the comparison is the weak one, RFC 9110 13.1.2, and * names any)
+function notModified(req, tag) {
+  const inm = req.headers['if-none-match'];
+  if (!inm || !tag) return false;
+  return inm.trim() === '*' || inm.split(',').some(t => t.trim().replace(/^W\//, '') === tag);
+}
+
+// A .br or .gz copy written by the build (tools/compress.js) goes out instead of the file when there is one and the browser takes
+// it (Accept-Encoding). plain: send the file itself (there was no copy)
+function sendFile(req, res, file, cache, plain = false) {
+  const enc = plain ? '' : req.headers['accept-encoding'];
   const takes = name => String(enc || '').split(',').some(e => e.trim().split(';')[0] === name);
   const alt = takes('br') ? ['.br', 'br'] : takes('gzip') ? ['.gz', 'gzip'] : null;
   if (alt) {
     return fs.stat(file + alt[0], (err, st) => {
-      if (err || !st.isFile()) return sendFile(res, file, cache);
-      res.writeHead(200, {
+      if (err || !st.isFile()) return sendFile(req, res, file, cache, true);
+      send(file + alt[0], st, {
         'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
         'Content-Encoding': alt[1],
         'Content-Length': st.size,
@@ -151,7 +177,6 @@ function sendFile(res, file, cache, enc = '') {
         'Vary': 'Accept-Encoding',
         'X-Content-Type-Options': 'nosniff',
       });
-      fs.createReadStream(file + alt[0]).pipe(res);
     });
   }
   fs.stat(file, (err, st) => {
@@ -162,14 +187,26 @@ function sendFile(res, file, cache, enc = '') {
       }
       return notFound(res);
     }
-    res.writeHead(200, {
+    send(file, st, {
       'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
       'Content-Length': st.size,
       'Cache-Control': cache,
       'X-Content-Type-Options': 'nosniff',
     });
-    fs.createReadStream(file).pipe(res);
   });
+  // issue #34: the bytes with their ETag, or a 304 with the headers a 200 would have had that a cache needs (no body, no length)
+  function send(f, st, head) {
+    etagOf(f, st).then(tag => {
+      if (tag) head.ETag = tag;
+      if (notModified(req, tag)) {
+        delete head['Content-Length']; delete head['Content-Type']; delete head['Content-Encoding'];
+        res.writeHead(304, head);
+        return res.end();
+      }
+      res.writeHead(200, head);
+      fs.createReadStream(f).on('error', () => res.destroy()).pipe(res);
+    });
+  }
 }
 
 function notFound(res) {
@@ -197,14 +234,14 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Security-Policy', PAGE_CSP);
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
-    return sendFile(res, path.join(DIST_DIR, 'index.html'), 'no-cache', req.headers['accept-encoding']);
+    return sendFile(req, res, path.join(DIST_DIR, 'index.html'), 'no-cache');
   }
   const top = pathname.split('/')[1];
   if (!Object.hasOwn(STATIC_DIRS, top)) return notFound(res);
   const root = STATIC_DIRS[top];
   const file = path.resolve(root, '.' + pathname);
   if (!file.startsWith(path.join(root, top) + path.sep)) return notFound(res);
-  sendFile(res, file, top === 'app' ? 'public, max-age=31536000, immutable' : 'public, max-age=86400', req.headers['accept-encoding']);
+  sendFile(req, res, file, top === 'app' ? 'public, max-age=31536000, immutable' : 'public, max-age=86400');
 });
 
 // ---------- players ----------

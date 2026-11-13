@@ -41,6 +41,13 @@ Zerops right away, so run the checks before you ask for a merge.
   order. A new build step takes its place in that order (and a long one yields between its units);
   a unit over about 30 ms is split further. The page's first script, `entry.ts`, stays light (no
   Babylon.js, no map: `tools/smoke.js` checks it): what the join form needs goes into `ui/join.ts`.
+- **Every texture is downloaded before the game** (issue #34): the loading screen waits for every
+  file the game can show at any quality level (`core/assets.ts`), so nothing is fetched while people
+  play. A new map must be wanted for every level when its material is made in the build: through the
+  material library (`matTex`, `weatherMat` in `core/matlib.ts`), or, for a map of your own, with
+  `want(url)` at build time and its bytes from `blob(url)` (never a URL fetched later). A map nobody
+  wanted is still fetched when it is asked for, but it is listed in `ASSET.miss` and the browser test
+  fails (no request after the first moment in the game, through Q and the automatic quality's steps).
 - **The 3D conventions** (`client/src/core/geo.ts`): the scene is right-handed, shapes are built as
   triangle lists that wind counter-clockwise from the front, and the shape helpers follow three.js
   (a cylinder stands on y, a plane faces +z). Use `lambert`/`basic` from `core/mat.ts` for materials,

@@ -8,6 +8,7 @@ interface Window {
   WOD_LOAD?: typeof import('./ui/loading').LOAD;   // issue #31: the loading screen's numbers (ui/loading.ts), only with ?test
   // issue #31, only with ?test: what tools/browser-test.js changes before the page loads: another server (ws), the time limits
   // (ms) of the textures, the connection and the first snapshot, a welcome or the first snapshot never let through (hold), and a
-  // delay (ms) before entry.ts imports the game (a slow download)
-  WOD_OVR?: { ws?: string; texMs?: number; connectMs?: number; snapMs?: number; hold?: 'welcome' | 'snap'; importDelay?: number };
+  // delay (ms) before entry.ts imports the game (a slow download). World of DODO, issue #34: texMaxMs (was texMs) the textures' limit
+  // (main.ts, now 60 s), stallMs how long a download may get no byte before it is retried (core/assets.ts)
+  WOD_OVR?: { ws?: string; texMaxMs?: number; stallMs?: number; connectMs?: number; snapMs?: number; hold?: 'welcome' | 'snap'; importDelay?: number };
 }

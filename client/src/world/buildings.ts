@@ -29,7 +29,8 @@ import { tri, boxB, type Bucket, type P3 } from '../core/geo';
 import { canvasTex } from '../core/tex';
 import { lambert } from '../core/mat';
 import { scene } from '../core/engine';
-import { matLevel, onMatLevel, standIn, loadSwap } from '../core/matlib';
+import { matLevel, onMatLevel, standIn, loadSwap, retire } from '../core/matlib';
+import { want } from '../core/assets';
 import { wall, capUp, faceN, grow, insetEdges, insetOk, minWidth, orient, dedupe, hash01 } from './poly';
 import { tileB, tileKind, part, type Build } from './tiles';
 import { cellAt, addInst, nearJob, bakeCells, roofUV, roofMat, type Cell } from './facade';
@@ -78,13 +79,17 @@ export function facadeMat() {
   // (a normal map on every facade of the city costs some GPU time).
   // (World of DODO, issue #31: a flat stand-in at once, scaled as the map is, and the map put in once it has arrived: a normal map
   // put in while it loads kept every facade of the city from being drawn, and its shader from compiling before the start)
+  // (World of DODO, issue #34: the map wanted now on every level, core/assets.ts downloads it before the game; maps taken off are
+  // retired, core/matlib.ts retire)
   let gen = 0;
+  const GRAIN = 'assets/mat/512/plasterBeige_n.webp';
+  want(GRAIN);
   const m = FAC_MAT, grain = (l: number) => {
-    if (l > 0) { gen++; m.bumpTexture?.dispose(); m.bumpTexture = null; return; }
+    if (l > 0) { gen++; const b = m.bumpTexture; m.bumpTexture = null; retire(b); return; }
     if (m.bumpTexture) return;
     const my = ++gen, sc = (t: Texture) => { t.uScale = BAYS * BAY / 2.5; t.vScale = 9.5; t.level = 0.8; return t; };
     m.bumpTexture = sc(standIn('n', 0.8));
-    const g = loadSwap('assets/mat/512/plasterBeige_n.webp', () => { if (my !== gen) { g.dispose(); return; } const old = m.bumpTexture; m.bumpTexture = sc(g); if (old && old !== g) old.dispose(); });
+    const g = loadSwap(GRAIN, () => { if (my !== gen) { retire(g); return; } const old = m.bumpTexture; m.bumpTexture = sc(g); if (old !== g) retire(old); });
   };
   grain(matLevel()); onMatLevel(grain);
   return FAC_MAT;
@@ -168,12 +173,14 @@ function glassMat(): StandardMaterial {
   // (World of DODO, issue #31: stand-ins at once, a dark glass with no glow, on the walls' own uvs as the map is; the map put in as the
   // glow and the colour once it has arrived: a map put in while it loads kept the offices from being drawn until it had come)
   m.diffuseTexture = standIn('c', 0.3, true); m.emissiveTexture = standIn('e', 1, true);
+  // (World of DODO, issue #34: both sizes wanted now, core/assets.ts downloads them before the game; maps taken off are retired)
+  const url = (sz: number) => 'assets/mat/' + sz + '/glassOffice_c.webp';
+  want(url(1024)); want(url(512));
   let size = 0;
   const maps = (l: number) => {
     const sz = l === 0 ? 1024 : 512; if (sz === size) return; size = sz;
-    const url = 'assets/mat/' + sz + '/glassOffice_c.webp';
-    const d = loadSwap(url, () => { if (size !== sz) { d.dispose(); return; } const od = m.diffuseTexture; m.diffuseTexture = d; if (od !== d) od?.dispose(); });
-    const e = loadSwap(url, () => { if (size !== sz) { e.dispose(); return; } e.level = 0.85; const oe = m.emissiveTexture; m.emissiveTexture = e; if (oe !== e) oe?.dispose(); });
+    const d = loadSwap(url(sz), () => { if (size !== sz) { retire(d); return; } const od = m.diffuseTexture; m.diffuseTexture = d; if (od !== d) retire(od); });
+    const e = loadSwap(url(sz), () => { if (size !== sz) { retire(e); return; } e.level = 0.85; const oe = m.emissiveTexture; m.emissiveTexture = e; if (oe !== e) retire(oe); });
   };
   maps(matLevel()); onMatLevel(maps);
   return m;
